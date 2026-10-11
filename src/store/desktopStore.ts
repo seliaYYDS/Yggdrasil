@@ -32,6 +32,19 @@ export interface PanelRect {
   h: number;
 }
 
+/**
+ * 排队等待发送的一条输入。
+ *
+ * 队列**不进持久化**：刷新后自动跑一堆旧指令是意外行为，而不是功能。
+ */
+export interface QueuedInput {
+  id: string;
+  text: string;
+  /** 目标 Agent（组件 id）。发出时若该组件已被删，会自动回落到基底。 */
+  originId: NodeId;
+  createdAt: number;
+}
+
 interface PersistedRoot {
   nodes: Record<NodeId, YggNode>;
   rootId: NodeId;
@@ -280,6 +293,8 @@ interface DesktopState {
   traceRect: PanelRect;
   minimizedPanels: Record<string, boolean>;
   panelZ: Record<PanelKey, number>;
+  /** 等待发送的输入，先来先跑。不进持久化。 */
+  queue: QueuedInput[];
 
   hydrate: () => Promise<void>;
   addNode: (node: YggNode) => void;
@@ -311,6 +326,15 @@ interface DesktopState {
   setPanelRect: (panel: PanelKey, rect: PanelRect) => void;
 
   applyTokens: (tokens: ThemeTokens) => void;
+
+  /** 追加一条排队输入。 */
+  enqueue: (item: QueuedInput) => void;
+  /** 删掉队列里的一条（用户点队列项上的 ✕）。 */
+  removeQueued: (id: string) => void;
+  /** 取出队首并出队；空队列返回 null。 */
+  shiftQueued: () => QueuedInput | null;
+  clearQueue: () => void;
+
   resetAll: () => Promise<void>;
 }
 
@@ -388,6 +412,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   traceRect: resolvePanels(window.innerWidth, window.innerHeight).trace,
   minimizedPanels: {},
   panelZ: { ...DEFAULT_PANEL_Z },
+  queue: [],
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -614,6 +639,19 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
+  enqueue: (item) => set((s) => ({ queue: [...s.queue, item] })),
+
+  removeQueued: (id) => set((s) => ({ queue: s.queue.filter((q) => q.id !== id) })),
+
+  shiftQueued: () => {
+    const { queue } = get();
+    if (queue.length === 0) return null;
+    set({ queue: queue.slice(1) });
+    return queue[0];
+  },
+
+  clearQueue: () => set({ queue: [] }),
+
   resetAll: async () => {
     const adapter = adapterRef;
     if (persistTimer !== null) {
@@ -650,6 +688,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       resetOpen: false,
       minimizedPanels: {},
       panelZ: { ...DEFAULT_PANEL_Z },
+      queue: [],
       inputRect: panels.input,
       inspectorRect: panels.inspector,
       settingsRect: panels.settings,

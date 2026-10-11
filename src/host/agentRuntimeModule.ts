@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
-import { runDerivation } from '../kernel/agent/agentRuntime';
+import { submitInput } from '../kernel/agent/scheduler';
 import type { ComponentNode, Message, NodeId, YggNode } from '../kernel/types';
 
 /**
@@ -76,7 +76,8 @@ export function useAgent(): AgentApi {
         );
         return;
       }
-      void runDerivation(value, { originId: id });
+      // 走调度器：已有任务在跑时排队，而不是并发抢同一份 store。
+      submitInput(value, id);
     },
     clear: () => {
       if (!id || !attached) return;

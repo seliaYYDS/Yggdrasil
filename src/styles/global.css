@@ -8,7 +8,23 @@ body {
   font-size: 13px;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  /* Agent 改写令牌时整页渐变过去，而不是硬切 */
+  transition: background-color var(--ygg-t-slow) var(--ygg-ease), color var(--ygg-t-slow) var(--ygg-ease);
 }
+
+::selection { background: var(--ygg-accent); color: var(--ygg-bg); }
+
+/*
+ * 焦点可见环：只给没有自身边框的按钮类元素。
+ * 输入框 / 下拉自身已有 border-color 焦点反馈，不再叠一圈。
+ */
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 1px solid var(--ygg-accent);
+  outline-offset: 1px;
+}
+button:focus:not(:focus-visible) { outline: none; }
 
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
@@ -24,10 +40,16 @@ body {
   transition: background-color var(--ygg-t) var(--ygg-ease);
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--ygg-accent); background-clip: content-box; }
+::-webkit-scrollbar-thumb:active { background: var(--ygg-accent-hi); background-clip: content-box; }
+::-webkit-scrollbar-corner { background: transparent; }
 
 @keyframes ygg-fade-in { from { opacity: 0; } to { opacity: 1; } }
-@keyframes ygg-window-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes ygg-window-in {
+  from { opacity: 0; transform: translateY(7px) scale(.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
 @keyframes ygg-panel-in { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes ygg-row-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes ygg-pulse { 0%, 100% { opacity: .3; } 50% { opacity: 1; } }
 @keyframes ygg-spin { to { transform: rotate(360deg); } }
 @keyframes ygg-grow { from { transform: scaleY(.2); opacity: 0; } to { transform: scaleY(1); opacity: 1; } }
@@ -58,18 +80,26 @@ body {
   min-width: var(--ygg-win-min-w, 200px);
   min-height: var(--ygg-win-min-h, 120px);
   box-shadow: var(--ygg-shadow);
-  animation: ygg-window-in var(--ygg-t-slow) var(--ygg-ease) both;
+  animation: ygg-window-in var(--ygg-t-slow) var(--ygg-ease-out) both;
   transition:
     border-color var(--ygg-t) var(--ygg-ease),
     background-color var(--ygg-t) var(--ygg-ease),
     box-shadow var(--ygg-t) var(--ygg-ease),
     opacity var(--ygg-t) var(--ygg-ease);
 }
+/* 悬停：描边向金色靠一点，先于聚焦给出"能点"的反馈 */
+.ygg-window:hover:not(.is-focused) { border-color: color-mix(in srgb, var(--ygg-accent-dim) 55%, var(--ygg-accent)); }
 /* 聚焦 = 枝条被点亮 */
 .ygg-window.is-focused { border-color: var(--ygg-accent); box-shadow: var(--ygg-glow); }
+.ygg-window.is-focused > .ygg-titlebar .ygg-winbtn { color: var(--ygg-fg); }
 .ygg-window.is-minimized { opacity: .5; }
 .ygg-window.is-dragging { cursor: grabbing; }
 .ygg-window.is-dragging .ygg-titlebar { cursor: grabbing; }
+/* 拖动 / 缩放时不参与过渡，手感才跟得住指针 */
+.ygg-window.is-dragging,
+.ygg-window.is-dragging > .ygg-titlebar { transition: none; }
+/* 窗口内容在拖动期间不要被选中 */
+.ygg-window.is-dragging .ygg-window-body { user-select: none; }
 
 /* 标题栏与内容区只靠底色深浅区分，不画任何分界线。 */
 .ygg-titlebar {
@@ -85,6 +115,7 @@ body {
   transition: background-color var(--ygg-t) var(--ygg-ease);
 }
 .ygg-window.is-focused > .ygg-titlebar { background-color: var(--ygg-surface); }
+.ygg-titlebar:hover .ygg-title-text { color: var(--ygg-accent-hi); }
 .ygg-titlebar[data-ygg-drag='0'] { cursor: default; }
 
 .ygg-title-text {
@@ -111,7 +142,7 @@ body {
   flex: 1;
   overflow: auto;
   position: relative;
-  animation: ygg-fade-in var(--ygg-t) var(--ygg-ease) both;
+  animation: ygg-fade-in var(--ygg-t) var(--ygg-ease-out) both;
 }
 
 /* 窗口按钮：默认无边框，仅悬停时浮现 */
@@ -129,8 +160,8 @@ body {
   flex: none;
   transition: background-color var(--ygg-t-fast) var(--ygg-ease), color var(--ygg-t-fast) var(--ygg-ease), transform var(--ygg-t-fast) var(--ygg-ease);
 }
-.ygg-winbtn:hover { background: var(--ygg-accent-dim); color: var(--ygg-fg); }
-.ygg-winbtn:active { transform: scale(.88); }
+.ygg-winbtn:hover { background: var(--ygg-accent-dim); color: var(--ygg-fg); transform: scale(1.08); }
+.ygg-winbtn:active { transform: scale(.88); transition-duration: var(--ygg-t-fast); }
 .ygg-winbtn.is-active { color: var(--ygg-accent); }
 .ygg-winbtn.danger:hover { background: var(--ygg-danger); color: var(--ygg-fg); }
 
@@ -151,7 +182,8 @@ body {
   opacity: .7;
 }
 .ygg-window:hover .ygg-resize { opacity: 1; }
-.ygg-resize:hover { transform: scale(1.3); }
+.ygg-resize:hover { transform: scale(1.35); }
+.ygg-resize:active { transform: scale(1.1); }
 
 /* ---------------- 任务栏：最小化 / 关闭的窗口 ---------------- */
 
@@ -180,9 +212,15 @@ body {
   cursor: pointer;
   text-align: left;
   backdrop-filter: none;
-  transition: color var(--ygg-t) var(--ygg-ease), border-color var(--ygg-t) var(--ygg-ease), background-color var(--ygg-t) var(--ygg-ease);
+  animation: ygg-panel-in var(--ygg-t) var(--ygg-ease-out) both;
+  transition:
+    color var(--ygg-t) var(--ygg-ease),
+    border-color var(--ygg-t) var(--ygg-ease),
+    background-color var(--ygg-t) var(--ygg-ease),
+    transform var(--ygg-t) var(--ygg-ease);
 }
-.ygg-task:hover { color: var(--ygg-fg); border-color: var(--ygg-accent-dim); background: var(--ygg-surface-2); }
+.ygg-task:hover { color: var(--ygg-fg); border-color: var(--ygg-accent-dim); background: var(--ygg-surface-2); transform: translateX(2px); }
+.ygg-task:active { transform: translateX(2px) scale(.975); transition-duration: var(--ygg-t-fast); }
 .ygg-task-dot { width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--ygg-fg-muted); }
 .ygg-task-dot.is-minimized { background: var(--ygg-accent); }
 .ygg-task-dot.is-closed { background: var(--ygg-danger); }
@@ -200,15 +238,15 @@ body {
   font-size: 12px;
   transition: background-color var(--ygg-t-fast) var(--ygg-ease), color var(--ygg-t-fast) var(--ygg-ease), border-color var(--ygg-t-fast) var(--ygg-ease), transform var(--ygg-t-fast) var(--ygg-ease);
 }
-.ygg-btn:hover { background: var(--ygg-accent); border-color: var(--ygg-accent); color: var(--ygg-bg); }
-.ygg-btn:active { transform: scale(.96); }
+.ygg-btn:hover:not(:disabled) { background: var(--ygg-accent); border-color: var(--ygg-accent); color: var(--ygg-bg); transform: translateY(-1px); }
+.ygg-btn:active:not(:disabled) { transform: translateY(0) scale(.97); transition-duration: var(--ygg-t-fast); }
 .ygg-btn:disabled { opacity: .35; cursor: not-allowed; transform: none; }
 .ygg-btn:disabled:hover { background: transparent; border-color: var(--ygg-accent-dim); color: var(--ygg-fg); }
 .ygg-btn.primary { background: var(--ygg-accent); border-color: var(--ygg-accent); color: var(--ygg-bg); font-weight: 600; }
-.ygg-btn.primary:hover { background: var(--ygg-accent-hi); border-color: var(--ygg-accent-hi); }
+.ygg-btn.primary:hover:not(:disabled) { background: var(--ygg-accent-hi); border-color: var(--ygg-accent-hi); }
 .ygg-btn.ghost { border-color: var(--ygg-accent-dim); }
 .ygg-btn.danger { border-color: var(--ygg-danger); color: var(--ygg-danger); }
-.ygg-btn.danger:hover { background: var(--ygg-danger); border-color: var(--ygg-danger); color: var(--ygg-fg); }
+.ygg-btn.danger:hover:not(:disabled) { background: var(--ygg-danger); border-color: var(--ygg-danger); color: var(--ygg-fg); }
 .ygg-btn.tiny { padding: 2px 7px; font-size: 11px; }
 
 .ygg-input, .ygg-select {
@@ -223,6 +261,7 @@ body {
   width: 100%;
   transition: border-color var(--ygg-t) var(--ygg-ease), background-color var(--ygg-t) var(--ygg-ease);
 }
+.ygg-input, .ygg-select { caret-color: var(--ygg-accent); }
 .ygg-input:hover, .ygg-select:hover { border-color: var(--ygg-accent); }
 .ygg-input:focus, .ygg-select:focus { border-color: var(--ygg-accent-hi); background: var(--ygg-surface); }
 .ygg-input::placeholder { color: var(--ygg-fg-muted); opacity: .6; }
@@ -259,8 +298,8 @@ body {
   cursor: pointer;
   transition: background-color var(--ygg-t) var(--ygg-ease), color var(--ygg-t) var(--ygg-ease), border-color var(--ygg-t) var(--ygg-ease), transform var(--ygg-t-fast) var(--ygg-ease);
 }
-.ygg-topbtn:hover { background: var(--ygg-surface-2); color: var(--ygg-accent-hi); border-color: var(--ygg-accent-dim); }
-.ygg-topbtn:active { transform: scale(.92); }
+.ygg-topbtn:hover { background: var(--ygg-surface-2); color: var(--ygg-accent-hi); border-color: var(--ygg-accent-dim); transform: translateY(-1px); }
+.ygg-topbtn:active { transform: translateY(0) scale(.92); transition-duration: var(--ygg-t-fast); }
 .ygg-topbtn.is-danger:hover { color: var(--ygg-danger); border-color: var(--ygg-danger); }
 .ygg-topbtn .badge {
   position: absolute;
@@ -282,6 +321,8 @@ body {
 .ygg-compose {
   display: flex;
   flex-direction: column;
+  /* 内容贴底：队列出现时长高往上顶，输入行本身不移动 */
+  justify-content: flex-end;
   height: 100%;
   padding: 8px 10px;
   gap: 5px;
@@ -292,9 +333,73 @@ body {
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  flex: 1;
-  min-height: 0;
+  flex: none;
 }
+
+/* 排队中的输入：贴在输入行上方的一块暗棕底，逐条可删 */
+.ygg-queue {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 44px;
+  overflow-y: auto;
+  padding: 3px;
+  background: var(--ygg-surface-2);
+  border-radius: var(--ygg-radius);
+  animation: ygg-fade-in var(--ygg-t) var(--ygg-ease-out) both;
+}
+.ygg-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 18px;
+  flex: none;
+  padding: 0 2px 0 5px;
+  border-radius: 3px;
+  color: var(--ygg-fg-muted);
+  font-size: 11px;
+  animation: ygg-row-in var(--ygg-t) var(--ygg-ease-out) both;
+  transition: background-color var(--ygg-t-fast) var(--ygg-ease), color var(--ygg-t-fast) var(--ygg-ease);
+}
+.ygg-queue-item:hover { background: var(--ygg-surface); color: var(--ygg-fg); }
+.ygg-queue-idx {
+  flex: none;
+  min-width: 11px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 9px;
+  color: var(--ygg-accent-dim);
+  transition: color var(--ygg-t-fast) var(--ygg-ease);
+}
+.ygg-queue-item:hover .ygg-queue-idx { color: var(--ygg-accent); }
+.ygg-queue-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ygg-queue-to {
+  flex: none;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 9px;
+  letter-spacing: .04em;
+  color: var(--ygg-accent-dim);
+}
+.ygg-queue-del {
+  flex: none;
+  width: 15px; height: 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--ygg-fg-muted);
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1;
+  padding: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background-color var(--ygg-t-fast) var(--ygg-ease), color var(--ygg-t-fast) var(--ygg-ease), transform var(--ygg-t-fast) var(--ygg-ease);
+}
+.ygg-queue-del:hover { background: var(--ygg-danger); color: var(--ygg-fg); }
+.ygg-queue-del:active { transform: scale(.85); }
 
 .ygg-compose-area {
   flex: 1;
@@ -313,7 +418,10 @@ body {
   padding: 0;
   overflow-y: auto;
 }
-.ygg-compose-area::placeholder { color: var(--ygg-fg-muted); opacity: .55; }
+.ygg-compose-area { caret-color: var(--ygg-accent); }
+.ygg-compose-area::placeholder { color: var(--ygg-fg-muted); opacity: .55; transition: opacity var(--ygg-t) var(--ygg-ease); }
+.ygg-compose:focus-within .ygg-compose-area::placeholder { opacity: .8; }
+.ygg-compose:focus-within .ygg-compose-hint { opacity: .85; }
 
 .ygg-compose-state {
   display: flex;
@@ -324,8 +432,15 @@ body {
   font-size: 11px;
   color: var(--ygg-fg-muted);
 }
+.ygg-compose-state { transition: color var(--ygg-t) var(--ygg-ease); }
 .ygg-compose-state.is-busy { color: var(--ygg-accent); }
 .ygg-compose-text { flex: none; letter-spacing: .04em; }
+.ygg-compose-queued {
+  flex: none;
+  color: var(--ygg-accent-dim);
+  letter-spacing: .04em;
+  animation: ygg-fade-in var(--ygg-t-fast) var(--ygg-ease-out) both;
+}
 .ygg-compose-detail {
   flex: 1;
   min-width: 0;
@@ -358,9 +473,12 @@ body {
     transform var(--ygg-t-fast) var(--ygg-ease),
     opacity var(--ygg-t) var(--ygg-ease);
 }
-.ygg-compose-send:hover:not(:disabled) { background: var(--ygg-accent-hi); border-color: var(--ygg-accent-hi); }
-.ygg-compose-send:active:not(:disabled) { transform: scale(.9); }
+.ygg-compose-send:hover:not(:disabled) { background: var(--ygg-accent-hi); border-color: var(--ygg-accent-hi); transform: scale(1.06); }
+.ygg-compose-send:active:not(:disabled) { transform: scale(.9); transition-duration: var(--ygg-t-fast); }
 .ygg-compose-send:disabled { opacity: .25; cursor: not-allowed; }
+/* 排队态：不再是实心主按钮，而是一枚描边胶囊 —— 一眼看出这次是"排队"而不是"立刻发" */
+.ygg-compose-send.is-queue { background: transparent; color: var(--ygg-accent); border-color: var(--ygg-accent-dim); }
+.ygg-compose-send.is-queue:hover:not(:disabled) { background: var(--ygg-accent-dim); border-color: var(--ygg-accent); color: var(--ygg-fg); }
 .ygg-spin {
   width: 11px; height: 11px;
   flex: none;
@@ -387,9 +505,11 @@ body {
   padding: 5px 6px;
   border-radius: var(--ygg-radius);
   cursor: pointer;
-  transition: background-color var(--ygg-t-fast) var(--ygg-ease);
+  animation: ygg-row-in var(--ygg-t) var(--ygg-ease-out) both;
+  transition: background-color var(--ygg-t-fast) var(--ygg-ease), transform var(--ygg-t-fast) var(--ygg-ease);
 }
-.ygg-node-row:hover { background: var(--ygg-surface-2); }
+.ygg-node-row:hover { background: var(--ygg-surface-2); transform: translateX(2px); }
+.ygg-node-row:active { transform: translateX(2px) scale(.99); }
 .ygg-node-row.active { background: color-mix(in srgb, var(--ygg-accent) 12%, transparent); }
 .ygg-node-row .kind {
   font-size: 9px;
@@ -423,8 +543,11 @@ body {
 .ygg-log .lv.warn { color: var(--ygg-accent-hi); }
 .ygg-log .lv.op { color: var(--ygg-accent); }
 .ygg-log .lv.llm { color: var(--ygg-ok); }
-.ygg-log-line { padding: 3px 0; transition: color var(--ygg-t-fast) var(--ygg-ease); }
-.ygg-log-line:hover { color: var(--ygg-accent-hi); }
+.ygg-log-line {
+  padding: 3px 0;
+  transition: color var(--ygg-t-fast) var(--ygg-ease), transform var(--ygg-t-fast) var(--ygg-ease);
+}
+.ygg-log-line:hover { color: var(--ygg-accent-hi); transform: translateX(2px); }
 
 .ygg-empty, .ygg-muted { color: var(--ygg-fg-muted); font-size: 11px; }
 
@@ -441,6 +564,7 @@ body {
   transition: background-color var(--ygg-t-fast) var(--ygg-ease), color var(--ygg-t-fast) var(--ygg-ease);
 }
 .ygg-seg button:hover { background: var(--ygg-surface-2); color: var(--ygg-fg); }
+.ygg-seg button:active { transform: scale(.95); transition-duration: var(--ygg-t-fast); }
 .ygg-seg button.on { background: var(--ygg-surface-2); color: var(--ygg-accent-hi); }
 
 /* ---------------- 执行轨迹：一条主干 + 分支 ---------------- */
@@ -471,10 +595,10 @@ body {
   position: relative;
   padding: 4px 4px 8px 8px;
   border-radius: var(--ygg-radius);
-  transition: background-color var(--ygg-t) var(--ygg-ease);
-  animation: ygg-panel-in var(--ygg-t) var(--ygg-ease) both;
+  transition: background-color var(--ygg-t) var(--ygg-ease), transform var(--ygg-t) var(--ygg-ease);
+  animation: ygg-panel-in var(--ygg-t) var(--ygg-ease-out) both;
 }
-.ygg-step:hover { background: var(--ygg-surface-2); }
+.ygg-step:hover { background: var(--ygg-surface-2); transform: translateX(2px); }
 /* 分支：从主干接到每一步 */
 .ygg-step::before {
   content: '';
@@ -536,6 +660,7 @@ body {
   word-break: break-word;
   color: var(--ygg-fg-muted);
 }
+.ygg-step.is-running .ygg-step-msg { color: var(--ygg-accent); }
 .ygg-step.is-fail .ygg-step-msg { color: var(--ygg-danger); }
 .ygg-step.is-ok .ygg-step-msg { color: var(--ygg-fg); }
 
@@ -546,8 +671,9 @@ body {
   position: fixed;
   top: 14px;
   left: 50%;
-  transform: translateX(-50%) translateY(-8px);
+  transform: translateX(-50%) translateY(-8px) scale(.98);
   opacity: 0;
+  transform-origin: top center;
   max-width: min(560px, calc(100vw - 140px));
   padding: 9px 14px;
   background: var(--ygg-surface);
@@ -555,9 +681,9 @@ body {
   border-radius: var(--ygg-radius);
   z-index: 500000;
   cursor: pointer;
-  transition: opacity var(--ygg-t-slow) var(--ygg-ease), transform var(--ygg-t-slow) var(--ygg-ease);
+  transition: opacity var(--ygg-t-slow) var(--ygg-ease), transform var(--ygg-t-slow) var(--ygg-ease-out);
 }
-.ygg-toast.is-in { opacity: 1; transform: translateX(-50%) translateY(0); }
+.ygg-toast.is-in { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
 .ygg-toast.is-ok { border-color: var(--ygg-ok); }
 .ygg-toast.is-partial { border-color: var(--ygg-accent); }
 .ygg-toast.is-fail { border-color: var(--ygg-danger); }
@@ -621,7 +747,7 @@ body {
   border-radius: var(--ygg-radius);
   box-shadow: var(--ygg-shadow);
   padding: 18px 20px;
-  animation: ygg-window-in var(--ygg-t) var(--ygg-ease) both;
+  animation: ygg-window-in var(--ygg-t-slow) var(--ygg-ease-out) both;
 }
 .ygg-confirm-text { font-size: 12px; line-height: 1.7; color: var(--ygg-fg); }
 .ygg-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }

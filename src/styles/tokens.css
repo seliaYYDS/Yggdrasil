@@ -1,5 +1,7 @@
 :root {
   color-scheme: dark;
+  /* 原生控件（range / checkbox）跟随金色主色 */
+  accent-color: var(--ygg-accent);
 
   /* 扁平化：暗棕色填充 */
   --ygg-bg: #1A120B;
@@ -24,9 +26,15 @@
   --ygg-ok: #7FA65A;
   --ygg-font: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
 
-  /* 动效时长 */
+  /*
+   * 动效时长与缓动。
+   * 刻意**不在**主题白名单里（见 src/theme/engine.ts 的 DEFAULT_TOKENS）：
+   * Agent 可以改配色，但不该改掉交互动效。
+   */
   --ygg-t-fast: 110ms;
   --ygg-t: 170ms;
   --ygg-t-slow: 260ms;
   --ygg-ease: cubic-bezier(.22, .61, .36, 1);
+  --ygg-ease-out: cubic-bezier(.16, .84, .44, 1);
+  --ygg-ease-in: cubic-bezier(.5, 0, .9, .4);
 }
