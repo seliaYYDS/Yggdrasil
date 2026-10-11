@@ -231,6 +231,8 @@ function ledgerRules(ledger?: string[], nodes?: Record<string, YggNode>): string
   });
   return [
     '## 你已经做过的事（跨刷新保留）',
+    '- 这些是你**真的做过**的事，包含你创建的组件 id。要改它们直接用 `patch_source` 改源码，',
+    '  不要重新创建一个"改进版"（那会变成两个窗口）。',
     '- 这是**历史**，不是当前界面状态；当前界面一律以「当前窗口」快照为准。',
     '- 标着 **已被用户删除** 的，是**用户自己删掉的** —— 删掉就是不要了。' +
       '**不要为了"补做"而重建它**，除非用户这次明确要求再做一遍。',
@@ -262,6 +264,23 @@ function componentRules(): string[] {
     '- **组件就是你唯一的表达方式**：需要向用户呈现信息时，把内容直接写进组件里，而不是指望别处能显示。',
     '- 控制篇幅，代码保持紧凑，不要写注释。',
     '',
+    '### 修复自己做过的东西：**定点改，不要重写**（重要）',
+    '- 你之前做出来的组件/插槽出问题时，**默认动作是 `patch_source`**，不是再做一遍。',
+    '- 禁止的做法（会丢东西，实测里最常见的"修复变破坏"）：',
+    '  - 用 `create_component` 再建一个 —— 用户会看到两个窗口，旧的坏的那个还在；',
+    '  - 先 `remove_node` 再重建 —— id 变了，位置/尺寸/局部样式/agent 能力与消息账本全丢，',
+    '    别的组件或插槽里对它的引用也会一起断；',
+    '  - 用 `update_component.source` **整段重写** —— 为了改一行要重述全部内容，',
+    '    结果是把原本能用的部分记错、丢掉。',
+    '- 标准流程（三步，别跳）：',
+    '  1. `inspect before="logs"` —— 组件运行时报错只在这里，先看**真实报错**；',
+    '  2. `inspect before="component" id=...`（插槽用 `list_surfaces`）—— 看**当前真实源码**；',
+    '  3. `patch_source` —— find 用源码里原样的一段，一次只改一个地方，小步验证。',
+    '- find 必须**唯一命中**：不唯一就加长锚点（带上前后文），别赌。',
+    '- patch_source 是原子的：**编译不过会整体放弃、源码一个字都不变**，所以小步改是安全的。',
+    '- 只有需求本身是"整体换掉这个东西"时，才用 `update_component.source` / `replace_surface` 整段给。',
+    '- 你整段替换源码时，日志里会记一条"源码整段替换 x → y 字符"，用户看得见 —— 别拿它当默认手段。',
+    '',
     '### 动画与 GPU（WebGL / Canvas / requestAnimationFrame）',
     '- 可以用原生 WebGL：`canvas.getContext("webgl")` / `"webgl2"`、写 GLSL、用 `useRef` + `useEffect` 起循环。',
     '  **不能 import three / pixi 等第三方库**，shader 与矩阵要自己写。',
@@ -286,6 +305,8 @@ function windowRules(): string[] {
       '用户能从左下角任务栏点回来。',
     '- 查看页面 → `inspect before="windows"` 看全部窗口；`inspect before="component" id=...` ' +
       '看某一个页面的**完整现状与源码**（改别人的组件之前先看这个，别凭猜）。',
+    '- 页面报错 → `inspect before="logs"`：组件运行时抛出的错误只记在日志里，' +
+      '不看日志就只能靠猜，靠猜的结果通常是"整段重写"（见「修复自己做过的东西」一节）。',
     '- 调整窗口 → `update_component`：绝对 `pos`/`size`、相对 `dx dy dw dh`、' +
       '`center` 居中、`fill` 铺满、`align` 贴边、`focus` 置顶、`z` 指定层级。',
     '- 批量排布 → `arrange_windows`：`grid` 网格 / `cascade` 斜向层叠 / `stack` 居中叠放。' +

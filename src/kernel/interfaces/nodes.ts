@@ -231,6 +231,12 @@ export function registerNodeInterfaces(): void {
         }
         patch.source = op.source;
         touched.push('源码');
+        // 记下长度变化：用户能从日志看出这次是"整段重写"还是"定点修改"。
+        desktop().log(
+          'op',
+          'comp ' + node.name + ' 源码整段替换 ' + node.source.length + ' → ' + op.source.length + ' 字符（能局部改就别整段换，见 patch_source）',
+          id,
+        );
 
         // 新源码真的从 "yggdrasil" 引入并调用了 useAgent，但组件还没有能力时，顺手接上 ——
         // 否则界面上的交互会静默失效。只提一句名字（注释）不触发。

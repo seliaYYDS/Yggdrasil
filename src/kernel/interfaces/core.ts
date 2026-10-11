@@ -6,6 +6,8 @@ import { getTool, registerTool, toolCatalog } from '../registry/toolRegistry';
 import { sanitizeTokens } from '../../theme/engine';
 import {
   clearSurfaceSource,
+  getSurfaceDef,
+  getSurfaceState,
   isCriticalSurface,
   listSurfaces,
   setSurfaceSource,
@@ -34,6 +36,26 @@ function windowsText(): string {
         ' pos=' + n.pos.x + ',' + n.pos.y + ' size=' + n.size.w + 'x' + n.size.h + ' z=' + n.z +
         (n.agent ? ' [agent]' : ''),
     )
+    .join('\n');
+}
+
+/**
+ * 应用日志。**组件运行时报错只在这里**（ErrorBoundary 会记一条 error），
+ * 所以这是"修一个坏掉的组件"的第一步：先看日志里到底报了什么，
+ * 再 inspect before="component" 看当前源码，最后用 patch_source 定点改。
+ * 不给 Agent 看日志的话，它只能靠猜 —— 那就会变成"整段重写"。
+ */
+function logsText(): string {
+  const logs = desktop().logs;
+  if (logs.length === 0) return '（没有日志）';
+  // 只给最近一段：日志是排查线索，不是全文档案。
+  return logs
+    .slice(-40)
+    .map((l) => {
+      const when = new Date(l.at).toLocaleTimeString('zh-CN', { hour12: false });
+      const where = l.nodeId ? ' (' + l.nodeId + ')' : '';
+      return '[' + when + '] ' + l.level + where + ' ' + l.text;
+    })
     .join('\n');
 }
 
@@ -178,7 +200,7 @@ export function registerCoreInterfaces(): void {
     description:
       '查看当前界面结构（"看看页面上现在有什么"）。before 可选：' +
       'windows（视口 + 全部窗口）/ component（**某一个页面的完整现状与源码**，需同时给 id）/ ' +
-      'agents / tree / tokens / surfaces / tools / all。',
+      'logs（**应用日志，组件运行时报错就在这里**）/ agents / tree / tokens / surfaces / tools / all。',
     example: { kind: 'inspect', before: 'component', id: 'n_xxx' },
     handler: (op) => {
       const s = desktop();
@@ -194,6 +216,7 @@ export function registerCoreInterfaces(): void {
       if (part === 'all' || part === 'tokens') chunks.push('## 样式变量\n' + themeText(s.tokens));
       if (part === 'all' || part === 'surfaces') chunks.push('## 界面插槽\n' + surfacesText());
       if (part === 'all' || part === 'tools') chunks.push('## 工具\n' + toolCatalogText(toolCatalog()));
+      if (part === 'all' || part === 'logs') chunks.push('## 日志\n' + logsText());
       if (part === 'component') {
         const cid = strOr(op.id, '');
         const target = cid ? s.nodes[cid] : undefined;
@@ -208,13 +231,157 @@ export function registerCoreInterfaces(): void {
         chunks.push('## 页面 ' + target.name + '\n' + nodeText(target));
       }
       if (chunks.length === 0) {
-        return fail('inspect 的 before 只接受 windows / component / agents / tree / tokens / surfaces / tools / all。');
+        return fail(
+          'inspect 的 before 只接受 windows / component / logs / agents / tree / tokens / surfaces / tools / all。',
+        );
       }
       if (part === 'all') {
         const total = Object.keys(s.nodes).length;
         chunks.unshift('节点总数 ' + total + ' / 上限 ' + MAX_NODES);
       }
       return ok('已读取界面结构（' + part + '）', { observation: chunks.join('\n\n') });
+    },
+  });
+
+
+  /*
+   * 定点修改已有源码。
+   *
+   * 为什么必须有这个接口：在此之前，改一行代码的唯一办法是**整段重新给一遍 source**。
+   * 对模型来说那等于"重写" —— 它会把原本能用的一大半内容记错、丢掉或改掉，
+   * 于是"修一个小问题"变成"破坏性重写"。有了 find/replace，
+   * 改动量与风险都跟真实改动成正比。
+   *
+   * 两条硬约束：
+   * 1. find 必须在当前源码里唯一命中（除非显式 all:true）—— 改错地方比不改更糟。
+   * 2. 所有替换先全部做完再编译，**编译通过才写入**；失败则整体放弃、源码保持原样。
+   */
+  registerInterface({
+    kind: 'patch_source',
+    label: '局部修改源码',
+    description:
+      '在**已有源码**里做定点替换（修 bug / 加一小块功能）。' +
+      '目标二选一：给 `id` 改组件源码；给 `surface` 改插槽源码。' +
+      'edits 是 [{ find, replace, all? }]：find 必须**原样**来自当前源码且**唯一命中**；' +
+      '不唯一时把锚点写长一点（带上前后文），或传 all:true 表示全部替换。' +
+      '多个 edit 顺序生效。**全部替换先在内存里做完再编译，编译通过才写入** —— ' +
+      '失败就整体放弃，源码一个字都不会变。' +
+      '**修自己之前做的东西就用它**：不要用 create_component 重建，也不要整段重写 source。',
+    example: {
+      kind: 'patch_source',
+      id: 'n_xxx',
+      edits: [{ find: 'const [v, setV] = React.useState("0")', replace: 'const [v, setV] = React.useState("")' }],
+    },
+    mutates: true,
+    handler: (op) => {
+      const id = strOr(op.id, '');
+      const surface = strOr(op.surface, '');
+      if (!id && !surface) return fail('patch_source 需要 id（改组件）或 surface（改插槽）其中之一。');
+      if (id && surface) return fail('id 与 surface 只能给一个：不确定改哪个就先 inspect。');
+
+      const rawEdits = op.edits;
+      if (!Array.isArray(rawEdits) || rawEdits.length === 0) {
+        return fail('edits 必须是非空数组，每项形如 { find, replace, all? }。');
+      }
+      const edits: { find: string; replace: string; all: boolean }[] = [];
+      for (const [i, item] of rawEdits.entries()) {
+        const e = (item ?? {}) as Record<string, unknown>;
+        if (typeof e.find !== 'string' || e.find === '') {
+          return fail('edits[' + i + '].find 必须是非空字符串。');
+        }
+        if (typeof e.replace !== 'string') {
+          return fail('edits[' + i + '].replace 必须是字符串（删掉就传空串）。');
+        }
+        edits.push({ find: e.find, replace: e.replace, all: e.all === true });
+      }
+
+      // ---- 取当前源码 ----
+      let current = '';
+      let label = '';
+      let key = '';
+      let write: (next: string) => void;
+      if (surface) {
+        const def = getSurfaceDef(surface);
+        if (!def) {
+          const ids = listSurfaces().map((s) => s.id).join(', ');
+          return fail('插槽 ' + surface + ' 不存在。可用插槽：' + (ids || '（无）'));
+        }
+        const cur = getSurfaceState(surface)?.source;
+        if (!cur) {
+          return fail(
+            '插槽 ' + surface + ' 目前还是**内置实现**，没有可改的源码。' +
+              '要换成你自己的实现请用 replace_surface 整段给一次 source。',
+          );
+        }
+        current = cur;
+        label = '插槽「' + def.label + '」';
+        key = 'surface_' + surface;
+        write = (next) => setSurfaceSource(surface, next);
+      } else {
+        const node = desktop().nodes[id];
+        if (!node || node.kind !== 'component' || node.root) {
+          const list = Object.values(desktop().nodes)
+            .filter((n) => n.kind === 'component' && !n.root)
+            .map((n) => n.name + '(' + n.id + ')')
+            .join('、');
+          return fail('组件 ' + id + ' 不存在。当前窗口：' + (list || '（没有窗口）'));
+        }
+        if (!node.source.trim()) return fail('组件「' + node.name + '」目前没有源码，没有可替换的内容。');
+        current = node.source;
+        label = '组件「' + node.name + '」';
+        key = id;
+        write = (next) => useDesktopStore.getState().updateNode(id, { source: next });
+      }
+
+      // ---- 逐个替换（在内存里累积） ----
+      let next = current;
+      const notes: string[] = [];
+      for (const [i, e] of edits.entries()) {
+        const hits = next.split(e.find).length - 1;
+        if (hits === 0) {
+          return fail(
+            'edits[' + i + '] 在' + label + '的**当前源码**里找不到这段内容，本次修改已整体放弃（源码未变）：\n' +
+              '---\n' + e.find + '\n---\n' +
+              '请先用 inspect before="component" id=... 或 list_surfaces 看**当前真实源码**，' +
+              '把 find 写成源码里原样的一段（不要凭记忆写，也不要凭上一轮改之前的样子写）。',
+          );
+        }
+        if (hits > 1 && !e.all) {
+          return fail(
+            'edits[' + i + '] 在' + label + '里出现了 ' + hits + ' 次，不唯一，本次修改已整体放弃（源码未变）：\n' +
+              '---\n' + e.find + '\n---\n' +
+              '请把锚点写长一点（带上前后文让它唯一），或者传 all: true 明确表示全部替换。',
+          );
+        }
+        next = e.all ? next.split(e.find).join(e.replace) : next.replace(e.find, e.replace);
+        notes.push('第 ' + (i + 1) + ' 处 ×' + hits);
+      }
+      if (next === current) {
+        return fail('替换之后源码没有任何变化：find 与 replace 是不是写成一样了？');
+      }
+
+      // ---- 先编译，通过才写入（原子） ----
+      const compiled = compileComponent(key, next);
+      if (!compiled.ok) {
+        if (surface) desktop().log('error', 'surface ' + surface + ' \u2715 ' + compiled.error);
+        else desktop().log('error', 'comp ' + label + ' \u2715 ' + compiled.error);
+        return fail(
+          '改动后的源码**编译失败，本次修改已整体放弃 —— 原源码一个字都没变**：' +
+            compiled.error +
+            '\n请缩小改动范围（一次只改一个地方），或者先用 inspect 确认当前源码。',
+        );
+      }
+
+      write(next);
+      if (surface) desktop().log('op', 'patch surface ' + surface + ' (' + edits.length + ' 处)');
+      else desktop().log('op', 'patch ' + label + ' (' + edits.length + ' 处)', id);
+
+      return ok('已局部修改' + label + '（' + edits.length + ' 处）', {
+        observation:
+          '改动明细：' + notes.join('；') +
+          '。源码长度 ' + current.length + ' → ' + next.length +
+          '。改动已通过编译并生效；如果界面上的表现还不对，先 inspect before="logs" 看运行时报错，再继续用 patch_source 小步修改。',
+      });
     },
   });
 
@@ -269,6 +436,12 @@ export function registerCoreInterfaces(): void {
         desktop().log('error', 'surface ' + surface + ' \u2715 ' + compiled.error);
         return fail('插槽「' + def.label + '」的替换源码编译失败，已放弃：' + compiled.error);
       }
+      // 记下长度变化：用户能从日志看出这次是"整段重写"还是"定点修改"。
+      const prevLen = getSurfaceState(surface)?.source?.length ?? 0;
+      desktop().log(
+        'op',
+        'surface ' + surface + ' 源码整段替换 ' + prevLen + ' → ' + raw.length + ' 字符（能局部改就别整段换，见 patch_source）',
+      );
       setSurfaceSource(surface, raw);
       desktop().log('op', 'surface ' + surface);
       return ok('已替换界面元素「' + def.label + '」', {
