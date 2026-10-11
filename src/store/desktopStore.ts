@@ -465,6 +465,11 @@ interface DesktopState {
   leaving: Record<string, true>;
   /** 刚从任务栏展开、正在播"长回原位"动画的窗口 id。不进持久化。 */
   restoring: Record<string, true>;
+  /**
+   * 正在按住 Shift 拖动窗口 —— 此时启用网格吸附，并在背景盖一层网格。
+   * 不进持久化。
+   */
+  snapDrag: boolean;
 
   hydrate: () => Promise<void>;
   addNode: (node: YggNode) => void;
@@ -506,6 +511,8 @@ interface DesktopState {
   setTraceOpen: (open: boolean) => void;
   setResetOpen: (open: boolean) => void;
   setPanelMinimized: (panel: PanelKey, minimized: boolean) => void;
+  /** 拖动中切换网格吸附（按住 / 松开 Shift 都会调）。 */
+  setSnapDrag: (on: boolean) => void;
   setFeedback: (feedback: RunFeedback | null) => void;
   appendLedger: (agentId: NodeId, entries: string[]) => void;
   setPanelRect: (panel: PanelKey, rect: PanelRect) => void;
@@ -618,6 +625,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   pendingOpen: [],
   leaving: {},
   restoring: {},
+  snapDrag: false,
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -951,6 +959,11 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
+  setSnapDrag: (on) => {
+    // 只在变化时写 store：拖动中每次 pointermove 都会调到这里。
+    if (get().snapDrag !== on) set({ snapDrag: on });
+  },
+
   setFeedback: (feedback) => set({ feedback }),
 
   appendLedger: (agentId, entries) => {
@@ -1191,6 +1204,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       pendingOpen: [],
       leaving: {},
       restoring: {},
+      snapDrag: false,
       inspectorRect: panels.inspector,
       settingsRect: panels.settings,
       traceRect: panels.trace,

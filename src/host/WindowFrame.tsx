@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Surface } from './Surface';
 import { useDesktopStore } from '../store/desktopStore';
+import { snapCenterToGrid } from '../app/grid';
 
 /** 任务栏锚点：左下角。窗口最小化时朝这里缩小并位移，"收进"任务栏。 */
 const TASKBAR_ANCHOR_X = 26;
@@ -71,6 +72,9 @@ export function WindowFrame({
 }: Props) {
   const [drag, setDrag] = useState<DragMode | null>(null);
   const origin = useRef({ x: 0, y: 0, px: 0, py: 0 });
+  /** 拖动中是否按着 Shift（= 网格吸附）。用 ref 记，pointermove 里比对，避免反复写 store。 */
+  const snapRef = useRef(false);
+  const setSnapDrag = useDesktopStore((s) => s.setSnapDrag);
 
   // 最小化 / 恢复都由 store 驱动：先标记 leaving（或 restoring），动画播完才真正收放。
   const leaving = useDesktopStore((s) => !!s.leaving[id]);
@@ -154,12 +158,25 @@ export function WindowFrame({
   useEffect(() => {
     if (!drag) return;
     const onMove = (e: PointerEvent) => {
+      /*
+       * 按住 Shift 拖动 = 网格吸附。
+       *
+       * 直接在 pointermove 上读 e.shiftKey：这样拖动**中途**按下或松开 Shift 都会立刻生效，
+       * 不需要额外监听键盘事件，也不怕焦点跑掉。
+       * 吸附点是**窗口中心**（见 app/grid.ts），所以窗口中心会落在网格交点上。
+       */
+      if (drag.kind === 'move' && e.shiftKey !== snapRef.current) {
+        snapRef.current = e.shiftKey;
+        setSnapDrag(e.shiftKey);
+      }
       if (drag.kind === 'move') {
-        move({
+        const next = {
           ...rect,
           x: origin.current.px + (e.clientX - origin.current.x),
           y: Math.max(0, origin.current.py + (e.clientY - origin.current.y)),
-        });
+        };
+        const snapped = e.shiftKey ? snapCenterToGrid(next) : { x: next.x, y: next.y };
+        move({ ...next, x: snapped.x, y: snapped.y });
       } else {
         move({
           ...rect,
@@ -168,7 +185,14 @@ export function WindowFrame({
         });
       }
     };
-    const onUp = () => setDrag(null);
+    const onUp = () => {
+      setDrag(null);
+      // 结束拖动一定收起网格：中途松开 Shift 而指针没再动过的情况也得清掉。
+      if (snapRef.current) {
+        snapRef.current = false;
+        setSnapDrag(false);
+      }
+    };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
@@ -177,7 +201,7 @@ export function WindowFrame({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [drag, minH, minW, move, rect]);
+  }, [drag, minH, minW, move, rect, setSnapDrag]);
 
   const builtinTitlebar = (
     <div className="ygg-titlebar" data-ygg-drag={onRect ? '1' : '0'}>

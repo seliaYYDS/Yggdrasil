@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { Desktop } from './Desktop';
+import { Surface } from '../host/Surface';
 import { Feedback } from '../ui/Feedback';
 import { TopBar } from '../ui/TopBar';
 import { ResetDialog } from '../ui/ResetDialog';
@@ -39,6 +40,16 @@ export function App() {
         放进同一个容器后，面板与组件窗口才真正共享一套层级。
       */}
       <Desktop />
+      {/*
+        整页效果层：盖在所有窗口与面板之上。
+        这里是 Desktop 的**兄弟节点**（不是它的子节点）—— .ygg-desktop 会创建自己的层叠上下文，
+        放进去的话就跟窗口们一起被关在里面了，盖不住。
+        层级夹在桌面（低于它）与右上角按钮组（400000）之间。
+        整层默认 pointer-events:none，不影响用户点窗口。
+      */}
+      <div className="ygg-overlay-layer">
+        <Surface id="desktop.overlay" props={{ nodeCount: 0 }} fallback={null} />
+      </div>
       {/* 下面两个是覆盖层，本就该在最上面 */}
       <TopBar />
       <ResetDialog />

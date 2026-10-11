@@ -378,7 +378,44 @@ export interface CompileOk {
 
 export type CompileResult = CompileOk | CompileFail;
 
+/**
+ * 编译结果缓存。
+ *
+ * 为什么需要：Babel 编译一次是几毫秒到几十毫秒。整页效果类的请求（一次改很多窗口、
+ * 或者最小化/恢复导致窗口重新挂载）会把同一份源码反复编译。
+ * 缓存住之后，**同一个 (id, source) 每次拿到的是同一个组件函数引用** ——
+ * 这同时让 React 不会因为"组件类型变了"而卸载重建整棵子树（WebGL canvas 会因此被丢掉重来）。
+ *
+ * 有上限：源码可能很多，缓存不设限就是内存泄漏。
+ */
+const MAX_COMPILE_CACHE = 120;
+const compileCache = new Map<string, CompileResult>();
+
+/** 清空编译缓存（重置 / 测试用）。 */
+export function clearCompileCache(): void {
+  compileCache.clear();
+}
+
 export function compileComponent(nodeId: string, source: string): CompileResult {
+  const key = nodeId + '\u0000' + source;
+  const hit = compileCache.get(key);
+  if (hit) {
+    // 命中就挪到末尾，保持 LRU 顺序。
+    compileCache.delete(key);
+    compileCache.set(key, hit);
+    return hit;
+  }
+
+  const result = compileComponentUncached(nodeId, source);
+  compileCache.set(key, result);
+  if (compileCache.size > MAX_COMPILE_CACHE) {
+    const oldest = compileCache.keys().next().value;
+    if (oldest !== undefined) compileCache.delete(oldest);
+  }
+  return result;
+}
+
+function compileComponentUncached(nodeId: string, source: string): CompileResult {
   const compiled = compileModule(nodeId, source);
   if (!compiled.ok) return compiled;
   const { mod } = compiled;

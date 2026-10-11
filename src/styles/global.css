@@ -217,6 +217,38 @@ button:focus:not(:focus-visible) { outline: none; }
 
 /* ---------------- 任务栏：最小化 / 关闭的窗口 ---------------- */
 
+/*
+ * 整页效果层（Agent 用 replace_surface 覆写的 desktop.overlay）。
+ * 夹在窗口（在 .ygg-desktop 里，层级低于这里）与右上角按钮组（400000）之间。
+ * 默认不吃鼠标事件 —— 效果层不该挡住用户点窗口。
+ */
+.ygg-overlay-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 300000;
+  pointer-events: none;
+}
+
+/*
+ * 按住 Shift 拖动窗口时铺的网格。
+ *
+ * 网格用 SVG <pattern> 画，而不是用 CSS 的条纹函数：
+ * 一是这个界面的约束里本来就不允许那类填充，二是 SVG 的线更锐利、
+ * 还能直接吃 currentColor 跟着主题走。
+ * 网格原点在视口左上角，与 app/grid.ts 的 SNAP_GRID 共用同一个尺寸 —— 所以
+ * "窗口中心对准网格交点"是能直接看出来的。
+ */
+.ygg-grid-overlay {
+  position: fixed;
+  inset: 0;
+  /* 夹在背景（无 z-index）与窗口/面板（最低 z=1）之间：网格是"背景图案"，不是遮罩。 */
+  z-index: 0;
+  pointer-events: none;
+  color: var(--ygg-accent);
+  opacity: .3;
+  animation: ygg-fade-in var(--ygg-t-fast) var(--ygg-ease-out) both;
+}
+
 .ygg-taskbar {
   position: fixed;
   left: 14px;

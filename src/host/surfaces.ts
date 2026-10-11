@@ -26,4 +26,19 @@ export function registerBuiltinSurfaces(): void {
     propsHint: '{ nodeCount }',
     capabilityHint: '不要遮挡窗口：背景位于窗口之下，但请不要让它捕获并吞掉鼠标事件后影响窗口点击',
   });
+
+  /*
+   * 整页效果层：**一次改这一层就够了，不要挨个窗口改**。
+   * 它盖在所有窗口与面板之上，所以适合做"给所有窗口叠加流光 / 扫描线 / 粒子"这类效果。
+   * 默认 pointer-events: none，不影响用户点窗口（要交互就在自己的根元素上开 pointer-events）。
+   */
+  registerSurface({
+    id: 'desktop.overlay',
+    label: '整页效果层',
+    description:
+      '覆盖在所有窗口之上的透明效果层。整页级效果（流光、扫描线、粒子、后处理）只需要替换它一次，不要逐个窗口改。',
+    propsHint: '{ nodeCount }',
+    capabilityHint:
+      '整层默认 pointer-events:none，不会挡住窗口操作；需要交互时在组件自己的根元素上设 pointer-events:auto。只能用原生 WebGL / Canvas / DOM，不能 import 第三方库。',
+  });
 }
