@@ -143,6 +143,9 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     '- 不确定现状时先输出 inspect（before="windows" 或 "all"）看结构，再用 continue 进入下一轮动手。',
     '- 每条指令的**具体返回内容**会在下一轮完整回灌给你（抓到的正文、图片直链、链接清单、结构快照都在里面）。' +
       '所以不要为了"再看看"而重复执行同一条指令。',
+    '- **你每次只处理标注为【本次请求】的那一条消息。** 更早的 user 消息都是**历史请求**，' +
+      '已经处理过了 —— 除非用户这次明确要求重做，否则不要重新执行它们（这是"把上一个任务又做一遍"的根因）。',
+    '- 历史请求如果还要改，用 update_component 改现有的；只有用户明确要求"再做一遍"才新建。',
     '- **下面"当前窗口 / 当前 Agent"是实时快照，是唯一事实来源。** 对话历史里可能残留旧状态的描述，' +
       '一律以后面的快照为准。要确认某个组件是否还在，看快照，不要凭记忆。',
     '',
@@ -154,7 +157,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     ...browserRules(),
     ...netRules(),
     '',
-    ...ledgerRules(input.ledger),
+    ...ledgerRules(input.ledger, input.nodes),
     '',
     '## 桌面视口',
     (input.viewW ?? 1280) + ' x ' + (input.viewH ?? 800) +
@@ -211,15 +214,28 @@ function noVisibleOutputRules(): string[] {
 }
 /**
  * 把"这个 Agent 已经做过什么"写进提示词。
- * 没有这一段，刷新后模型看到的是一串没有任何回应的旧请求，
- * 会把已经做过的事重做一遍 —— 这是"刷新后全部重做"的根因。
+ *
+ * 关键：**逐条核对它还存不存在**。之前这里写死"这些已经存在，不要重复创建"，
+ * 但用户删掉组件之后这句话就是假的 —— 模型看到"账本说做过、快照里没有"，
+ * 自然判断成"这个任务还没完成"，于是把上一个任务又做一遍（用户反馈的正是这个）。
+ * 现在被删掉的条目会明确标成「已被用户删除」，并给出对应的规矩。
  */
-function ledgerRules(ledger?: string[]): string[] {
+function ledgerRules(ledger?: string[], nodes?: Record<string, YggNode>): string[] {
   if (!ledger || ledger.length === 0) return [];
+  const lines = ledger.slice(-40).map((entry) => {
+    const id = /\bid=([A-Za-z0-9_]+)/.exec(entry)?.[1];
+    // 只对"指向某个节点"的条目做存在性核对；样式改写之类没有节点，无从核对。
+    if (!id) return '- ' + entry;
+    if (nodes && !nodes[id]) return '- ' + entry + '　→ **已被用户删除**';
+    return '- ' + entry;
+  });
   return [
     '## 你已经做过的事（跨刷新保留）',
-    '- **这些已经存在，不要重复创建。** 除非用户明确要求重做或修改，否则不要为它们再建一遍。',
-    ...ledger.slice(-40).map((l) => '- ' + l),
+    '- 这是**历史**，不是当前界面状态；当前界面一律以「当前窗口」快照为准。',
+    '- 标着 **已被用户删除** 的，是**用户自己删掉的** —— 删掉就是不要了。' +
+      '**不要为了"补做"而重建它**，除非用户这次明确要求再做一遍。',
+    '- 其余条目仍然存在，不要重复创建；要改就用 update_component / set_node_tokens，不要新建。',
+    ...lines,
   ];
 }
 

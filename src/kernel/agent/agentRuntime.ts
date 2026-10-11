@@ -114,6 +114,9 @@ const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
  */
 const REQUEST_TIMEOUT_MS = 120000;
 
+/** 当前请求的标记，与提示词里的「你每次只处理标注为【本次请求】的那一条消息」对应。 */
+const CURRENT_REQUEST_TAG = '【本次请求】';
+
 /** 单次运行允许的"出错后重来"次数上限，防止反复失败烧掉轮次。 */
 const MAX_RECOVERIES = 3;
 
@@ -269,7 +272,9 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
       const messages: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         ...historyMessages(originId, input),
-        { role: 'user', content: input },
+        // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
+        // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
+        { role: 'user', content: CURRENT_REQUEST_TAG + '\n' + input },
       ];
       if (observationLog.length > 0) {
         messages.push({ role: 'user', content: buildObservationPrompt(observationLog) });
@@ -381,7 +386,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
       const observations = formatOutcomes(result.outcomes);
       rounds.push({ round, plan, observations });
       // 把这一轮真正做成的事记进 ledger：跨刷新保留，避免下次重做。
-      recordLedger(originId, plan.ops, result);
+      recordLedger(originId, plan.ops, result, input);
       // 执行回执只进 trace 与本轮的观察通道，**不写进消息历史** ——
       // 历史里留下"已创建 X"会让后续轮次误以为 X 还存在（见 §5.19）。
       pushObservations(observations);
@@ -445,11 +450,17 @@ function agentTools(origin: YggNode | undefined) {
   return subset.length > 0 ? subset : all;
 }
 
-/** 把这一轮做成的实体记进 ledger。 */
+/**
+ * 把这一轮做成的实体记进 ledger。
+ *
+ * 每条都带上"来自哪个请求"，这样模型能直接看出"这条历史是在回应哪句话" ——
+ * 没有这个对应关系时，它只能看到一串互不相关的实体，容易把旧请求当成没做完。
+ */
 function recordLedger(
   originId: NodeId,
   ops: DerivationOp[],
   result: { outcomes: Array<{ ok: boolean; createdId?: NodeId }> },
+  request: string,
 ): void {
   const entries: string[] = [];
   const store = useDesktopStore.getState();
@@ -466,12 +477,18 @@ function recordLedger(
     } else if (op.kind === 'update_theme') {
       entries.push('改写了全局样式');
     } else if (op.kind === 'set_node_tokens' && typeof op.id === 'string') {
-      entries.push('覆写了节点 ' + op.id + ' 的局部样式');
+      entries.push('覆写了节点 id=' + op.id + ' 的局部样式');
     } else if (op.kind === 'update_component' && typeof op.id === 'string') {
-      entries.push('修改了组件 ' + op.id);
+      const name = store.nodes[op.id]?.name ?? '';
+      entries.push('修改了组件' + (name ? '「' + name + '」' : '') + ' id=' + op.id);
     }
   });
-  if (entries.length > 0) store.appendLedger(originId, entries);
+  if (entries.length === 0) return;
+  const from = request.replace(/\s+/g, ' ').trim().slice(0, 40);
+  store.appendLedger(
+    originId,
+    entries.map((e) => e + (from ? '　← 请求「' + from + '」' : '')),
+  );
 }
 
 export type { DerivationOutcome, DerivationOp };

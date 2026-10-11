@@ -325,7 +325,10 @@ export function registerCoreInterfaces(): void {
   registerInterface({
     kind: 'clear_agent_context',
     label: '清空 Agent 上下文',
-    description: '清空某个 Agent 的对话历史，让它从零开始。用 id 指定（Agent 就是带 agent 能力的组件）。',
+    description:
+      '清空某个 Agent 的对话历史**与"已做过的事"账本**，让它从零开始。' +
+      '账本不清掉的话，它还会记得做过的组件，和"从零开始"是矛盾的。' +
+      '用 id 指定（Agent 就是带 agent 能力的组件）。',
     example: { kind: 'clear_agent_context', id: 'n_xxx' },
     handler: (op) => {
       const id = strOr(op.id, '');
@@ -336,9 +339,10 @@ export function registerCoreInterfaces(): void {
       }
       const facet = found.agent;
       const n = facet.messages.length;
-      useDesktopStore.getState().updateFacet(found.id, { messages: [] });
+      const l = facet.ledger.length;
+      useDesktopStore.getState().updateFacet(found.id, { messages: [], ledger: [] });
       desktop().log('op', 'agent clear ' + found.name, found.id);
-      return ok('已清空「' + found.name + '」的 ' + n + ' 条历史');
+      return ok('已清空「' + found.name + '」的 ' + n + ' 条历史与 ' + l + ' 条账本');
     },
   });
 }
