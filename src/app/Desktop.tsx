@@ -17,6 +17,7 @@ export function Desktop() {
   const focus = useDesktopStore((s) => s.focus);
   const updateNode = useDesktopStore((s) => s.updateNode);
   const removeNode = useDesktopStore((s) => s.removeNode);
+  const requestMinimize = useDesktopStore((s) => s.requestMinimize);
   const log = useDesktopStore((s) => s.log);
 
   useEffect(() => {
@@ -58,7 +59,8 @@ export function Desktop() {
           tokens={node.tokens}
           onRect={(r) => updateNode(node.id, { pos: { x: r.x, y: r.y }, size: { w: r.w, h: r.h } })}
           onFocus={() => focus(node.id)}
-          onMinimize={() => updateNode(node.id, { status: 'minimized' })}
+          // 交给 store：先播"收进任务栏"动画，动画结束才真正变成 minimized。
+          onMinimize={() => requestMinimize(node.id)}
           onDelete={() => removeNode(node.id)}
         >
           <ErrorBoundary onError={(m) => log('error', 'comp ' + node.name + ' ✕ ' + m, node.id)}>

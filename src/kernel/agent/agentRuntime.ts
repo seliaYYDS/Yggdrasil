@@ -18,7 +18,6 @@ import {
   buildObservationPrompt,
   buildSystemPrompt,
   MAX_HISTORY_MESSAGES,
-  MAX_ROUNDS,
 } from './prompts';
 import { executeOps, formatOutcomes, rollback } from '../bus/derivationBus';
 import { desktop, useDesktopStore } from '../../store/desktopStore';
@@ -187,8 +186,15 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
     let lastObservations: string[] | null = null;
     let continueLoop = true;
     let round = 0;
+    /**
+     * 上一轮的"指令 + 结果"指纹。
+     * 没有轮次上限，所以需要一个**空转判定**兜底：连续两轮给出完全相同的指令、
+     * 又得到完全相同的结果，说明再跑下去不会有新东西。这不是步数上限 ——
+     * 只要每轮真的在推进，轮次就不封顶。
+     */
+    let lastSignature = '';
 
-    while (continueLoop && round < MAX_ROUNDS) {
+    while (continueLoop) {
       round += 1;
       useDesktopStore.getState().setStatus({ running: true, phase: '模型思考中', round });
 
@@ -240,7 +246,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         const msg = call.error;
         pushStep({ ...modelStep, status: 'fail', message: msg, endedAt: Date.now() });
         store.log('error', 'llm ✕ ' + msg);
-        if (round < MAX_ROUNDS && recoveries < MAX_RECOVERIES) {
+        if (recoveries < MAX_RECOVERIES) {
           lastObservations = [
             '上一轮模型调用失败：' + msg,
             '请换一个更简单的做法重试；如果任务无法完成，用空 ops 结束。',
@@ -264,7 +270,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           endedAt: Date.now(),
         });
         store.log('error', 'parse ✕ ' + err);
-        if (round < MAX_ROUNDS && recoveries < MAX_RECOVERIES) {
+        if (recoveries < MAX_RECOVERIES) {
           lastObservations = [
             '你上一轮的输出不是合法指令，解析失败：' + err,
             '原始输出片段：' + raw.slice(0, 300),
@@ -316,7 +322,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         rounds.push({ round, plan, observations: text });
         // 全部失败：回滚这一轮，但**不终止整个任务** —— 把失败原因回灌，
         // 让 Agent 下一轮换个写法（常见于源码编译错误）。
-        if (round < MAX_ROUNDS && recoveries < MAX_RECOVERIES) {
+        if (recoveries < MAX_RECOVERIES) {
           lastObservations = [
             '你上一轮的所有指令都失败了，已回滚它们造成的改动。失败原因：',
             ...text,
@@ -337,6 +343,18 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
       // 执行回执只进 trace 与本轮的观察通道，**不写进消息历史** ——
       // 历史里留下"已创建 X"会让后续轮次误以为 X 还存在（见 §5.19）。
       lastObservations = observations;
+
+      // 无轮次上限下的空转保护：指令与结果都与上一轮完全一致时停下来。
+      // 只判"完全一致"，因此真实的推进（哪怕只是新建了一个同名字的组件）不会被误伤。
+      const signature = JSON.stringify(plan.ops) + '\u0000' + observations.join('\u0001');
+      if (plan.continue === true && signature === lastSignature) {
+        store.log('warn', 'loop ✕ 连续两轮指令与结果完全一致，判定空转');
+        useDesktopStore.getState().setFeedback(
+          mkFeedback('fail', '检测到空转，已停止', '连续两轮的指令与结果完全一致，继续下去不会有新结果。'),
+        );
+        return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: '空转' });
+      }
+      lastSignature = signature;
       continueLoop = plan.continue === true;
     }
 

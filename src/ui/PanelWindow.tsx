@@ -39,7 +39,7 @@ export function PanelWindow({
   const focusedId = useDesktopStore((s) => s.focusedId);
   const bringToFront = useDesktopStore((s) => s.bringToFront);
   const minimized = useDesktopStore((s) => !!s.minimizedPanels[panel]);
-  const setPanelMinimized = useDesktopStore((s) => s.setPanelMinimized);
+  const requestMinimize = useDesktopStore((s) => s.requestMinimize);
 
   // 最小化后交给任务栏渲染，这里什么都不画。
   if (minimized) return null;
@@ -57,7 +57,8 @@ export function PanelWindow({
       focused={focusedId === domId}
       onRect={(next) => setPanelRect(panel, next)}
       onFocus={() => bringToFront(domId)}
-      onMinimize={() => setPanelMinimized(panel, true)}
+      // 交给 store：先播"收进任务栏"动画，动画结束才真正收起。
+      onMinimize={() => requestMinimize(domId)}
       onDelete={onClose}
       minW={minW}
       minH={minH}

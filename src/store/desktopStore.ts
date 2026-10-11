@@ -131,6 +131,12 @@ export function resolvePanels(viewW: number, viewH: number): PanelRects {
 
 const MAX_LOGS = 200;
 
+/**
+ * "收进任务栏"动画时长，与 CSS 的 `--ygg-t-slow`（260ms）对齐。
+ * 窗口先播完这段动画，才真正切换成 minimized —— 否则窗口会先消失、动画无从谈起。
+ */
+const LEAVE_MS = 260;
+
 /** 造一个 agent facet。 */
 export function makeFacet(partial: Partial<AgentFacet> = {}): AgentFacet {
   return {
@@ -295,6 +301,8 @@ interface DesktopState {
   panelZ: Record<PanelKey, number>;
   /** 等待发送的输入，先来先跑。不进持久化。 */
   queue: QueuedInput[];
+  /** 正在播"收进任务栏"动画的窗口 id（节点 id 或 panel-x）。不进持久化。 */
+  leaving: Record<string, true>;
 
   hydrate: () => Promise<void>;
   addNode: (node: YggNode) => void;
@@ -334,6 +342,12 @@ interface DesktopState {
   /** 取出队首并出队；空队列返回 null。 */
   shiftQueued: () => QueuedInput | null;
   clearQueue: () => void;
+
+  /**
+   * 把窗口收进左下角任务栏：先播动画，动画结束才真正变成 minimized。
+   * windowId 是节点 id 或 `panel-<key>`，两种情况都在这里分流。
+   */
+  requestMinimize: (windowId: string) => void;
 
   resetAll: () => Promise<void>;
 }
@@ -413,6 +427,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   minimizedPanels: {},
   panelZ: { ...DEFAULT_PANEL_Z },
   queue: [],
+  leaving: {},
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -652,6 +667,25 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   clearQueue: () => set({ queue: [] }),
 
+  requestMinimize: (windowId) => {
+    if (get().leaving[windowId]) return;
+    set((s) => ({ leaving: { ...s.leaving, [windowId]: true } }));
+    window.setTimeout(() => {
+      set((s) => {
+        const leaving = { ...s.leaving };
+        delete leaving[windowId];
+        return { leaving };
+      });
+      if (windowId.startsWith('panel-')) {
+        const key = windowId.slice('panel-'.length) as PanelKey;
+        if (ALL_PANELS.includes(key)) get().setPanelMinimized(key, true);
+      } else {
+        // 节点可能在这 260ms 里被删掉了：updateNode 对不存在的 id 是空操作。
+        get().updateNode(windowId, { status: 'minimized' } as Partial<YggNode>);
+      }
+    }, LEAVE_MS);
+  },
+
   resetAll: async () => {
     const adapter = adapterRef;
     if (persistTimer !== null) {
@@ -689,6 +723,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       minimizedPanels: {},
       panelZ: { ...DEFAULT_PANEL_Z },
       queue: [],
+      leaving: {},
       inputRect: panels.input,
       inspectorRect: panels.inspector,
       settingsRect: panels.settings,

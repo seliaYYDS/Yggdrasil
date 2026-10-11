@@ -93,6 +93,20 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-window.is-focused { border-color: var(--ygg-accent); box-shadow: var(--ygg-glow); }
 .ygg-window.is-focused > .ygg-titlebar .ygg-winbtn { color: var(--ygg-fg); }
 .ygg-window.is-minimized { opacity: .5; }
+/*
+ * 最小化 = 收进左下角任务栏。
+ * 关掉入场动画（它的 fill-mode 会一直占着 transform），只留 transform / opacity 两段过渡；
+ * 位移终点由 WindowFrame 按窗口矩形算好写在行内 style 上。
+ */
+.ygg-window.is-leaving {
+  animation: none;
+  pointer-events: none;
+  transform-origin: center center;
+  will-change: transform, opacity;
+  transition:
+    transform var(--ygg-t-slow) var(--ygg-ease-in),
+    opacity var(--ygg-t-slow) var(--ygg-ease-in);
+}
 .ygg-window.is-dragging { cursor: grabbing; }
 .ygg-window.is-dragging .ygg-titlebar { cursor: grabbing; }
 /* 拖动 / 缩放时不参与过渡，手感才跟得住指针 */

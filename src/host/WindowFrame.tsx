@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Surface } from './Surface';
+import { useDesktopStore } from '../store/desktopStore';
+
+/** 任务栏锚点：左下角。窗口最小化时朝这里缩小并位移，"收进"任务栏。 */
+const TASKBAR_ANCHOR_X = 26;
+const TASKBAR_ANCHOR_Y_FROM_BOTTOM = 30;
+/** 收进任务栏时缩到的比例。 */
+const LEAVE_SCALE = 0.06;
 
 export interface WindowRect {
   x: number;
@@ -65,7 +72,30 @@ export function WindowFrame({
   const [drag, setDrag] = useState<DragMode | null>(null);
   const origin = useRef({ x: 0, y: 0, px: 0, py: 0 });
 
+  // 最小化由 store 统一驱动：先标记 leaving 播动画，260ms 后才真正变成 minimized。
+  const leaving = useDesktopStore((s) => !!s.leaving[id]);
+  const [lunge, setLunge] = useState<{ dx: number; dy: number } | null>(null);
+
   const move = useCallback((next: WindowRect) => onRect?.(next), [onRect]);
+
+  /**
+   * 收进任务栏的动画分两帧：先切到 .is-leaving（关掉入场动画、只留 transform/opacity 过渡），
+   * 下一帧再给位移 —— 同一帧里改，过渡不一定被触发。
+   * 终点取左下角任务栏的位置，于是窗口看起来是"缩着飞向任务栏"。
+   */
+  useEffect(() => {
+    if (!leaving) {
+      setLunge(null);
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => {
+      setLunge({
+        dx: TASKBAR_ANCHOR_X - (rect.x + rect.w / 2),
+        dy: window.innerHeight - TASKBAR_ANCHOR_Y_FROM_BOTTOM - (rect.y + rect.h / 2),
+      });
+    });
+    return () => window.cancelAnimationFrame(raf);
+  }, [leaving, rect.x, rect.y, rect.w, rect.h]);
 
   /**
    * 按下窗口顶部区域开始拖动。
@@ -159,7 +189,13 @@ export function WindowFrame({
 
   return (
     <div
-      className={'ygg-window' + (focused ? ' is-focused' : '') + (drag ? ' is-dragging' : '') + (minimized ? ' is-minimized' : '')}
+      className={
+        'ygg-window' +
+        (focused ? ' is-focused' : '') +
+        (drag ? ' is-dragging' : '') +
+        (minimized ? ' is-minimized' : '') +
+        (leaving ? ' is-leaving' : '')
+      }
       style={{
         left: rect.x,
         top: rect.y,
@@ -168,6 +204,13 @@ export function WindowFrame({
         zIndex,
         ...(minHeightCss ? { '--ygg-win-min-h': minHeightCss + 'px' } : {}),
         ...(tokens ?? {}),
+        ...(lunge
+          ? {
+              transform:
+                'translate(' + Math.round(lunge.dx) + 'px, ' + Math.round(lunge.dy) + 'px) scale(' + LEAVE_SCALE + ')',
+              opacity: 0,
+            }
+          : {}),
       }}
       // 聚焦提升用 capture；拖动判定在同一个 handler 里做，
       // 两者都挂在容器上，不受插槽被替换的影响。

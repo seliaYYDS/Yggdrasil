@@ -3,7 +3,6 @@ import { isAgentNode } from '../types';
 import { interfaceCatalog } from '../registry/interfaceRegistry';
 import { surfacesText } from '../registry/surfaceRegistry';
 
-export const MAX_ROUNDS = 5;
 export const MAX_HISTORY_MESSAGES = 14;
 export const MAX_NODES = 80;
 
@@ -136,6 +135,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     '- reasoning 用中文，一句话。',
     '- ops 可以为空数组，但**只有在用户什么都没要求你改变时才允许为空**；空 ops 等于这一轮对界面毫无影响。',
     '- 需要多轮时（先抓网页再据此写组件、先建组件再回头改它的样式），把 continue 设为 true，本轮只做该做的。',
+    '- **没有轮次上限**：需要多少轮就用多少轮，完成后把 continue 设为 false。' +
+      '但每轮都必须有实际进展 —— 连续两轮给出完全相同的指令且结果也一样，会被判定为空转并停止。',
     '- 不确定现状时先输出 inspect（before="windows" 或 "all"）看结构，再用 continue 进入下一轮动手。',
     '- **下面"当前窗口 / 当前 Agent"是实时快照，是唯一事实来源。** 对话历史里可能残留旧状态的描述，' +
       '一律以后面的快照为准。要确认某个组件是否还在，看快照，不要凭记忆。',
