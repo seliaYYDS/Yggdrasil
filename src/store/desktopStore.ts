@@ -113,6 +113,10 @@ export const PANEL_RECT_KEY: Record<
   trace: 'traceRect',
 };
 
+/** 视口缩小时派生的窗口最少缩到这个尺寸（再小就没法用了）。 */
+export const FOLLOW_MIN_W = 160;
+export const FOLLOW_MIN_H = 90;
+
 /** 各面板的尺寸下限，与 PanelWindow 传的 minW / minH 对齐。 */
 export const PANEL_MIN: Record<PanelKey, { w: number; h: number }> = {
   input: { w: 300, h: 70 },
@@ -719,25 +723,70 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   fitToViewport: (viewW, viewH) => {
     set((s) => {
+      /*
+       * 视口变化时**按比例重新排布**，而不是只做越界夹取。
+       *
+       * 只夹取的问题是：把浏览器缩小一半，所有窗口留在原地 —— 整个桌面看起来"没反应"，
+       * 只有真的被挤出屏幕的那几个才动。这里改成等比缩放（x/w 跟宽度、y/h 跟高度），
+       * 桌面整体像被缩放了一样跟着走，窗口之间的相对布局保持不变。
+       */
+      const oldW = s.viewW > 0 ? s.viewW : viewW;
+      const oldH = s.viewH > 0 ? s.viewH : viewH;
+      const sx = viewW / oldW;
+      const sy = viewH / oldH;
+      const scaled = Math.abs(sx - 1) > 0.001 || Math.abs(sy - 1) > 0.001;
+
+      const scaleOf = (r: PanelRect): PanelRect =>
+        scaled ? { x: r.x * sx, y: r.y * sy, w: r.w * sx, h: r.h * sy } : r;
+
+      /**
+       * 面板缩放。
+       *
+       * 除了视口夹取，还**封顶在它的设计尺寸**上：面板有"自然大小"，
+       * 视口变大时不该比设计尺寸还大。没有这个封顶就会出现棘轮 ——
+       * 缩到最小尺寸被兜住、再放大时按放大后的值继续乘，越放越大。
+       */
+      const placePanel = (key: PanelKey, r: PanelRect): PanelRect => {
+        const fitted = fitRectToViewport(scaleOf(r), viewW, viewH, PANEL_MIN[key].w, PANEL_MIN[key].h);
+        return {
+          ...fitted,
+          w: Math.min(fitted.w, DEFAULT_PANELS[key].w),
+          h: Math.min(fitted.h, DEFAULT_PANELS[key].h),
+        };
+      };
+
       const nodes = { ...s.nodes };
       let touched = false;
       for (const n of Object.values(nodes)) {
         if (n.kind !== 'component' || n.root || !n.pos || !n.size) continue;
-        const { w, h } = fitSizeIn({ x: 0, y: 0, w: n.size.w, h: n.size.h }, viewW, viewH, 200, 120);
-        const x = Math.max(0, Math.min(n.pos.x, Math.max(0, viewW - w)));
-        const y = Math.max(0, Math.min(n.pos.y, Math.max(0, viewH - h)));
-        if (w !== n.size.w || h !== n.size.h || x !== n.pos.x || y !== n.pos.y) {
-          nodes[n.id] = { ...n, size: { w, h }, pos: { x, y } };
+        const raw = scaled
+          ? { x: n.pos.x * sx, y: n.pos.y * sy, w: n.size.w * sx, h: n.size.h * sy }
+          : { x: n.pos.x, y: n.pos.y, w: n.size.w, h: n.size.h };
+        // 派生窗口用更小的跟随后下限：比它自己的最小尺寸更容易被"按比例"保留下来
+        // （用 200x120 的话，视口一缩到一半窗口就被兜住，再放大就会越放越大）。
+        const next = fitRectToViewport(
+          { x: raw.x, y: raw.y, w: raw.w, h: raw.h },
+          viewW,
+          viewH,
+          FOLLOW_MIN_W,
+          FOLLOW_MIN_H,
+        );
+        if (
+          next.x !== n.pos.x || next.y !== n.pos.y ||
+          next.w !== n.size.w || next.h !== n.size.h
+        ) {
+          nodes[n.id] = { ...n, size: { w: next.w, h: next.h }, pos: { x: next.x, y: next.y } };
           touched = true;
         }
       }
+
       return {
         viewW,
         viewH,
-        inputRect: fitRectToViewport(s.inputRect, viewW, viewH, PANEL_MIN.input.w, PANEL_MIN.input.h),
-        inspectorRect: fitRectToViewport(s.inspectorRect, viewW, viewH, PANEL_MIN.inspector.w, PANEL_MIN.inspector.h),
-        settingsRect: fitRectToViewport(s.settingsRect, viewW, viewH, PANEL_MIN.settings.w, PANEL_MIN.settings.h),
-        traceRect: fitRectToViewport(s.traceRect, viewW, viewH, PANEL_MIN.trace.w, PANEL_MIN.trace.h),
+        inputRect: placePanel('input', s.inputRect),
+        inspectorRect: placePanel('inspector', s.inspectorRect),
+        settingsRect: placePanel('settings', s.settingsRect),
+        traceRect: placePanel('trace', s.traceRect),
         ...(touched ? { nodes } : {}),
       };
     });

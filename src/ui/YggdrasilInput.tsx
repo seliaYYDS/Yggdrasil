@@ -4,13 +4,44 @@ import { useDesktopStore } from '../store/desktopStore';
 import { submitInput } from '../kernel/agent/scheduler';
 import { PanelWindow } from './PanelWindow';
 
-/** 队列每一项占的高度，以及最多撑高几项（再多就在队列框里滚动）。 */
-const QUEUE_ROW_H = 22;
-const QUEUE_MAX_ROWS = 2;
+/*
+ * 下面这些常量必须与 global.css 里的实际值一致 ——
+ * 输入窗口的"最小高度"是算出来的，算错就会出现内容被裁、或者上方留一块死白。
+ */
+const TITLEBAR_H = 28; // .ygg-titlebar height
+const COMPOSE_PAD_V = 16; // .ygg-compose padding 8px 上下
+const GAP = 5; // .ygg-compose gap
+const STATE_H = 15; // .ygg-compose-state min-height
+
+const QUEUE_ITEM_H = 18; // .ygg-queue-item height
+const QUEUE_GAP = 2; // .ygg-queue gap
+const QUEUE_PAD_V = 6; // .ygg-queue padding 3px 上下
+const QUEUE_MAX_ROWS = 2; // 再多就在队列框里滚动
 
 /** 输入行高与最多长到几行（内容多时输入框自己变高，窗口跟着长）。 */
 const LINE_H = 26;
 const MAX_LINES = 6;
+
+/**
+ * 输入窗口需要的最小高度。
+ *
+ * 这是修过的：之前的写法是 `70 + 队列高度 + 输入框增量`，那个 70 没算标题栏与状态行，
+ * 比实际需要少 20px 左右 —— 于是窗口总是不够高，输入区被窗口 body 的滚动条裁掉一截，
+ * 看起来就是"输入区域大小固定、只是贴在底部"。
+ */
+export function inputMinHeight(areaH: number, queueCount: number): number {
+  const rows = Math.min(Math.max(queueCount, 0), QUEUE_MAX_ROWS);
+  const queueH = rows > 0 ? rows * QUEUE_ITEM_H + (rows - 1) * QUEUE_GAP + QUEUE_PAD_V : 0;
+  return (
+    TITLEBAR_H +
+    COMPOSE_PAD_V +
+    queueH +
+    (queueH > 0 ? GAP : 0) +
+    areaH +
+    GAP +
+    STATE_H
+  );
+}
 
 export function YggdrasilInput() {
   const [text, setText] = useState('');
@@ -51,22 +82,47 @@ export function YggdrasilInput() {
   };
 
   /**
-   * 输入框内容自适应：先把高度清成 auto 量一次 scrollHeight，再夹到 [1 行, 6 行]。
-   * Shift+Enter 换行、粘贴长文本都会自动长高，清空后缩回一行。
+   * 输入框按内容自适应：量出"内容自然高度"（1~6 行），并写成 **min-height**。
+   *
+   * 关键两点：
+   * - 量之前先把"拉伸"与旧的 min-height 摘掉 —— 否则量到的是被拉伸后的高度，
+   *   只会越量越高，再也缩不回去。
+   * - 写回的是 min-height 而不是 height：窗口被手动拉高时，输入区会**填满**那块空间，
+   *   而不是缩成一行贴在底部（这正是"输入区域固定、只是贴在底部"的成因）。
    */
   useLayoutEffect(() => {
     const el = areaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    const next = Math.min(Math.max(el.scrollHeight, LINE_H), LINE_H * MAX_LINES);
-    el.style.height = next + 'px';
+    el.style.minHeight = '0px';
+    el.style.alignSelf = 'flex-start';
+    const natural = el.scrollHeight;
+    el.style.height = '';
+    el.style.alignSelf = '';
+    const next = Math.min(Math.max(natural, LINE_H), LINE_H * MAX_LINES);
+    el.style.minHeight = next + 'px';
     setAreaH(next);
   }, [text]);
 
-  // 有排队项时窗口临时长高一点（最多两项），队列清空后自动缩回。
-  const growth = Math.min(queue.length, QUEUE_MAX_ROWS) * QUEUE_ROW_H;
-  // 输入框长高了，窗口也得跟着长，否则会被窗口的 min-height 卡住。
-  const areaExtra = Math.max(0, areaH - LINE_H);
+  const needed = inputMinHeight(areaH, queue.length);
+
+  /**
+   * 把"内容需要多高"同步回面板矩形。
+   *
+   * 只靠 CSS 的 min-height 会让窗口**向下**长高 —— 输入框本来就贴底，
+   * 一长高就顶出屏幕底部。所以这里以**底边为锚**：变高时 y 一起上移。
+   * 用户手动拉高过（当前高度不等于上次自动值）就不缩回去，尊重用户。
+   */
+  const autoH = useRef(0);
+  useLayoutEffect(() => {
+    const s = useDesktopStore.getState();
+    const r = s.inputRect;
+    if (needed === r.h) return;
+    const userResized = r.h !== autoH.current;
+    if (needed < r.h && userResized) return;
+    autoH.current = needed;
+    s.setPanelRect('input', { ...r, y: Math.max(0, r.y + r.h - needed), h: needed });
+  }, [needed]);
 
   return (
     <PanelWindow
@@ -74,7 +130,8 @@ export function YggdrasilInput() {
       title="Yggdrasil"
       minW={300}
       minH={70}
-      minHeightCss={70 + growth + areaExtra}
+      // 内容需要的最小高度；矩形由上面的 effect 同步，两者始终一致。
+      minHeightCss={needed}
     >
       <div className="ygg-compose">
         {queue.length > 0 ? (

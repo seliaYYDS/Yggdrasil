@@ -346,19 +346,21 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-compose {
   display: flex;
   flex-direction: column;
-  /* 内容贴底：队列出现时长高往上顶，输入行本身不移动 */
-  justify-content: flex-end;
   height: 100%;
   padding: 8px 10px;
   gap: 5px;
 }
 
-/* 输入行：输入框与发送键并排 */
+/*
+ * 输入行：占满剩下的高度。
+ * 输入框跟着**拉伸**——窗口被拉高时输入区填满那块空间，而不是缩成一行贴在底部。
+ */
 .ygg-compose-row {
   display: flex;
-  align-items: flex-end;
+  align-items: stretch;
   gap: 8px;
-  flex: none;
+  flex: 1;
+  min-height: 26px;
 }
 
 /* 排队中的输入：贴在输入行上方的一块暗棕底，逐条可删 */
@@ -367,6 +369,7 @@ button:focus:not(:focus-visible) { outline: none; }
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* 与 YggdrasilInput.tsx 的 QUEUE_MAX_ROWS 对齐：两行以内不滚动 */
   max-height: 44px;
   overflow-y: auto;
   padding: 3px;
@@ -429,7 +432,10 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-compose-area {
   flex: 1;
   min-width: 0;
-  /* 高度由 JS 按内容设（1 行起，最多 6 行），这里只给下限与过渡 */
+  /*
+   * 高度不是写死的：JS 按内容设 min-height（1~6 行），
+   * 剩下的由 flex 拉伸补上 —— 窗口拉高时输入区跟着变高。
+   */
   min-height: 26px;
   resize: none;
   border: none;
@@ -478,6 +484,8 @@ button:focus:not(:focus-visible) { outline: none; }
 
 .ygg-compose-send {
   flex: none;
+  /* 输入行被拉伸时，发送键贴在行底，不跟着变高 */
+  align-self: flex-end;
   width: 26px;
   height: 26px;
   border-radius: 50%;
