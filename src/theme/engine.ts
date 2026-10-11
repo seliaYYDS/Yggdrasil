@@ -78,3 +78,65 @@ export function applyTheme(tokens: ThemeTokens): void {
 export function mergeTokens(base: ThemeTokens, patch: ThemeTokens): ThemeTokens {
   return { ...base, ...patch };
 }
+
+/**
+ * 只保留"和默认值不一样"的令牌。
+ *
+ * 持久化必须存**差异**而不是整份令牌表。存整份的话，以后改默认值对老用户完全无效 ——
+ * 他们本地存着旧默认值，hydrate 时又把它盖回默认值上（而且是写成 <html> 的行内样式，
+ * 优先级高于 tokens.css 的 :root）。字体换了却只看到英文变，就是这个原因。
+ */
+export function diffTokens(tokens: ThemeTokens): ThemeTokens {
+  const out: ThemeTokens = {};
+  for (const [k, v] of Object.entries(tokens ?? {})) {
+    if (!THEMEABLE.has(k)) continue;
+    if (DEFAULT_TOKENS[k] === v) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * 历史上当过默认值的令牌值。
+ *
+ * 老用户的存储里可能留着这些值 —— 那不是他们的选择，只是当时被存下来的默认值。
+ * 按值精确比对后丢掉，这样新默认值能生效，而**用户自己改过**的值会被保留。
+ * 以后每次改 DEFAULT_TOKENS 里的样式，把旧值补进来即可。
+ */
+const SUPERSEDED_DEFAULTS: Record<string, string[]> = {
+  '--ygg-font': [
+    'system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif',
+    '"Palatino Linotype", "Book Antiqua", Palatino, Georgia, Cambria, ' +
+      '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", STSong, SimSun, ' +
+      '"Times New Roman", serif',
+  ],
+  '--ygg-font-display': [
+    '"Trajan Pro", Cinzel, "Palatino Linotype", "Book Antiqua", Palatino, Georgia, ' +
+      '"Source Han Serif SC", "Songti SC", STSong, SimSun, serif',
+  ],
+};
+
+/**
+ * 比较字体栈时忽略格式差异：引号、逗号前后空格、多余空白、大小写。
+ * 持久化里的值可能被压缩器改写格式，光比字符串会漏。
+ */
+function normalizeFontValue(v: string): string {
+  return v
+    .replace(/["']/g, '')
+    .replace(/\s*,\s*/g, ',')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/** 丢掉"等于某个历史默认值"的持久化令牌。 */
+export function migrateTokens(tokens: ThemeTokens): ThemeTokens {
+  const out: ThemeTokens = { ...tokens };
+  for (const [key, olds] of Object.entries(SUPERSEDED_DEFAULTS)) {
+    const cur = out[key];
+    if (typeof cur !== 'string') continue;
+    const n = normalizeFontValue(cur);
+    if (olds.some((o) => normalizeFontValue(o) === n)) delete out[key];
+  }
+  return out;
+}

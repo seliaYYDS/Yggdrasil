@@ -14,7 +14,14 @@ import { newNodeId } from '../kernel/ids';
 import type { StorageAdapter, StorageKind } from '../storage/adapter';
 import { initStorage } from '../storage/detect';
 import { DEFAULT_SETTINGS, type LlmSettings } from '../kernel/llm/types';
-import { applyTheme, DEFAULT_TOKENS, mergeTokens, sanitizeTokens } from '../theme/engine';
+import {
+  applyTheme,
+  DEFAULT_TOKENS,
+  diffTokens,
+  mergeTokens,
+  migrateTokens,
+  sanitizeTokens,
+} from '../theme/engine';
 import { exportSurfaceStates, importSurfaceStates } from '../kernel/registry/surfaceRegistry';
 
 export interface RunStatus {
@@ -441,7 +448,8 @@ function snapshot(): PersistedRoot {
   return {
     nodes: s.nodes,
     rootId: s.rootId,
-    tokens: s.tokens,
+    // 只存差异：默认值以后改了，老用户才吃得到（见 engine.ts 的 diffTokens）。
+    tokens: diffTokens(s.tokens),
     settings: s.settings,
     logs: s.logs.slice(-MAX_LOGS),
     panels: {
@@ -547,7 +555,15 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     const safeNodes = migrateNodes(rawNodes);
     if (!safeNodes.root) safeNodes.root = createRootAgent();
     const safeRoot = rootId && safeNodes[rootId] ? rootId : 'root';
-    const tokens = theme?.tokens ? mergeTokens(DEFAULT_TOKENS, sanitizeTokens(theme.tokens)) : { ...DEFAULT_TOKENS };
+    /*
+     * 先按值丢掉"等于历史默认值"的条目（老用户存储里留着的旧默认），
+     * 再和当前默认值合并。不这么做的话，换了默认样式对老用户完全无效 ——
+     * 他们本地那份旧默认值会盖回来，而且是以 <html> 行内样式的形式，优先级更高。
+     */
+    const tokens = mergeTokens(
+      DEFAULT_TOKENS,
+      migrateTokens(sanitizeTokens(theme?.tokens ?? {})),
+    );
 
     const fallback = resolvePanels(window.innerWidth, window.innerHeight);
     applyTheme(tokens);
