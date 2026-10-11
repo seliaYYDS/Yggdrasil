@@ -253,6 +253,9 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-task:active { transform: translateX(2px) scale(.975); transition-duration: var(--ygg-t-fast); }
 .ygg-task-dot { width: 5px; height: 5px; border-radius: 50%; flex: none; background: var(--ygg-fg-muted); }
 .ygg-task-dot.is-minimized { background: var(--ygg-accent); }
+/* 输入框（会话）的条目与普通窗口区分开 */
+.ygg-task.is-session { color: var(--ygg-accent); }
+.ygg-task.is-session .ygg-task-dot { background: var(--ygg-accent-hi); }
 .ygg-task-dot.is-closed { background: var(--ygg-danger); }
 
 /* ---------------- 通用控件 ---------------- */
@@ -319,6 +322,9 @@ button:focus:not(:focus-visible) { outline: none; }
   z-index: 400000;
   animation: ygg-fade-in var(--ygg-t-slow) var(--ygg-ease) both;
 }
+/* 图标统一跟随文字颜色、随 hover 一起变化 */
+.ygg-topbtn svg { display: block; }
+
 .ygg-topbtn {
   position: relative;
   width: 30px;
@@ -338,6 +344,36 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-topbtn:hover { background: var(--ygg-surface-2); color: var(--ygg-accent-hi); border-color: var(--ygg-accent-dim); transform: translateY(-1px); }
 .ygg-topbtn:active { transform: translateY(0) scale(.92); transition-duration: var(--ygg-t-fast); }
 .ygg-topbtn.is-danger:hover { color: var(--ygg-danger); border-color: var(--ygg-danger); }
+/* 输入框数量：右下角一个小签 */
+.ygg-topbtn .tag {
+  position: absolute;
+  bottom: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--ygg-surface-2);
+  color: var(--ygg-accent);
+  font-size: 9px;
+  line-height: 14px;
+  text-align: center;
+  font-family: var(--ygg-font-mono);
+}
+/* 正在跑的任务：右上角一个小呼吸点（和步数角标分工明确） */
+.ygg-topbtn .pulse {
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ygg-accent);
+  animation: ygg-pulse 1.2s infinite ease-in-out;
+}
+.ygg-topbtn:disabled { opacity: .35; cursor: not-allowed; }
+.ygg-topbtn:disabled:hover { background: color-mix(in srgb, var(--ygg-surface-2) 80%, transparent); color: var(--ygg-fg-muted); border-color: transparent; }
+
 .ygg-topbtn .badge {
   position: absolute;
   top: -3px;
@@ -519,7 +555,13 @@ button:focus:not(:focus-visible) { outline: none; }
   opacity: .7;
   font-family: var(--ygg-font-mono);
 }
-.ygg-compose-hint { opacity: .6; letter-spacing: .03em; }
+.ygg-compose-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  opacity: .6;
+  letter-spacing: .03em;
+}
 
 .ygg-compose-send {
   flex: none;
@@ -720,6 +762,14 @@ button:focus:not(:focus-visible) { outline: none; }
   flex: none;
 }
 .ygg-step-head .label { color: var(--ygg-fg); font-family: var(--ygg-font-display); letter-spacing: .06em; }
+/* 哪个输入框发起的：多开时才有，避免误以为是同一个会话的步骤 */
+.ygg-step-head .whose {
+  color: var(--ygg-accent-dim);
+  max-width: 84px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ygg-step-head .spacer { flex: 1; }
 .ygg-step-head .dur { color: var(--ygg-fg-muted); font-family: var(--ygg-font-mono); font-size: 10px; }
 .ygg-step-sum {

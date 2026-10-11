@@ -1,22 +1,38 @@
 import { useDesktopStore, PANEL_TITLES, ALL_PANELS } from '../store/desktopStore';
 
-/** 左下角任务栏：收着被最小化 / 关闭的窗口与面板。 */
+/** 左下角任务栏：收着被最小化 / 关闭的窗口、面板与输入框。 */
 export function Taskbar() {
   const nodes = useDesktopStore((s) => s.nodes);
   const minimizedPanels = useDesktopStore((s) => s.minimizedPanels);
   const requestRestore = useDesktopStore((s) => s.requestRestore);
   const focus = useDesktopStore((s) => s.focus);
+  const sessions = useDesktopStore((s) => s.sessions);
 
   // 基底不是窗口，不进任务栏。
   const stashed = Object.values(nodes).filter(
     (n) => n.kind === 'component' && !n.root && n.status !== 'active',
   );
   const panelKeys = ALL_PANELS.filter((k) => minimizedPanels[k]);
+  const stashedSessions = sessions.filter((s) => s.minimized);
 
-  if (stashed.length === 0 && panelKeys.length === 0) return null;
+  if (stashed.length === 0 && panelKeys.length === 0 && stashedSessions.length === 0) return null;
 
   return (
     <div className="ygg-taskbar">
+      {stashedSessions.map((ses) => (
+        <button
+          key={ses.id}
+          className="ygg-task is-session"
+          title={ses.queue.length > 0 ? '恢复（' + ses.queue.length + ' 条排队）' : '恢复'}
+          onClick={() => {
+            requestRestore(ses.id);
+            focus(ses.id);
+          }}
+        >
+          <span className="ygg-task-dot is-minimized" />
+          {ses.title}
+        </button>
+      ))}
       {panelKeys.map((k) => (
         <button
           key={k}

@@ -29,8 +29,7 @@ type View = 'steps' | 'log';
 export function TracePanel() {
   const open = useDesktopStore((s) => s.traceOpen);
   const setOpen = useDesktopStore((s) => s.setTraceOpen);
-  const trace = useDesktopStore((s) => s.trace);
-  const status = useDesktopStore((s) => s.status);
+  const sessions = useDesktopStore((s) => s.sessions);
   const logs = useDesktopStore((s) => s.logs);
   const clearLogs = useDesktopStore((s) => s.clearLogs);
 
@@ -40,9 +39,19 @@ export function TracePanel() {
 
   if (!open) return null;
 
-  const okCount = trace.filter((s) => s.status === 'ok').length;
-  const failCount = trace.filter((s) => s.status === 'fail').length;
-  const shown = filter === 'all' ? trace : trace.filter((s) => s.status === filter);
+  /*
+   * 每个输入框有自己的轨迹（工作状态不共享）。面板把它们**按时间合并**展示，
+   * 多于一个输入框时在行首标出是哪个输入框发起的。
+   */
+  const merged = sessions.flatMap((ses) =>
+    ses.trace.map((step) => ({ step, sessionId: ses.id, sessionTitle: ses.title })),
+  );
+  const many = sessions.length > 1;
+  const anyRunning = sessions.some((ses) => ses.status.running);
+
+  const okCount = merged.filter((m) => m.step.status === 'ok').length;
+  const failCount = merged.filter((m) => m.step.status === 'fail').length;
+  const shown = filter === 'all' ? merged : merged.filter((m) => m.step.status === filter);
 
   /** 点当前筛选项就退回"全部"，和以前一致的开关手感。 */
   const pickFilter = (next: Filter) => {
@@ -54,7 +63,7 @@ export function TracePanel() {
     <PanelWindow
       panel="trace"
       title="Trace"
-      kindLabel={status.running ? 'running' : undefined}
+      kindLabel={anyRunning ? 'running' : undefined}
       minW={320}
       minH={240}
       onClose={() => setOpen(false)}
@@ -67,7 +76,7 @@ export function TracePanel() {
               title="全部步骤"
               onClick={() => pickFilter('all')}
             >
-              {trace.length}
+              {merged.length}
             </button>
             <button
               className={view === 'steps' && filter === 'ok' ? 'on' : ''}
@@ -96,7 +105,7 @@ export function TracePanel() {
           </div>
         </div>
 
-        {view === 'steps' && trace.length > 0 ? (
+        {view === 'steps' && merged.length > 0 ? (
           <div className="ygg-panel-hint">点任意一行展开：模型的思考、原始输出与接口返回内容</div>
         ) : null}
 
@@ -114,13 +123,13 @@ export function TracePanel() {
           </div>
         ) : (
           <>
-            {trace.length === 0 ? <div className="ygg-empty">—</div> : null}
-            {trace.length > 0 && shown.length === 0 ? (
+            {merged.length === 0 ? <div className="ygg-empty">—</div> : null}
+            {merged.length > 0 && shown.length === 0 ? (
               <div className="ygg-empty">没有符合筛选的步骤</div>
             ) : null}
 
             <div className="ygg-trace">
-              {shown.map((step) => {
+              {shown.map(({ step, sessionTitle }) => {
                 const isOpen = expanded === step.id;
                 return (
                   <div
@@ -140,6 +149,7 @@ export function TracePanel() {
                   >
                     <div className="ygg-step-head">
                       <span className="mark">{STATUS_MARK[step.status]}</span>
+                      {many ? <span className="kind whose">{sessionTitle}</span> : null}
                       <span className="kind">{step.round > 0 ? 'R' + step.round : '·'}</span>
                       <span className="label">{step.label}</span>
                       <span className="spacer" />

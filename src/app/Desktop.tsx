@@ -18,6 +18,7 @@ export function Desktop() {
   const updateNode = useDesktopStore((s) => s.updateNode);
   const removeNode = useDesktopStore((s) => s.removeNode);
   const requestMinimize = useDesktopStore((s) => s.requestMinimize);
+  const sessions = useDesktopStore((s) => s.sessions);
   const log = useDesktopStore((s) => s.log);
 
   useEffect(() => {
@@ -69,8 +70,10 @@ export function Desktop() {
         </WindowFrame>
       ))}
 
-      {/* 面板与组件窗口同处一个层叠上下文，层级才可比 */}
-      <YggdrasilInput />
+      {/* 每个输入框是一个独立会话；面板与组件窗口同处一个层叠上下文，层级才可比 */}
+      {sessions.map((ses) => (
+        <YggdrasilInput key={ses.id} session={ses} />
+      ))}
       <InspectorPanel />
       <TracePanel />
       <SettingsPanel />

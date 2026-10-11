@@ -20,7 +20,7 @@ import {
   MAX_HISTORY_MESSAGES,
 } from './prompts';
 import { executeOps, formatOutcomes, rollback, type ExecuteResult } from '../bus/derivationBus';
-import { desktop, useDesktopStore } from '../../store/desktopStore';
+import { desktop, MAIN_SESSION, type RunStatus, useDesktopStore } from '../../store/desktopStore';
 import { toolCatalog } from '../registry/toolRegistry';
 
 /** 带 agent facet 的组件。 */
@@ -84,6 +84,8 @@ function appendMessage(nodeId: NodeId, message: Message): void {
 
 export interface RunOptions {
   originId?: NodeId;
+  /** 发起这次运行的输入框（会话）。工作状态按会话隔离，默认是主会话。 */
+  sessionId?: string;
 }
 
 export interface RunSummary {
@@ -197,12 +199,15 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
     return { ok: false, added: 0, rounds: 0, okCount: 0, failCount: 0, error: '找不到发起节点。' };
   }
 
+  const sessionId = options.sessionId ?? MAIN_SESSION;
   const runId = newId();
-  store.beginTrace(runId);
-  store.setStatus({ running: true, phase: '准备上下文', detail: '', round: 0, runId });
+  store.beginSessionTrace(sessionId, runId);
+  store.setSessionStatus(sessionId, { running: true, phase: '准备上下文', detail: '', round: 0, runId });
   appendMessage(originId, { role: 'user', content: input });
 
-  const pushStep = (step: TraceStep) => useDesktopStore.getState().upsertStep(step);
+  const pushStep = (step: TraceStep) => useDesktopStore.getState().upsertSessionStep(sessionId, step);
+  const setRunStatus = (patch: Partial<RunStatus>): void =>
+    useDesktopStore.getState().setSessionStatus(sessionId, patch);
 
   /** 记录一次"出错后重来"，超过上限就放弃，避免无限重试。 */
   let recoveries = 0;
@@ -222,7 +227,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
       endedAt: Date.now(),
     });
     store.log('warn', 'recover #' + recoveries + ' ' + reason);
-    useDesktopStore.getState().setStatus({
+    setRunStatus({
       phase: '自动恢复中',
       detail: reason,
       round: roundNo,
@@ -230,7 +235,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
   };
 
   const finish = (summary: RunSummary): RunSummary => {
-    useDesktopStore.getState().setStatus({
+    setRunStatus({
       running: false,
       phase: summary.ok ? '完成' : '失败',
       detail: summary.error ?? '',
@@ -274,7 +279,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
     let roundResult: ExecuteResult | null = null;
     try {
         round += 1;
-        useDesktopStore.getState().setStatus({ running: true, phase: '模型思考中', round });
+        setRunStatus({ running: true, phase: '模型思考中', round });
 
         const modelStep: TraceStep = {
           id: newId(),
@@ -340,12 +345,12 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           onDelta: (chunk) => {
             buffer += chunk;
             flush();
-            useDesktopStore.getState().setStatus({ phase: '模型生成指令中', detail: buffer.slice(-140) });
+            setRunStatus({ phase: '模型生成指令中', detail: buffer.slice(-140) });
           },
           onThinking: (chunk) => {
             thinking += chunk;
             flush();
-            useDesktopStore.getState().setStatus({ phase: '模型思考中', detail: chunk.slice(-140) });
+            setRunStatus({ phase: '模型思考中', detail: chunk.slice(-140) });
           },
         }, 3);
 
@@ -424,13 +429,13 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           break;
         }
 
-        useDesktopStore.getState().setStatus({ phase: '执行指令', detail: plan.ops.length + ' 条', round });
+        setRunStatus({ phase: '执行指令', detail: plan.ops.length + ' 条', round });
         const result = await executeOps(plan.ops, originId, {
           runId,
           round,
           onStep: (step) => {
             pushStep(step);
-            useDesktopStore.getState().setStatus({
+            setRunStatus({
               phase: '执行 ' + (step.index + 1) + '/' + plan.ops.length,
               detail: step.label + ' · ' + step.summary,
               round,
@@ -551,7 +556,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
     const msg = (e as Error).message;
     useDesktopStore.getState().setFeedback(mkFeedback('fail', '派生过程异常', msg));
     store.log('error', '✕ ' + msg);
-    useDesktopStore.getState().setStatus({ running: false, phase: '失败', detail: msg, round: 0 });
+    setRunStatus({ running: false, phase: '失败', detail: msg, round: 0 });
     return { ok: false, added: 0, rounds: 0, okCount: 0, failCount: 0, error: msg };
   }
 }

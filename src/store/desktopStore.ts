@@ -52,6 +52,75 @@ export interface QueuedInput {
   createdAt: number;
 }
 
+/**
+ * 一个输入框 = 一个独立的 Agent 会话。
+ *
+ * **共享的**：桌面（节点树 / 样式）、基底的对话历史与账本 —— 也就是"底层记忆"。
+ * **不共享的**：status / trace / queue 这三样"工作状态"。
+ * 所以两个输入框可以同时在跑，各自显示各自的进度，互不打断。
+ */
+export interface InputSession {
+  /** 'input' 是第一个；之后是 'input-2'、'input-3'…… */
+  id: string;
+  title: string;
+  rect: PanelRect;
+  z: number;
+  minimized: boolean;
+  status: RunStatus;
+  trace: TraceStep[];
+  queue: QueuedInput[];
+}
+
+/** 第一个输入框的 id，也是基底那一份"主会话"。 */
+export const MAIN_SESSION = 'input';
+
+/** 同时最多开几个输入框。再多屏幕放不下，投入产出也不划算。 */
+export const MAX_SESSIONS = 6;
+
+export function emptyStatus(): RunStatus {
+  return { running: false, phase: '', detail: '', round: 0, runId: null };
+}
+
+/** 第 n 个输入框（n 从 1 开始）的 id 与标题。 */
+export function sessionIdOf(n: number): string {
+  return n <= 1 ? MAIN_SESSION : 'input-' + n;
+}
+export function sessionTitleOf(n: number): string {
+  return n <= 1 ? 'Yggdrasil' : 'Yggdrasil ' + n;
+}
+
+/** 造一个新会话。落点按序号错开，避免叠在一起。 */
+export function makeSession(n: number, base: PanelRect, viewW: number, viewH: number): InputSession {
+  const rect: PanelRect = n <= 1
+    ? base
+    : fitRectToViewport(
+        { x: base.x + (n - 1) * 30, y: Math.max(40, base.y - (n - 1) * 40), w: base.w, h: base.h },
+        viewW,
+        viewH,
+        PANEL_MIN_SESSION.w,
+        PANEL_MIN_SESSION.h,
+      );
+  return {
+    id: sessionIdOf(n),
+    title: sessionTitleOf(n),
+    rect,
+    z: 2 + n,
+    minimized: false,
+    status: emptyStatus(),
+    trace: [],
+    queue: [],
+  };
+}
+
+/** 只持久化几何与可见性；status / trace / queue 是瞬态的。 */
+export interface PersistedSession {
+  id: string;
+  title: string;
+  rect: PanelRect;
+  z: number;
+  minimized: boolean;
+}
+
 interface PersistedRoot {
   nodes: Record<NodeId, YggNode>;
   rootId: NodeId;
@@ -59,6 +128,7 @@ interface PersistedRoot {
   settings: LlmSettings;
   logs: LogEntry[];
   panels: PanelRects;
+  sessions: PersistedSession[];
   zCounter: number;
   panelZ: Record<string, number>;
   surfaces: Record<string, string>;
@@ -71,39 +141,38 @@ const K_SETTINGS = 'settings';
 const K_LOGS = 'logs';
 const K_PANELS = 'panels';
 const K_SURFACES = 'surfaces';
+const K_SESSIONS = 'sessions';
 
 /** 除 API 设置外，这些键在重置时全部清除。 */
-const RESETTABLE_KEYS = [K_NODES, K_ROOT, K_THEME, K_LOGS, K_PANELS, 'z', 'panelZ', K_SURFACES];
+const RESETTABLE_KEYS = [K_NODES, K_ROOT, K_THEME, K_LOGS, K_PANELS, K_SESSIONS, 'z', 'panelZ', K_SURFACES];
 
-/** 常驻 UI 面板。它们不是派生节点，不进派生树。 */
-export type PanelKey = 'input' | 'inspector' | 'settings' | 'trace';
+/** 常驻 UI 面板（输入框是会话，不在这里）。它们不是派生节点，不进派生树。 */
+export type PanelKey = 'inspector' | 'settings' | 'trace';
 
 interface PanelRects {
-  input: PanelRect;
   inspector: PanelRect;
   settings: PanelRect;
   trace: PanelRect;
 }
 
 export const DEFAULT_PANELS: PanelRects = {
-  // 输入框：单行输入 + 一行状态，默认就该矮。
-  input: { x: 24, y: 0, w: 560, h: 88 },
   inspector: { x: 24, y: 0, w: 340, h: 420 },
   settings: { x: 0, y: 0, w: 380, h: 388 },
   trace: { x: 0, y: 0, w: 360, h: 400 },
 };
 
-export const ALL_PANELS: PanelKey[] = ['input', 'inspector', 'settings', 'trace'];
+/** 输入会话的默认尺寸：单行输入 + 一行状态，默认就该矮。 */
+export const DEFAULT_INPUT_RECT: PanelRect = { x: 24, y: 0, w: 560, h: 88 };
+
+export const ALL_PANELS: PanelKey[] = ['inspector', 'settings', 'trace'];
 
 export const DEFAULT_PANEL_Z: Record<PanelKey, number> = {
-  input: 2,
   inspector: 1,
   settings: 1,
   trace: 1,
 };
 
 export const PANEL_TITLES: Record<PanelKey, string> = {
-  input: 'Yggdrasil',
   inspector: 'Nodes',
   settings: 'LLM',
   trace: 'Trace',
@@ -112,9 +181,8 @@ export const PANEL_TITLES: Record<PanelKey, string> = {
 /** 面板键到矩形字段的映射。 */
 export const PANEL_RECT_KEY: Record<
   PanelKey,
-  'inputRect' | 'inspectorRect' | 'settingsRect' | 'traceRect'
+  'inspectorRect' | 'settingsRect' | 'traceRect'
 > = {
-  input: 'inputRect',
   inspector: 'inspectorRect',
   settings: 'settingsRect',
   trace: 'traceRect',
@@ -126,11 +194,13 @@ export const FOLLOW_MIN_H = 90;
 
 /** 各面板的尺寸下限，与 PanelWindow 传的 minW / minH 对齐。 */
 export const PANEL_MIN: Record<PanelKey, { w: number; h: number }> = {
-  input: { w: 300, h: 70 },
   inspector: { w: 280, h: 220 },
   settings: { w: 300, h: 280 },
   trace: { w: 320, h: 240 },
 };
+
+/** 输入会话的尺寸下限。 */
+export const PANEL_MIN_SESSION = { w: 300, h: 70 };
 
 /**
  * 把一个矩形夹进视口。
@@ -164,18 +234,11 @@ export function fitRectToViewport(
   };
 }
 
-/** 输入框贴底居中；其余错开。所有面板都按视口夹一遍，小窗口下也不会跑到屏幕外。 */
+/** 第一个输入框贴底居中；其余面板错开。所有面板都按视口夹一遍，小窗口下也不会跑到屏幕外。 */
 export function resolvePanels(viewW: number, viewH: number): PanelRects {
-  const inputW = Math.min(DEFAULT_PANELS.input.w, Math.max(PANEL_MIN.input.w, viewW - 48));
   const place = (key: PanelKey, rect: PanelRect) =>
     fitRectToViewport(rect, viewW, viewH, PANEL_MIN[key].w, PANEL_MIN[key].h);
   return {
-    input: place('input', {
-      ...DEFAULT_PANELS.input,
-      w: inputW,
-      x: Math.max(24, Math.round((viewW - inputW) / 2)),
-      y: Math.max(80, viewH - DEFAULT_PANELS.input.h - 20),
-    }),
     inspector: place('inspector', { ...DEFAULT_PANELS.inspector, x: 24, y: 72 }),
     settings: place('settings', {
       ...DEFAULT_PANELS.settings,
@@ -188,6 +251,23 @@ export function resolvePanels(viewW: number, viewH: number): PanelRects {
       y: 72,
     }),
   };
+}
+
+/** 第一个输入框的默认落点（贴底居中），按视口夹一遍。 */
+export function resolveInputRect(viewW: number, viewH: number): PanelRect {
+  const w = Math.min(DEFAULT_INPUT_RECT.w, Math.max(PANEL_MIN_SESSION.w, viewW - 48));
+  return fitRectToViewport(
+    {
+      ...DEFAULT_INPUT_RECT,
+      w,
+      x: Math.max(24, Math.round((viewW - w) / 2)),
+      y: Math.max(80, viewH - DEFAULT_INPUT_RECT.h - 20),
+    },
+    viewW,
+    viewH,
+    PANEL_MIN_SESSION.w,
+    PANEL_MIN_SESSION.h,
+  );
 }
 
 const MAX_LOGS = 200;
@@ -349,15 +429,14 @@ interface DesktopState {
   focusedId: NodeId | null;
   zCounter: number;
   logs: LogEntry[];
-  status: RunStatus;
-  trace: TraceStep[];
+  /** 每个输入框一个会话。至少一个。 */
+  sessions: InputSession[];
   feedback: RunFeedback | null;
   traceOpen: boolean;
   settings: LlmSettings;
   settingsOpen: boolean;
   treeOpen: boolean;
   resetOpen: boolean;
-  inputRect: PanelRect;
   inspectorRect: PanelRect;
   settingsRect: PanelRect;
   traceRect: PanelRect;
@@ -366,8 +445,6 @@ interface DesktopState {
   /** 桌面视口的像素尺寸。窗口的 pos / size 都在这个坐标系里。不进持久化。 */
   viewW: number;
   viewH: number;
-  /** 等待发送的输入，先来先跑。不进持久化。 */
-  queue: QueuedInput[];
   /**
    * 被浏览器弹窗拦截、等用户点一下的待打开页面。不进持久化。
    *
@@ -376,7 +453,7 @@ interface DesktopState {
    * 由用户在输入框里点一下（那是真的手势），页面才打得开。
    */
   pendingOpen: { id: string; url: string }[];
-  /** 正在播"收进任务栏"动画的窗口 id（节点 id 或 panel-x）。不进持久化。 */
+  /** 正在播"收进任务栏"动画的窗口 id（节点 id、panel-x 或会话 id）。不进持久化。 */
   leaving: Record<string, true>;
   /** 刚从任务栏展开、正在播"长回原位"动画的窗口 id。不进持久化。 */
   restoring: Record<string, true>;
@@ -397,15 +474,30 @@ interface DesktopState {
 
   log: (level: LogLevel, text: string, nodeId?: NodeId) => void;
   clearLogs: () => void;
-  setStatus: (patch: Partial<RunStatus>) => void;
+
+  /** 再开一个输入框（= 再开一个可以并行干活的 Agent 会话）。返回新会话 id。 */
+  addSession: () => string;
+  /** 关掉一个输入框；关掉之后它的排队项一并丢弃。 */
+  removeSession: (id: string) => void;
+  setSessionRect: (id: string, rect: PanelRect) => void;
+  setSessionMinimized: (id: string, minimized: boolean) => void;
+  /** 会话级状态：会话之间互不相通。 */
+  setSessionStatus: (id: string, patch: Partial<RunStatus>) => void;
+  beginSessionTrace: (id: string, runId: string) => void;
+  upsertSessionStep: (id: string, step: TraceStep) => void;
+  /** 入队 / 出队 / 删除排队项，都在指定会话里。 */
+  enqueue: (id: string, item: QueuedInput) => void;
+  removeQueued: (id: string, itemId: string) => void;
+  shiftQueued: (id: string) => QueuedInput | null;
+  /** 会话 id -> 是否该会话还有排队项。 */
+  clearQueue: (id: string) => void;
+
   setSettings: (patch: Partial<LlmSettings>) => void;
   setSettingsOpen: (open: boolean) => void;
   setTreeOpen: (open: boolean) => void;
   setTraceOpen: (open: boolean) => void;
   setResetOpen: (open: boolean) => void;
   setPanelMinimized: (panel: PanelKey, minimized: boolean) => void;
-  upsertStep: (step: TraceStep) => void;
-  beginTrace: (runId: string) => void;
   setFeedback: (feedback: RunFeedback | null) => void;
   appendLedger: (agentId: NodeId, entries: string[]) => void;
   setPanelRect: (panel: PanelKey, rect: PanelRect) => void;
@@ -418,17 +510,9 @@ interface DesktopState {
   addPendingOpen: (item: { id: string; url: string }) => void;
   clearPendingOpen: () => void;
 
-  /** 追加一条排队输入。 */
-  enqueue: (item: QueuedInput) => void;
-  /** 删掉队列里的一条（用户点队列项上的 ✕）。 */
-  removeQueued: (id: string) => void;
-  /** 取出队首并出队；空队列返回 null。 */
-  shiftQueued: () => QueuedInput | null;
-  clearQueue: () => void;
-
   /**
    * 把窗口收进左下角任务栏：先播动画，动画结束才真正变成 minimized。
-   * windowId 是节点 id 或 `panel-<key>`，两种情况都在这里分流。
+   * windowId 是节点 id、`panel-<key>` 或会话 id，三种情况都在这里分流。
    */
   requestMinimize: (windowId: string) => void;
   /**
@@ -453,11 +537,18 @@ function snapshot(): PersistedRoot {
     settings: s.settings,
     logs: s.logs.slice(-MAX_LOGS),
     panels: {
-      input: s.inputRect,
       inspector: s.inspectorRect,
       settings: s.settingsRect,
       trace: s.traceRect,
     },
+    // 会话只存几何与可见性；运行状态与排队项是瞬态，不落盘。
+    sessions: s.sessions.map((ses) => ({
+      id: ses.id,
+      title: ses.title,
+      rect: ses.rect,
+      z: ses.z,
+      minimized: ses.minimized,
+    })),
     panelZ: s.panelZ,
     zCounter: s.zCounter,
     surfaces: exportSurfaceStates(),
@@ -483,6 +574,7 @@ async function saveNow(): Promise<void> {
     await adapter.set(K_SETTINGS, snap.settings);
     await adapter.set(K_LOGS, snap.logs);
     await adapter.set(K_PANELS, snap.panels);
+    await adapter.set(K_SESSIONS, snap.sessions);
     await adapter.set('z', snap.zCounter);
     await adapter.set('panelZ', snap.panelZ);
     await adapter.set(K_SURFACES, snap.surfaces);
@@ -501,15 +593,13 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   focusedId: null,
   zCounter: 10,
   logs: [],
-  status: { running: false, phase: '', detail: '', round: 0, runId: null },
-  trace: [],
+  sessions: [makeSession(1, resolveInputRect(window.innerWidth, window.innerHeight), window.innerWidth, window.innerHeight)],
   feedback: null,
   traceOpen: false,
   settings: { ...DEFAULT_SETTINGS },
   settingsOpen: false,
   treeOpen: false,
   resetOpen: false,
-  inputRect: resolvePanels(window.innerWidth, window.innerHeight).input,
   inspectorRect: resolvePanels(window.innerWidth, window.innerHeight).inspector,
   settingsRect: resolvePanels(window.innerWidth, window.innerHeight).settings,
   traceRect: resolvePanels(window.innerWidth, window.innerHeight).trace,
@@ -517,7 +607,6 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   panelZ: { ...DEFAULT_PANEL_Z },
   viewW: typeof window === 'undefined' ? 1280 : window.innerWidth,
   viewH: typeof window === 'undefined' ? 800 : window.innerHeight,
-  queue: [],
   pendingOpen: [],
   leaving: {},
   restoring: {},
@@ -533,9 +622,11 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     let theme: { tokens: ThemeTokens } | undefined;
     let settings: LlmSettings | undefined;
     let logs: LogEntry[] | undefined;
-    let panels: Partial<PanelRects> | undefined;
+    let panels: Partial<PanelRects> & { input?: PanelRect } | undefined;
+    let sessions: PersistedSession[] | undefined;
     let z: number | undefined;
-    let panelZ: Partial<Record<PanelKey, number>> | undefined;
+    // 老数据里还有面板键 'input'（那时输入框还是个普通面板），所以这里用宽松类型读。
+    let panelZ: Record<string, number> | undefined;
     let surfaces: Record<string, string> | undefined;
     try {
       rawNodes = await adapter.get<Record<string, unknown>>(K_NODES);
@@ -543,9 +634,10 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       theme = await adapter.get<{ tokens: ThemeTokens }>(K_THEME);
       settings = await adapter.get<LlmSettings>(K_SETTINGS);
       logs = await adapter.get<LogEntry[]>(K_LOGS);
-      panels = await adapter.get<Partial<PanelRects>>(K_PANELS);
+      panels = await adapter.get<Partial<PanelRects> & { input?: PanelRect }>(K_PANELS);
+      sessions = await adapter.get<PersistedSession[]>(K_SESSIONS);
       z = await adapter.get<number>('z');
-      panelZ = await adapter.get<Partial<Record<PanelKey, number>>>('panelZ');
+      panelZ = await adapter.get<Record<string, number>>('panelZ');
       surfaces = await adapter.get<Record<string, string>>(K_SURFACES);
     } catch (e) {
       logs = [];
@@ -566,6 +658,34 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     );
 
     const fallback = resolvePanels(window.innerWidth, window.innerHeight);
+    /*
+     * 会话恢复：优先用存下来的列表；老数据没有 sessions 字段，
+     * 就用旧的 panels.input / panelZ.input 造出第一个。
+     */
+    const viewW = window.innerWidth;
+    const viewH = window.innerHeight;
+    const firstRect = panels?.input ?? resolveInputRect(viewW, viewH);
+    const restored: InputSession[] = Array.isArray(sessions) && sessions.length > 0
+      ? sessions.slice(0, MAX_SESSIONS).map((p, i) => ({
+          id: typeof p.id === 'string' && p.id ? p.id : sessionIdOf(i + 1),
+          title: typeof p.title === 'string' && p.title ? p.title : sessionTitleOf(i + 1),
+          rect: fitRectToViewport(
+            p.rect ?? firstRect,
+            viewW,
+            viewH,
+            PANEL_MIN_SESSION.w,
+            PANEL_MIN_SESSION.h,
+          ),
+          z: typeof p.z === 'number' ? p.z : 2 + i,
+          minimized: p.minimized === true,
+          status: emptyStatus(),
+          trace: [],
+          queue: [],
+        }))
+      : [makeSession(1, firstRect, viewW, viewH)];
+    const legacyZ = panelZ?.input;
+    if (typeof legacyZ === 'number' && restored[0]) restored[0].z = legacyZ;
+
     applyTheme(tokens);
     importSurfaceStates(surfaces);
     set({
@@ -579,12 +699,17 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       tokens,
       settings: { ...DEFAULT_SETTINGS, ...(settings ?? {}) },
       logs: logs ?? [],
-      inputRect: panels?.input ?? fallback.input,
+      sessions: restored,
       inspectorRect: panels?.inspector ?? fallback.inspector,
       settingsRect: panels?.settings ?? fallback.settings,
       traceRect: panels?.trace ?? fallback.trace,
       zCounter: z ?? 10 + Object.keys(safeNodes).length,
-      panelZ: { ...DEFAULT_PANEL_Z, ...(panelZ ?? {}) },
+      panelZ: {
+        ...DEFAULT_PANEL_Z,
+        ...Object.fromEntries(
+          Object.entries(panelZ ?? {}).filter(([k]) => (ALL_PANELS as string[]).includes(k)),
+        ),
+      },
     });
     get().log('info', 'store ' + note);
   },
@@ -665,6 +790,15 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         return { zCounter: z, panelZ: { ...s.panelZ, [key]: z }, focusedId: id };
       }
 
+      // 输入会话也是窗口，和面板、组件共用一套层级。
+      if (s.sessions.some((ses) => ses.id === id)) {
+        return {
+          zCounter: z,
+          focusedId: id,
+          sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, z } : ses)),
+        };
+      }
+
       const node = s.nodes[id];
       if (!node) return s;
 
@@ -698,7 +832,69 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
-  setStatus: (patch) => set((s) => ({ status: { ...s.status, ...patch } })),
+  addSession: () => {
+    const s = get();
+    const n = s.sessions.length + 1;
+    if (n > MAX_SESSIONS) return '';
+    const fresh = makeSession(n, resolveInputRect(s.viewW, s.viewH), s.viewW, s.viewH);
+    set({ sessions: [...s.sessions, fresh], focusedId: fresh.id });
+    schedulePersist();
+    return fresh.id;
+  },
+
+  removeSession: (id) => {
+    set((s) => {
+      // 至少留一个：全关掉就没有入口了。
+      if (s.sessions.length <= 1) return s;
+      return {
+        sessions: s.sessions.filter((ses) => ses.id !== id),
+        focusedId: s.focusedId === id ? null : s.focusedId,
+      };
+    });
+    schedulePersist();
+  },
+
+  setSessionRect: (id, rect) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, rect } : ses)),
+    }));
+    schedulePersist();
+  },
+
+  setSessionMinimized: (id, minimized) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, minimized } : ses)),
+    }));
+    schedulePersist();
+  },
+
+  setSessionStatus: (id, patch) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, status: { ...ses.status, ...patch } } : ses)),
+    }));
+  },
+
+  beginSessionTrace: (id, runId) => {
+    set((s) => ({
+      feedback: null,
+      sessions: s.sessions.map((ses) =>
+        ses.id === id ? { ...ses, trace: [], status: { ...ses.status, runId } } : ses,
+      ),
+    }));
+  },
+
+  upsertSessionStep: (id, step) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => {
+        if (ses.id !== id) return ses;
+        const i = ses.trace.findIndex((x) => x.id === step.id);
+        return {
+          ...ses,
+          trace: i >= 0 ? ses.trace.map((x, j) => (j === i ? step : x)) : [...ses.trace, step],
+        };
+      }),
+    }));
+  },
 
   setSettings: (patch) => {
     set((s) => ({ settings: { ...s.settings, ...patch } }));
@@ -718,16 +914,6 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       return { minimizedPanels: next };
     });
     schedulePersist();
-  },
-
-  beginTrace: (runId) => set({ trace: [], feedback: null, status: { ...get().status, runId } }),
-
-  upsertStep: (step) => {
-    set((s) => {
-      const i = s.trace.findIndex((x) => x.id === step.id);
-      const trace = i >= 0 ? s.trace.map((x, j) => (j === i ? step : x)) : [...s.trace, step];
-      return { trace };
-    });
   },
 
   setFeedback: (feedback) => set({ feedback }),
@@ -784,6 +970,25 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         };
       };
 
+      // 会话面板与派生窗口一起按比例走（尺寸封顶在它的设计尺寸上，避免棘轮）。
+      const sessions = s.sessions.map((ses) => {
+        const fitted = fitRectToViewport(
+          scaleOf(ses.rect),
+          viewW,
+          viewH,
+          PANEL_MIN_SESSION.w,
+          PANEL_MIN_SESSION.h,
+        );
+        return {
+          ...ses,
+          rect: {
+            ...fitted,
+            w: Math.min(fitted.w, DEFAULT_INPUT_RECT.w),
+            h: Math.min(fitted.h, DEFAULT_INPUT_RECT.h),
+          },
+        };
+      });
+
       const nodes = { ...s.nodes };
       let touched = false;
       for (const n of Object.values(nodes)) {
@@ -812,7 +1017,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       return {
         viewW,
         viewH,
-        inputRect: placePanel('input', s.inputRect),
+        sessions,
         inspectorRect: placePanel('inspector', s.inspectorRect),
         settingsRect: placePanel('settings', s.settingsRect),
         traceRect: placePanel('trace', s.traceRect),
@@ -834,18 +1039,35 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   clearPendingOpen: () => set({ pendingOpen: [] }),
 
-  enqueue: (item) => set((s) => ({ queue: [...s.queue, item] })),
-
-  removeQueued: (id) => set((s) => ({ queue: s.queue.filter((q) => q.id !== id) })),
-
-  shiftQueued: () => {
-    const { queue } = get();
-    if (queue.length === 0) return null;
-    set({ queue: queue.slice(1) });
-    return queue[0];
+  enqueue: (id, item) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, queue: [...ses.queue, item] } : ses)),
+    }));
   },
 
-  clearQueue: () => set({ queue: [] }),
+  removeQueued: (id, itemId) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) =>
+        ses.id === id ? { ...ses, queue: ses.queue.filter((q) => q.id !== itemId) } : ses,
+      ),
+    }));
+  },
+
+  shiftQueued: (id) => {
+    const ses = get().sessions.find((x) => x.id === id);
+    if (!ses || ses.queue.length === 0) return null;
+    const head = ses.queue[0];
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === id ? { ...x, queue: x.queue.slice(1) } : x)),
+    }));
+    return head;
+  },
+
+  clearQueue: (id) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, queue: [] } : ses)),
+    }));
+  },
 
   requestMinimize: (windowId) => {
     if (get().leaving[windowId]) return;
@@ -859,6 +1081,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       if (windowId.startsWith('panel-')) {
         const key = windowId.slice('panel-'.length) as PanelKey;
         if (ALL_PANELS.includes(key)) get().setPanelMinimized(key, true);
+      } else if (get().sessions.some((ses) => ses.id === windowId)) {
+        get().setSessionMinimized(windowId, true);
       } else {
         // 节点可能在这 260ms 里被删掉了：updateNode 对不存在的 id 是空操作。
         get().updateNode(windowId, { status: 'minimized' } as Partial<YggNode>);
@@ -870,14 +1094,16 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     if (get().restoring[windowId]) return;
     const isPanel = windowId.startsWith('panel-');
     const key = isPanel ? (windowId.slice('panel-'.length) as PanelKey) : null;
+    const isSession = get().sessions.some((ses) => ses.id === windowId);
     if (isPanel) {
       if (!key || !ALL_PANELS.includes(key)) return;
-    } else if (!get().nodes[windowId]) {
+    } else if (!isSession && !get().nodes[windowId]) {
       return;
     }
     // 先标记再切状态：无论 React 是否把两次更新批到一起，窗口挂载时都能看到 restoring。
     set((s) => ({ restoring: { ...s.restoring, [windowId]: true } }));
     if (isPanel && key) get().setPanelMinimized(key, false);
+    else if (isSession) get().setSessionMinimized(windowId, false);
     else get().updateNode(windowId, { status: 'active' } as Partial<YggNode>);
     window.setTimeout(() => {
       set((s) => {
@@ -920,17 +1146,16 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       focusedId: null,
       zCounter: 10,
       logs: [],
-      trace: [],
       feedback: null,
-      status: { running: false, phase: '', detail: '', round: 0, runId: null },
+      sessions: [
+        makeSession(1, resolveInputRect(window.innerWidth, window.innerHeight), window.innerWidth, window.innerHeight),
+      ],
       resetOpen: false,
       minimizedPanels: {},
       panelZ: { ...DEFAULT_PANEL_Z },
-      queue: [],
       pendingOpen: [],
       leaving: {},
       restoring: {},
-      inputRect: panels.input,
       inspectorRect: panels.inspector,
       settingsRect: panels.settings,
       traceRect: panels.trace,

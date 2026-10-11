@@ -1,8 +1,9 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useDesktopStore } from '../store/desktopStore';
+import { useDesktopStore, type InputSession } from '../store/desktopStore';
 import { submitInput } from '../kernel/agent/scheduler';
-import { PanelWindow } from './PanelWindow';
+import { WindowFrame } from '../host/WindowFrame';
+import { NewInputIcon } from './icons';
 
 /*
  * 下面这些常量必须与 global.css 里的实际值一致 ——
@@ -46,55 +47,61 @@ export function inputMinHeight(areaH: number, queueCount: number, pendingCount =
   );
 }
 
-export function YggdrasilInput() {
+/**
+ * 一个输入框 = 一个独立的 Agent 会话。
+ *
+ * 多个输入框共享底层记忆（桌面、基底的对话历史与账本），
+ * 但**不共享工作状态** —— 各自有各自的队列、进度与轨迹，可以同时跑。
+ */
+export function YggdrasilInput({ session }: { session: InputSession }) {
   const [text, setText] = useState('');
   const areaRef = useRef<HTMLTextAreaElement>(null);
   /** 输入法正在拼字。拼字期间的回车是"确认候选词"，不是"发送"。 */
   const composing = useRef(false);
   const [areaH, setAreaH] = useState(LINE_H);
-  const running = useDesktopStore((s) => s.status.running);
-  const phase = useDesktopStore((s) => s.status.phase);
-  const detail = useDesktopStore((s) => s.status.detail);
-  const queue = useDesktopStore((s) => s.queue);
+
+  /*
+   * 订阅**这一个会话**：`find` 在没变化时返回同一个对象引用，
+   * 所以两个输入框同时在跑时，各自只在自己的状态变了才重渲染。
+   */
+  const live = useDesktopStore((s) => s.sessions.find((x) => x.id === session.id)) ?? session;
+  const { status, queue, rect, z, title, minimized } = live;
+  const running = status.running;
+  const phase = status.phase;
+  const detail = status.detail;
   const removeQueued = useDesktopStore((s) => s.removeQueued);
   const pendingOpen = useDesktopStore((s) => s.pendingOpen);
   const clearPendingOpen = useDesktopStore((s) => s.clearPendingOpen);
+  const setSessionRect = useDesktopStore((s) => s.setSessionRect);
+  const removeSession = useDesktopStore((s) => s.removeSession);
+  const focusedId = useDesktopStore((s) => s.focusedId);
+  const bringToFront = useDesktopStore((s) => s.bringToFront);
+  const requestMinimize = useDesktopStore((s) => s.requestMinimize);
+  const sessionCount = useDesktopStore((s) => s.sessions.length);
+
   // 只订阅"每条队列项的目标名字"，不订阅整棵节点树 ——
   // 否则拖动窗口时每个 pointermove 都会把输入窗口一起重渲染。
   const queueTargets = useDesktopStore(
-    useShallow((s) =>
-      s.queue.map((q) => (q.originId !== s.rootId ? s.nodes[q.originId]?.name ?? '已删除' : '')),
-    ),
+    useShallow((s) => {
+      const ses = s.sessions.find((x) => x.id === session.id);
+      return (ses ? ses.queue : []).map((q) =>
+        q.originId !== s.rootId ? s.nodes[q.originId]?.name ?? '已删除' : '',
+      );
+    }),
   );
 
   // 正在跑、或者还有排队项没消化完，都算"忙"：此时提交进入队列而不是被拒。
   const busy = running || queue.length > 0;
 
-  /**
-   * 提交。
-   *
-   * 两点是"内容被吞掉 / 读回上一条"的根治：
-   * 1. **直接读 textarea 的当前值**，不读 React state —— 中文输入法确认候选词的瞬间，
-   *    state 可能还停在上一帧，读 state 就会把上一条内容再发一次。
-   * 2. **确认真的收下了才清空**。先清空再提交，一旦提交没被接受，用户的话就没了。
-   */
+  /** 提交。读 DOM 当前值（输入法状态可能滞后），确认收下才清空。 */
   const submit = () => {
     const el = areaRef.current;
     const value = (el ? el.value : text).trim();
     if (!value) return;
-    // 空闲就立刻开跑，忙碌就排队 —— 由调度器判断，界面不需要知道。
-    if (submitInput(value)) setText('');
+    if (submitInput(value, { sessionId: session.id })) setText('');
   };
 
-  /**
-   * 输入框按内容自适应：量出"内容自然高度"（1~6 行），并写成 **min-height**。
-   *
-   * 关键两点：
-   * - 量之前先把"拉伸"与旧的 min-height 摘掉 —— 否则量到的是被拉伸后的高度，
-   *   只会越量越高，再也缩不回去。
-   * - 写回的是 min-height 而不是 height：窗口被手动拉高时，输入区会**填满**那块空间，
-   *   而不是缩成一行贴在底部（这正是"输入区域固定、只是贴在底部"的成因）。
-   */
+  /** 输入框按内容自适应：量出内容自然高度（1~6 行），写成 min-height。 */
   useLayoutEffect(() => {
     const el = areaRef.current;
     if (!el) return;
@@ -112,30 +119,36 @@ export function YggdrasilInput() {
   const needed = inputMinHeight(areaH, queue.length, pendingOpen.length);
 
   /**
-   * 把"内容需要多高"同步回面板矩形。
-   *
-   * 只靠 CSS 的 min-height 会让窗口**向下**长高 —— 输入框本来就贴底，
-   * 一长高就顶出屏幕底部。所以这里以**底边为锚**：变高时 y 一起上移。
-   * 用户手动拉高过（当前高度不等于上次自动值）就不缩回去，尊重用户。
+   * 把"内容需要多高"同步回会话矩形。
+   * 以**底边为锚**：变高时 y 一起上移，否则贴底的输入框会顶出屏幕底部。
+   * 用户手动拉高过（当前高度不等于上次自动值）就不缩回去。
    */
   const autoH = useRef(0);
   useLayoutEffect(() => {
-    const s = useDesktopStore.getState();
-    const r = s.inputRect;
-    if (needed === r.h) return;
-    const userResized = r.h !== autoH.current;
-    if (needed < r.h && userResized) return;
+    if (needed === rect.h) return;
+    const userResized = rect.h !== autoH.current;
+    if (needed < rect.h && userResized) return;
     autoH.current = needed;
-    s.setPanelRect('input', { ...r, y: Math.max(0, r.y + r.h - needed), h: needed });
-  }, [needed]);
+    setSessionRect(session.id, { ...rect, y: Math.max(0, rect.y + rect.h - needed), h: needed });
+  }, [needed, session.id, rect, setSessionRect]);
+
+  // 最小化后交给任务栏渲染，这里什么都不画。
+  if (minimized) return null;
 
   return (
-    <PanelWindow
-      panel="input"
-      title="Yggdrasil"
+    <WindowFrame
+      id={session.id}
+      title={title}
+      rect={rect}
+      zIndex={z}
+      focused={focusedId === session.id}
+      onRect={(r) => setSessionRect(session.id, r)}
+      onFocus={() => bringToFront(session.id)}
+      onMinimize={() => requestMinimize(session.id)}
+      // 只剩一个时不给关：全关掉就没有入口了。
+      onDelete={sessionCount > 1 ? () => removeSession(session.id) : undefined}
       minW={300}
       minH={70}
-      // 内容需要的最小高度；矩形由上面的 effect 同步，两者始终一致。
       minHeightCss={needed}
     >
       <div className="ygg-compose">
@@ -173,7 +186,7 @@ export function YggdrasilInput() {
                 <button
                   className="ygg-queue-del"
                   title="移出队列"
-                  onClick={() => removeQueued(q.id)}
+                  onClick={() => removeQueued(session.id, q.id)}
                 >
                   ✕
                 </button>
@@ -200,8 +213,7 @@ export function YggdrasilInput() {
             onKeyDown={(e) => {
               /*
                * 中文输入法用回车**确认候选词**，那不是"发送"。
-               * 不拦住的话：发出去的是还没提交的拼音、或者上一帧的旧内容 ——
-               * 这正是"排队系统把内容吞掉/读回上一条"的根因。
+               * 不拦住的话：发出去的是还没提交的拼音、或者上一帧的旧内容。
                */
               if (composing.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -231,10 +243,13 @@ export function YggdrasilInput() {
               {detail ? <span className="ygg-compose-detail">{detail}</span> : null}
             </>
           ) : (
-            <span className="ygg-compose-hint">Enter 发送 · Shift+Enter 换行</span>
+            <span className="ygg-compose-hint">
+              <NewInputIcon width={11} height={11} />
+              Enter 发送 · Shift+Enter 换行
+            </span>
           )}
         </div>
       </div>
-    </PanelWindow>
+    </WindowFrame>
   );
 }

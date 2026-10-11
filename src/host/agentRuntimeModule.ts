@@ -52,7 +52,8 @@ export function useAgent(): AgentApi {
   const id = attached ? ctxId : null;
 
   const node = useDesktopStore((s) => (id ? s.nodes[id] : undefined));
-  const running = useDesktopStore((s) => s.status.running);
+  // "有没有任务在跑"是全局的：任意一个输入框在跑都算忙（它们共享同一个桌面）。
+  const running = useDesktopStore((s) => s.sessions.some((ses) => ses.status.running));
 
   const comp = node && node.kind === 'component' ? (node as ComponentNode) : undefined;
   const facet = comp?.agent;
@@ -76,8 +77,8 @@ export function useAgent(): AgentApi {
         );
         return;
       }
-      // 走调度器：已有任务在跑时排队，而不是并发抢同一份 store。
-      submitInput(value, id);
+      // 走调度器：组件发起的消息默认进主会话的队列，与用户输入共用一条串行线。
+      submitInput(value, { originId: id });
     },
     clear: () => {
       if (!id || !attached) return;
