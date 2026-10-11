@@ -1,0 +1,32 @@
+:root {
+  color-scheme: dark;
+
+  /* 扁平化：暗棕色填充 */
+  --ygg-bg: #1A120B;
+  --ygg-surface: #241811;
+  --ygg-surface-2: #33231A;
+
+  /* 扁平化：金黄色描边 */
+  --ygg-border: #D4A537;
+  --ygg-accent-dim: #7A6224;
+
+  --ygg-fg: #F0E2C8;
+  --ygg-fg-muted: #A08F76;
+  --ygg-accent: #D4A537;
+  --ygg-accent-hi: #F5D77A;
+
+  /* 默认不加阴影与高光；主题可覆盖这两个令牌重新启用 */
+  --ygg-glow: none;
+  --ygg-shadow: none;
+
+  --ygg-radius: 4px;
+  --ygg-danger: #C4553B;
+  --ygg-ok: #7FA65A;
+  --ygg-font: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+
+  /* 动效时长 */
+  --ygg-t-fast: 110ms;
+  --ygg-t: 170ms;
+  --ygg-t-slow: 260ms;
+  --ygg-ease: cubic-bezier(.22, .61, .36, 1);
+}

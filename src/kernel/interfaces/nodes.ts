@@ -1,0 +1,474 @@
+import { registerInterface } from '../registry/interfaceRegistry';
+import { clampNumber, fail, ok, strOr, tokensOf } from '../bus/opContext';
+import { compileComponent } from '../../host/compile';
+import { desktop, makeFacet, useDesktopStore } from '../../store/desktopStore';
+import { unregisterTool } from '../registry/toolRegistry';
+import { sanitizeTokens } from '../../theme/engine';
+import type { ComponentNode, DerivationOp, YggNode } from '../types';
+import { newNodeId } from '../ids';
+
+const RESERVED = new Set(['root']);
+
+/** 解析 scope：'self' 是占位符，会被展开成新组件自己的 id。 */
+function parseScope(raw: unknown, selfId: string): string[] | '*' {
+  if (raw === '*') return '*';
+  if (!Array.isArray(raw)) return [selfId];
+  const ids = raw.filter((x): x is string => typeof x === 'string');
+  const out = new Set<string>();
+  for (const id of ids) out.add(id === 'self' ? selfId : id);
+  out.add(selfId);
+  return [...out];
+}
+
+/**
+ * 创建组件的统一实现。
+ * create_component 与 create_agent 都走这里 —— 两者的差别只在于是否带 agent facet，
+ * 这正是"派生 Agent 作为创建组件时的一种思路"。
+ */
+function createComponentNode(op: DerivationOp, ctx: { originId: string }, forceAgent = false) {
+  const name = strOr(op.name, '组件');
+  const store = useDesktopStore.getState();
+  const id = newNodeId();
+
+  const agentRaw = (op.agent && typeof op.agent === 'object' ? op.agent : null) as Record<string, unknown> | null;
+
+  // 只有一份源码：组件的 source。
+  // Agent 能力不携带界面 —— 界面永远是组件自己的事。
+  const source = typeof op.source === 'string' ? op.source : '';
+
+  // 源码里 import/调用了 useAgent，就等于声明"这个组件需要 agent 能力"。
+  // 此时若没显式给 agent 字段，就自动接上 —— 否则 useAgent() 拿不到能力，
+  // 消息会发不出去（更早的版本甚至会静默发给基底 agent）。
+  const declaresAgent = /\buseAgent\b/.test(source);
+  const wantAgent = forceAgent || !!op.agent || declaresAgent;
+  const autoAttached = wantAgent && !forceAgent && !op.agent;
+  if (source.trim()) {
+    const compiled = compileComponent(id, source);
+    if (!compiled.ok) {
+      desktop().log('error', (wantAgent ? 'agent ' : 'comp ') + name + ' \u2715 ' + compiled.error);
+      return fail((wantAgent ? 'Agent' : '组件') + '「' + name + '」编译失败：' + compiled.error);
+    }
+  }
+
+  const size = (op.size ?? {}) as { w?: unknown; h?: unknown };
+
+  // 显式给了 hostId 就必须存在；静默回退会把东西建到没指定的地方。
+  const explicitHost = typeof op.hostId === 'string' && op.hostId.trim() ? op.hostId.trim() : null;
+  if (explicitHost && !store.nodes[explicitHost]) {
+    return fail('hostId "' + explicitHost + '" 不存在。可用的组件 id 见 inspect。');
+  }
+  const parentId = explicitHost ?? ctx.originId;
+
+  const node: YggNode = {
+    id,
+    parentId: store.nodes[parentId] ? parentId : 'root',
+    kind: 'component',
+    name,
+    description: typeof op.description === 'string' ? op.description : undefined,
+    status: 'active',
+    source,
+    size: { w: clampNumber(size.w, 380, 200, 1600), h: clampNumber(size.h, 300, 140, 1200) },
+    pos: freeSpot(op.pos as { x?: unknown; y?: unknown }),
+    z: store.zCounter + 1,
+    createdAt: Date.now(),
+  };
+
+  if (wantAgent) {
+    // agent 只贡献"能力"：职责、工具子集、作用域、上下文。
+    const rawScope = agentRaw?.scope !== undefined ? agentRaw.scope : op.scope;
+    node.agent = makeFacet({
+      systemPrompt:
+        agentRaw && typeof agentRaw.systemPrompt === 'string'
+          ? agentRaw.systemPrompt
+          : typeof op.systemPrompt === 'string'
+            ? op.systemPrompt
+            : '',
+      toolIds: pickToolIds(agentRaw?.tools ?? op.tools),
+      messages: [],
+      ledger: [],
+      scope: parseScope(rawScope, id),
+    });
+  }
+
+  store.addNode(node);
+  store.focus(id);
+  desktop().log('op', (wantAgent ? '+ agent ' : '+ comp ') + name, id);
+
+  if (!wantAgent) {
+    return ok('已创建组件「' + name + '」', {
+      createdId: id,
+      observation:
+        '组件 id=' + id + ' name=' + name + ' 已插入桌面。' +
+        '若这个组件还需要自己思考、行动，可以给它接入 agent 能力（用 attach_agent，或在创建时带 agent 字段）。',
+    });
+  }
+
+  const scopeText = node.agent!.scope === '*' ? '全部' : (node.agent!.scope as string[]).join(', ');
+  return ok('已创建带 agent 能力的组件「' + name + '」', {
+    createdId: id,
+    observation:
+      'id=' + id + ' name=' + name + ' 作用域=' + scopeText +
+      (autoAttached ? '（检测到源码用了 useAgent，已自动接入能力）' : '') + '。' +
+      '它的界面就是你给的 source —— 想让它在界面上呈现消息，就在源码里用 ' +
+      'import { useAgent } from "yggdrasil" 自行渲染。' +
+      (source.trim() ? '' : '当前 source 为空，给它写一个界面。'),
+  });
+}
+
+/** 取工具 id 列表。 */
+function pickToolIds(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((x): x is string => typeof x === 'string');
+}
+
+
+/**
+ * 找可操作的"窗口组件"。
+ * 基底也是 component，但它不是窗口，不该被 update_component / set_window_state 当成目标。
+ */
+function findComponent(id: string): ComponentNode | null {
+  const node = desktop().nodes[id];
+  return node && node.kind === 'component' && !node.root ? node : null;
+}
+
+/** 新窗口落点：找一个没有被占用的偏移。 */
+function freeSpot(preferred?: { x?: unknown; y?: unknown }): { x: number; y: number } {
+  const store = useDesktopStore.getState();
+  if (typeof preferred?.x === 'number' && typeof preferred?.y === 'number') {
+    return { x: Math.round(preferred.x), y: Math.round(preferred.y) };
+  }
+  const base = store.nextLayout();
+  const taken = Object.values(store.nodes);
+  for (let i = 0; i < 40; i += 1) {
+    const x = base.x + i * 26;
+    const y = base.y + i * 22;
+    const clash = taken.some((n) => n.pos && Math.abs(n.pos.x - x) < 24 && Math.abs(n.pos.y - y) < 24);
+    if (!clash) return { x, y };
+  }
+  return base;
+}
+
+export function registerNodeInterfaces(): void {
+  registerInterface({
+    kind: 'create_component',
+    label: '创建组件',
+    description:
+      '生成一个可交互的界面组件，作为可拖动窗口插入桌面。' +
+      '**如果这个组件还需要自己思考、自己行动，就同时给出 agent 字段** —— ' +
+      '那样它就是一个 Agent。Agent 不是另一种东西，它就是"带 agent 能力的组件"，' +
+      '这里与 create_agent 走的是同一条创建路径。' +
+      'agent 里的 source 写它自己的界面（import { useAgent } from "yggdrasil"），' +
+      'scope 限定它能看到的范围（不写则默认只有它自己）。',
+    example: {
+      kind: 'create_component',
+      name: '天气助手',
+      description: '能自己查天气的 Agent',
+      size: { w: 380, h: 420 },
+      pos: { x: 200, y: 120 },
+      source: 'export default function Calc(){ ... }',
+      agent: {
+        systemPrompt: '你负责回答天气问题',
+        scope: ['self'],
+        source:
+          'import * as React from "react";\nimport { useAgent } from "yggdrasil";\n' +
+          'export default function A(){ const a = useAgent(); return <div>{a.messages.length}</div>; }',
+      },
+    },
+    mutates: true,
+    handler: (op, ctx) => createComponentNode(op, ctx),
+  });
+
+  registerInterface({
+    kind: 'update_component',
+    label: '修改组件',
+    description:
+      '修改已有组件：换源码（source）、改标题（name）、移动（pos）、缩放（size）、显隐（status = active / minimized / closed）、覆写局部样式（tokens）。未给出的字段不动。',
+    example: { kind: 'update_component', id: 'n_xxx', status: 'minimized' },
+    mutates: true,
+    handler: (op) => {
+      const id = strOr(op.id, '');
+      const node = findComponent(id);
+      if (!node) return fail('组件 ' + id + ' 不存在。');
+      const patch: Partial<ComponentNode> = {};
+      const touched: string[] = [];
+
+      if (typeof op.source === 'string' && op.source.trim()) {
+        const compiled = compileComponent(id, op.source);
+        if (!compiled.ok) {
+          desktop().log('error', 'comp ' + node.name + ' \u2715 ' + compiled.error);
+          return fail('改动后的源码编译失败，已放弃本次修改：' + compiled.error);
+        }
+        patch.source = op.source;
+        touched.push('源码');
+
+        // 新源码用到了 useAgent 但组件还没有能力时，顺手接上 ——
+        // 否则界面上的交互会静默失效。
+        if (/\buseAgent\b/.test(op.source) && !node.agent) {
+          useDesktopStore.getState().setFacet(id, makeFacet({ scope: [id] }));
+          touched.push('自动接入 agent 能力');
+        }
+      }
+      if (typeof op.name === 'string' && op.name.trim()) {
+        patch.name = op.name.trim();
+        touched.push('标题');
+      }
+      const pos = op.pos as { x?: unknown; y?: unknown } | undefined;
+      if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+        patch.pos = { x: Math.round(pos.x), y: Math.round(pos.y) };
+        touched.push('位置');
+      }
+      const size = op.size as { w?: unknown; h?: unknown } | undefined;
+      if (size) {
+        patch.size = {
+          w: clampNumber(size.w, node.size.w, 200, 1600),
+          h: clampNumber(size.h, node.size.h, 140, 1200),
+        };
+        touched.push('尺寸');
+      }
+      if (typeof op.status === 'string' && ['active', 'minimized', 'closed'].includes(op.status)) {
+        patch.status = op.status as ComponentNode['status'];
+        touched.push(op.status === 'active' ? '显示' : op.status === 'minimized' ? '最小化' : '关闭');
+      }
+      if (typeof op.z === 'number' && Number.isFinite(op.z)) {
+        patch.z = Math.round(op.z);
+        touched.push('层级');
+      }
+      const tokenPatch = sanitizeTokens(tokensOf(op.tokens));
+      if (Object.keys(tokenPatch).length > 0) {
+        patch.tokens = { ...(node.tokens ?? {}), ...tokenPatch };
+        touched.push('局部样式');
+      }
+      if (op.tokens && Object.keys(tokenPatch).length === 0 && Object.keys(tokensOf(op.tokens)).length > 0) {
+        return fail('tokens 里没有合法的 --ygg- 变量。');
+      }
+      if (touched.length === 0) {
+        return fail('update_component 没有给出任何要改的字段（source / name / pos / size / status / z / tokens）。');
+      }
+      useDesktopStore.getState().updateNode(id, patch as Partial<YggNode>);
+      desktop().log('op', '~ comp ' + node.name + ' [' + touched.join('+') + ']', id);
+      return ok('已修改组件「' + node.name + '」：' + touched.join('、'), {
+        observation: '组件 id=' + id + ' 的 ' + touched.join('、') + ' 已更新。',
+      });
+    },
+  });
+
+  registerInterface({
+    kind: 'create_agent',
+    label: '创建 Agent',
+    description:
+      '创建一个组件**并给它接入 agent 能力**。' +
+      '这是 attach_agent 的"创建时一步到位"版本，等价于 create_component + attach_agent。' +
+      '**界面完全由 source 决定**；agent 字段只提供能力（职责 systemPrompt、工具子集 tools、作用域 scope），' +
+      '不提供任何界面。想让界面呈现消息或按钮，在 source 里用 ' +
+      'import { useAgent } from "yggdrasil" 自己渲染。' +
+      'scope 是硬约束，越界操作会被执行器拒绝。',
+    example: {
+      kind: 'create_agent',
+      name: '天气助手',
+      description: '查询天气',
+      systemPrompt: '你负责回答天气问题',
+      scope: ['self'],
+      source:
+        'import * as React from "react";\nimport { useAgent } from "yggdrasil";\n' +
+        'export default function WeatherAgent() {\n' +
+        '  const a = useAgent();\n' +
+        '  const [t, setT] = React.useState("");\n' +
+        '  return <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>\n' +
+        '    <div style={{ flex: 1, overflow: "auto" }}>{a.messages.map((m, i) => <div key={i}>{m.content}</div>)}</div>\n' +
+        '    <input value={t} onChange={(e) => setT(e.target.value)}\n' +
+        '      onKeyDown={(e) => { if (e.key === "Enter") { a.send(t); setT(""); } }} />\n' +
+        '  </div>;\n}',
+    },
+    mutates: true,
+    handler: (op, ctx) => {
+      // 与 create_component 同一条路径，只是强制带上 agent 能力。
+      // 注意：agent 里只有能力，没有界面 —— 界面来自 op.source（组件自己的源码）。
+      const agent = (op.agent && typeof op.agent === 'object' ? op.agent : {}) as Record<string, unknown>;
+      const merged: DerivationOp = {
+        ...op,
+        kind: 'create_component',
+        source: typeof op.source === 'string' ? op.source : '',
+        agent: {
+          systemPrompt: typeof op.systemPrompt === 'string' ? op.systemPrompt : agent.systemPrompt,
+          tools: Array.isArray(op.tools) ? op.tools : agent.tools,
+          scope: Array.isArray(op.scope) ? op.scope : agent.scope,
+        },
+      };
+      return createComponentNode(merged, ctx, true);
+    },
+  });
+
+  registerInterface({
+    kind: 'attach_agent',
+    label: '接入 agent 能力',
+    description:
+      '给一个已存在的组件**接入 agent 能力**。接入后这个组件就有自己的上下文、职责与作用域，' +
+      '可以自己思考并行动。' +
+      '**界面不变** —— 组件长什么样完全由它自己的 source 决定；' +
+      '要让它在界面上呈现消息或按钮，就在它的源码里用 import { useAgent } from "yggdrasil" 自行渲染。' +
+      '这是"派生 Agent"的正解：Agent 是能力，不是另一种窗口。',
+    example: {
+      kind: 'attach_agent',
+      id: 'n_xxx',
+      systemPrompt: '你负责回答天气问题',
+      scope: ['self'],
+    },
+    mutates: true,
+    handler: (op) => {
+      const id = strOr(op.id, '');
+      const node = desktop().nodes[id];
+      if (!node || node.kind !== 'component' || node.root) {
+        return fail('找不到可接入能力的组件 ' + id + '（基底不可再接入）。');
+      }
+      if (node.agent) {
+        return fail('组件「' + node.name + '」已经具备 agent 能力了。改它的职责用 set_agent_config。');
+      }
+      const rawScope = op.scope;
+      // 必须用 setFacet 而不是 updateFacet：后者只在 facet 已存在时才生效，
+      // 而"接入能力"恰恰是给还没有 facet 的组件装上它。
+      useDesktopStore.getState().setFacet(id, makeFacet({
+        systemPrompt: typeof op.systemPrompt === 'string' ? op.systemPrompt : '',
+        toolIds: pickToolIds(op.tools),
+        messages: [],
+        ledger: [],
+        scope: parseScope(rawScope, id),
+      }));
+      desktop().log('op', 'attach agent ' + node.name, id);
+      return ok('已给「' + node.name + '」接入 agent 能力', {
+        observation:
+          'id=' + id + ' 现在是一个 Agent。它的界面不变（还是它自己的 source）；' +
+          '要让它在界面上呈现上下文，在源码里用 import { useAgent } from "yggdrasil"。',
+      });
+    },
+  });
+
+  registerInterface({
+    kind: 'detach_agent',
+    label: '移除 agent 能力',
+    description:
+      '移除一个组件的 agent 能力，它会退回成普通组件（界面不变，上下文与作用域信息丢弃）。',
+    example: { kind: 'detach_agent', id: 'n_xxx' },
+    mutates: true,
+    handler: (op) => {
+      const id = strOr(op.id, '');
+      const node = desktop().nodes[id];
+      if (!node || node.kind !== 'component' || !node.agent) {
+        return fail('组件 ' + id + ' 没有 agent 能力，无需移除。');
+      }
+      if (node.root) return fail('基底不可移除 agent 能力。');
+      useDesktopStore.getState().updateNode(id, { agent: undefined } as Partial<YggNode>);
+      desktop().log('op', 'detach agent ' + node.name, id);
+      return ok('已移除「' + node.name + '」的 agent 能力，它现在是普通组件');
+    },
+  });
+
+  registerInterface({
+    kind: 'remove_node',
+    label: '删除节点',
+    description: '删除某个节点，会级联删除其全部子节点与派生工具。',
+    example: { kind: 'remove_node', id: 'n_xxx' },
+    mutates: true,
+    handler: (op) => {
+      const id = strOr(op.id, '');
+      if (RESERVED.has(id) || !desktop().nodes[id]) return fail('节点 ' + id + ' 不存在或不可删除。');
+      const cascaded = desktop().cascadeIds(id);
+      for (const cid of cascaded) unregisterTool(cid);
+      useDesktopStore.getState().removeNode(id);
+      desktop().log('op', '- ' + id);
+      return ok(
+        '已删除节点 ' + id + (cascaded.length > 1 ? ' 及其 ' + (cascaded.length - 1) + ' 个关联节点' : ''),
+        { removedIds: cascaded, observation: '已移除 ' + cascaded.join(', ') },
+      );
+    },
+  });
+
+  registerInterface({
+    kind: 'set_window_state',
+    label: '窗口显隐',
+    description:
+      '设置组件的窗口状态：active 显示 / minimized 最小化 / closed 关闭（保留节点，可从桌面左下任务栏恢复）。按名字或 id 指定。',
+    example: { kind: 'set_window_state', name: '计算器', state: 'minimized' },
+    mutates: true,
+    handler: (op) => {
+      const state = strOr(op.state, '');
+      if (!['active', 'minimized', 'closed'].includes(state)) {
+        return fail('state 只接受 active / minimized / closed。');
+      }
+      const id = strOr(op.id, '');
+      const name = strOr(op.name, '');
+      const targets = Object.values(desktop().nodes).filter(
+        (n) => n.kind === 'component' && !n.root,
+      );
+      const listText = targets.map((n) => n.name + '(' + n.id + ')').join('、') || '（没有组件）';
+
+      let node = id ? findComponent(id) : null;
+      if (!node && name) {
+        const matches = targets.filter((n) => n.name === name);
+        if (matches.length === 1) node = matches[0] as ComponentNode;
+        else if (matches.length > 1) {
+          return fail('有 ' + matches.length + ' 个组件都叫「' + name + '」，请改用 id：' +
+            matches.map((n) => n.id).join(', '));
+        }
+      }
+      if (!node) {
+        if (id || name) return fail('找不到窗口 ' + (id || name) + '。当前组件：' + listText);
+        return fail('set_window_state 需要 id 或 name。当前组件：' + listText);
+      }
+      useDesktopStore.getState().updateNode(node.id, { status: state as ComponentNode['status'] } as Partial<YggNode>);
+      const label = state === 'active' ? '显示' : state === 'minimized' ? '最小化' : '关闭';
+      desktop().log('op', label + ' ' + node.name, node.id);
+      return ok('已' + label + '窗口「' + node.name + '」');
+    },
+  });
+
+  registerInterface({
+    kind: 'set_node_tokens',
+    label: '覆写局部样式',
+    description:
+      '只改写某一个节点的局部样式变量，影响该窗口及其内部元素，不动全局。适合"把那个计算器变红"这类要求。',
+    example: { kind: 'set_node_tokens', id: 'n_xxx', tokens: { '--ygg-accent': '#FF3D7F' } },
+    mutates: true,
+    handler: (op) => {
+      const id = strOr(op.id, '');
+      const node = desktop().nodes[id];
+      if (!node) return fail('节点 ' + id + ' 不存在。');
+      const tokens = sanitizeTokens(tokensOf(op.tokens));
+      if (Object.keys(tokens).length === 0) return fail('没有合法的 --ygg- 变量。');
+      const merged = { ...(node.tokens ?? {}), ...tokens };
+      useDesktopStore.getState().updateNode(id, { tokens: merged } as Partial<YggNode>);
+      desktop().log('op', 'scope ' + id + ' \u00d7' + Object.keys(tokens).length, id);
+      return ok('已覆写「' + node.name + '」的 ' + Object.keys(tokens).length + ' 个局部变量', {
+        observation: Object.entries(tokens).map(([k, v]) => k + '=' + v).join(' '),
+      });
+    },
+  });
+
+  registerInterface({
+    kind: 'list_nodes',
+    label: '列出节点',
+    description:
+      '按名字或类型查找节点，返回 id、类型、位置、状态、是否挂了 Agent。比 inspect 更轻，适合只是想知道"那个窗口叫什么 id"。',
+    example: { kind: 'list_nodes', query: '计算器' },
+    handler: (op) => {
+      const query = strOr(op.query, '').toLowerCase();
+      const kind = strOr(op.type, '');
+      let list = Object.values(desktop().nodes);
+      if (kind) list = list.filter((n) => n.kind === kind);
+      if (query) list = list.filter((n) => n.name.toLowerCase().includes(query));
+      if (list.length === 0) return ok('没有匹配的节点', { observation: '（无）' });
+      const text = list
+        .map((n) => {
+          const pos = n.pos ? ' pos=' + n.pos.x + ',' + n.pos.y : '';
+          const size = n.size ? ' size=' + n.size.w + 'x' + n.size.h : '';
+          const z = typeof n.z === 'number' ? ' z=' + n.z : '';
+          const isAgent = n.kind === 'component' && !!n.agent;
+          return (
+            '- [' + n.kind + '] id=' + n.id + ' name="' + n.name + '" status=' + n.status + pos + size + z +
+            (isAgent ? ' [agent]' : '')
+          );
+        })
+        .join('\n');
+      return ok('匹配 ' + list.length + ' 个节点', { observation: text });
+    },
+  });
+}

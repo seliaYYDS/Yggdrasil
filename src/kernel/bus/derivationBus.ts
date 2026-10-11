@@ -1,0 +1,218 @@
+import type { DerivationOp, NodeId, ThemeTokens, TraceStep } from '../types';
+import { newId } from '../ids';
+import { desktop, useDesktopStore } from '../../store/desktopStore';
+import { unregisterTool } from '../registry/toolRegistry';
+import { getInterface, knownKinds } from '../registry/interfaceRegistry';
+import { fail, ok, type OpContext, type OpResult } from './opContext';
+import { MAX_NODES } from '../agent/prompts';
+
+export interface OpOutcome {
+  op: DerivationOp;
+  ok: boolean;
+  message: string;
+  observation: string;
+  createdId?: NodeId;
+  removedIds?: NodeId[];
+}
+
+export interface ExecuteResult {
+  outcomes: OpOutcome[];
+  createdIds: NodeId[];
+  /** 样式不是节点，回滚需要单独记住改前的变量。 */
+  tokensBefore: ThemeTokens;
+  /** 每一步的执行轨迹，供进度面板展示。 */
+  steps: TraceStep[];
+}
+
+const RESERVED_IDS = new Set(['root']);
+
+/**
+ * 会改动某个既有节点的接口，需要宾语节点 id，因此都要过作用域检查。
+ * 只做提示词约束是不够的 —— 子 Agent 真的越界时要在这里被挡住。
+ */
+const TARGETS_NODE: Record<string, string> = {
+  update_component: 'id',
+  remove_node: 'id',
+  set_node_tokens: 'id',
+  attach_agent: 'id',
+  set_agent_config: 'id',
+  clear_agent_context: 'id',
+  set_window_state: 'id',
+};
+
+function nodeCount(): number {
+  return Object.keys(desktop().nodes).length;
+}
+
+/** 取发起者的作用域。'*' 或 undefined 表示不受限。 */
+function scopeOf(originId: NodeId): string[] | '*' {
+  const n = desktop().nodes[originId];
+  if (!n || n.kind !== 'component' || !n.agent) return '*';
+  return n.agent.scope;
+}
+
+/**
+ * 判断某个节点是否在发起者的作用域内。
+ * 规则：自己、scope 里列出的节点、以及它们的后代都算在内。
+ */
+function inScope(originId: NodeId, targetId: NodeId, scope: string[] | '*'): boolean {
+  if (scope === '*') return true;
+  if (targetId === originId) return true;
+  if (originId === 'root') return true;
+
+  const nodes = desktop().nodes;
+  // 逐级向上看祖先，只要某一级在 scope 里就算命中。
+  let cur = nodes[targetId];
+  let guard = 0;
+  while (cur && guard < 64) {
+    if (scope.includes(cur.id)) return true;
+    if (cur.parentId === null) break;
+    cur = nodes[cur.parentId];
+    guard += 1;
+  }
+  return false;
+}
+
+/** 检查一条 op 是否越过作用域；返回 null 表示通过。 */
+function scopeViolation(op: DerivationOp, originId: NodeId): string | null {
+  const scope = scopeOf(originId);
+  if (scope === '*') return null;
+
+  // 带宾语 id 的接口：宾语必须在范围内
+  const field = TARGETS_NODE[op.kind];
+  if (field) {
+    const target = typeof op[field] === 'string' ? (op[field] as string) : '';
+    if (target && !inScope(originId, target, scope)) {
+      return '节点 ' + target + ' 在你的作用域之外（作用域：' + scope.join(', ') + '），已拒绝。';
+    }
+    if (!target && op.kind === 'update_component') {
+      return null; // 交给 handler 报"缺少 id"
+    }
+  }
+
+  // 全局样式：只有不受限的 Agent 才能改。
+  if (op.kind === 'update_theme') {
+    return 'update_theme 会改动整个页面，超出你的作用域。若只想改自己，用 set_node_tokens。';
+  }
+
+  // 界面插槽是全局的。
+  if (op.kind === 'replace_surface') {
+    return 'replace_surface 影响全局界面，超出你的作用域。';
+  }
+
+  return null;
+}
+
+export interface ExecuteOptions {
+  runId: string;
+  round: number;
+  /** 每一步开始时回调，用于实时更新进度面板。 */
+  onStep?: (step: TraceStep) => void;
+}
+
+export async function executeOps(
+  ops: DerivationOp[],
+  originId: NodeId,
+  options: ExecuteOptions,
+): Promise<ExecuteResult> {
+  const origin = desktop().nodes[originId] ? originId : desktop().rootId;
+  const outcomes: OpOutcome[] = [];
+  const createdIds: NodeId[] = [];
+  const steps: TraceStep[] = [];
+  const tokensBefore = { ...desktop().tokens };
+
+  for (let index = 0; index < ops.length; index += 1) {
+    const op = ops[index];
+    const def = getInterface(op.kind);
+    const label = def?.label ?? op.kind;
+
+    const step: TraceStep = {
+      id: newId(),
+      runId: options.runId,
+      round: options.round,
+      index,
+      kind: op.kind,
+      label,
+      summary: summarize(op),
+      status: 'running',
+      message: '',
+      startedAt: Date.now(),
+    };
+    steps.push(step);
+    options.onStep?.({ ...step });
+
+    let result: OpResult;
+    const violation = def ? scopeViolation(op, origin) : null;
+    if (!def) {
+      result = fail('未知接口「' + op.kind + '」。可用 kind：' + knownKinds().join(', ') + '。');
+    } else if (violation) {
+      desktop().log('warn', 'scope \u2715 ' + op.kind + ' ' + violation);
+      result = fail(violation);
+    } else if (def.mutates && nodeCount() >= MAX_NODES) {
+      result = fail('节点总数已达上限 ' + MAX_NODES + '，本指令被跳过。');
+    } else {
+      const ctx: OpContext = {
+        originId: origin,
+        round: options.round,
+        index,
+        note: (text) => {
+          step.message = text;
+          options.onStep?.({ ...step });
+        },
+      };
+      try {
+        result = await def.handler(op, ctx);
+      } catch (e) {
+        result = fail('接口「' + label + '」抛错：' + (e as Error).message);
+      }
+    }
+
+    step.status = result.ok ? 'ok' : 'fail';
+    step.message = result.message;
+    step.observation = result.observation ?? result.message;
+    step.endedAt = Date.now();
+    options.onStep?.({ ...step });
+
+    if (result.createdId) createdIds.push(result.createdId);
+    outcomes.push({
+      op,
+      ok: result.ok,
+      message: result.message,
+      observation: step.observation,
+      createdId: result.createdId,
+      removedIds: result.removedIds,
+    });
+  }
+
+  return { outcomes, createdIds, tokensBefore, steps };
+}
+
+function summarize(op: DerivationOp): string {
+  const parts: string[] = [];
+  if (typeof op.id === 'string') parts.push('id=' + op.id);
+  if (typeof op.surface === 'string') parts.push('surface=' + op.surface);
+  if (typeof op.name === 'string') parts.push('name=' + op.name);
+  if (typeof op.before === 'string') parts.push('before=' + op.before);
+  if (op.tokens && typeof op.tokens === 'object') {
+    parts.push('tokens=' + Object.keys(op.tokens).join('/'));
+  }
+  if (typeof op.source === 'string') parts.push('source=' + op.source.length + 'B');
+  return parts.join(' ') || '—';
+}
+
+/** 回滚一轮执行：撤销新建的节点与样式变量改动。 */
+export function rollback(result: ExecuteResult): void {
+  const store = useDesktopStore.getState();
+  for (const id of [...result.createdIds].reverse()) {
+    if (RESERVED_IDS.has(id) || !store.nodes[id]) continue;
+    unregisterTool(id);
+    store.removeNode(id);
+  }
+  store.applyTokens(result.tokensBefore);
+}
+
+export function formatOutcomes(outcomes: OpOutcome[]): string[] {
+  return outcomes.map((o) => (o.ok ? '✓ ' : '✗ ') + o.message);
+}
+
+export { fail, ok };
