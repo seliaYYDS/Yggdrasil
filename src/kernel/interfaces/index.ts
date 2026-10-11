@@ -1,5 +1,6 @@
 import { registerCoreInterfaces } from './core';
 import { registerNodeInterfaces } from './nodes';
+import { registerWindowInterfaces } from './windows';
 import { registerNetInterfaces } from './net';
 
 let done = false;
@@ -10,5 +11,6 @@ export function registerAllInterfaces(): void {
   done = true;
   registerCoreInterfaces();
   registerNodeInterfaces();
+  registerWindowInterfaces();
   registerNetInterfaces();
 }

@@ -89,6 +89,9 @@ export interface SystemPromptInput {
   ledger?: string[];
   /** 该 Agent 的作用域。'*' 表示不受限（基底），数组表示只限这些节点。 */
   scope?: string[] | '*';
+  /** 桌面视口尺寸。窗口坐标都基于它，模型算位置时必须知道。 */
+  viewW?: number;
+  viewH?: number;
 }
 
 /** 按 scope 收窄要展示给模型的节点集合。scope='*' 表示不受限。 */
@@ -144,12 +147,17 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
       '一律以后面的快照为准。要确认某个组件是否还在，看快照，不要凭记忆。',
     '',
     ...componentRules(),
+    ...windowRules(),
     ...styleRules(),
     ...surfaceRules(),
     ...agentRules(),
     ...netRules(),
     '',
     ...ledgerRules(input.ledger),
+    '',
+    '## 桌面视口',
+    (input.viewW ?? 1280) + ' x ' + (input.viewH ?? 800) +
+      ' 像素（窗口的 pos 是左上角坐标、size 是宽高，原点在左上角）',
     '',
     unrestricted ? '## 当前窗口（实时快照，唯一事实来源）' : '## 你的作用域（只能看到这些）',
     windowsText(scoped),
@@ -236,6 +244,28 @@ function componentRules(): string[] {
     '- 组件不要依赖外部 props（replace_surface 除外，见插槽一节），自己管理状态。',
     '- **组件就是你唯一的表达方式**：需要向用户呈现信息时，把内容直接写进组件里，而不是指望别处能显示。',
     '- 控制篇幅，代码保持紧凑，不要写注释。',
+  ];
+}
+
+/**
+ * 桌面操控。
+ * 把"窗口"讲成"页面"，因为用户就是这么理解的：桌面 = 浏览器，组件 = 页面。
+ * 这里只给出**已有接口**的用法，不新增平行入口。
+ */
+function windowRules(): string[] {
+  return [
+    '## 操控桌面（桌面就是浏览器，每个组件就是一个页面/窗口）',
+    '- 新建页面 → `create_component`（可选 pos / size，不给就落在空位）。',
+    '- 关闭页面 → `remove_node`（彻底删除，连子孙一起）；只想收起来 → `set_window_state` 的 minimized / closed，' +
+      '用户能从左下角任务栏点回来。',
+    '- 查看页面 → `inspect before="windows"` 看全部窗口；`inspect before="component" id=...` ' +
+      '看某一个页面的**完整现状与源码**（改别人的组件之前先看这个，别凭猜）。',
+    '- 调整窗口 → `update_component`：绝对 `pos`/`size`、相对 `dx dy dw dh`、' +
+      '`center` 居中、`fill` 铺满、`align` 贴边、`focus` 置顶、`z` 指定层级。',
+    '- 批量排布 → `arrange_windows`：`grid` 网格 / `cascade` 斜向层叠 / `stack` 居中叠放。' +
+      '要摆多个窗口时优先用它，比手算每个窗口的坐标可靠。',
+    '- **坐标以「桌面视口」那一节的尺寸为准**，不要凭感觉猜屏幕多大。',
+    '- 几何结果会被自动夹进视口；如果你给的坐标跑到屏幕外，看起来就像"没生效"。',
   ];
 }
 

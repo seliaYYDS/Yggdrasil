@@ -352,6 +352,9 @@ interface DesktopState {
   traceRect: PanelRect;
   minimizedPanels: Record<string, boolean>;
   panelZ: Record<PanelKey, number>;
+  /** 桌面视口的像素尺寸。窗口的 pos / size 都在这个坐标系里。不进持久化。 */
+  viewW: number;
+  viewH: number;
   /** 等待发送的输入，先来先跑。不进持久化。 */
   queue: QueuedInput[];
   /** 正在播"收进任务栏"动画的窗口 id（节点 id 或 panel-x）。不进持久化。 */
@@ -488,6 +491,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   traceRect: resolvePanels(window.innerWidth, window.innerHeight).trace,
   minimizedPanels: {},
   panelZ: { ...DEFAULT_PANEL_Z },
+  viewW: typeof window === 'undefined' ? 1280 : window.innerWidth,
+  viewH: typeof window === 'undefined' ? 800 : window.innerHeight,
   queue: [],
   leaving: {},
   restoring: {},
@@ -534,6 +539,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       loaded: true,
       storageKind: adapter.kind,
       storageNote: note,
+      viewW: window.innerWidth,
+      viewH: window.innerHeight,
       nodes: safeNodes,
       rootId: safeRoot,
       tokens,
@@ -725,6 +732,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         }
       }
       return {
+        viewW,
+        viewH,
         inputRect: fitRectToViewport(s.inputRect, viewW, viewH, PANEL_MIN.input.w, PANEL_MIN.input.h),
         inspectorRect: fitRectToViewport(s.inspectorRect, viewW, viewH, PANEL_MIN.inspector.w, PANEL_MIN.inspector.h),
         settingsRect: fitRectToViewport(s.settingsRect, viewW, viewH, PANEL_MIN.settings.w, PANEL_MIN.settings.h),
@@ -820,6 +829,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     applyTheme(DEFAULT_TOKENS);
     importSurfaceStates(null);
     set({
+      viewW: window.innerWidth,
+      viewH: window.innerHeight,
       nodes: { root: createRootAgent() },
       rootId: 'root',
       tokens: { ...DEFAULT_TOKENS },

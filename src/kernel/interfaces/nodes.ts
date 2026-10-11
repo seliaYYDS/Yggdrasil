@@ -6,6 +6,7 @@ import { unregisterTool } from '../registry/toolRegistry';
 import { sanitizeTokens } from '../../theme/engine';
 import type { ComponentNode, DerivationOp, YggNode } from '../types';
 import { newNodeId } from '../ids';
+import { alignRect, centerRect, clampRect, fillRect, type Rect } from './layout';
 
 const RESERVED = new Set(['root']);
 
@@ -181,9 +182,9 @@ export function registerNodeInterfaces(): void {
     kind: 'create_component',
     label: '创建组件',
     description:
-      '生成一个界面组件，作为可拖动窗口插入桌面。' +
+      '**新建一个页面/窗口**：生成一个界面组件插入桌面。' +
       '**这是默认也是唯一的创建入口**，绝大多数任务（计算器、列表、图表、看板、抓取结果展示）都到这里为止：' +
-      '给一个 source，产出一个普通组件。' +
+      '给一个 source，产出一个普通组件。pos / size 可选，不给就落在空位。' +
       'agent 字段是**可选的、默认不写**的重武器，只有用户明确要求"这个组件自己思考 / 自己行动 / 定时自主运行"时才附带；' +
       '判据见提示词「agent 能力」一节。',
     example: {
@@ -207,8 +208,13 @@ export function registerNodeInterfaces(): void {
     kind: 'update_component',
     label: '修改组件',
     description:
-      '修改已有组件：换源码（source）、改标题（name）、移动（pos）、缩放（size）、显隐（status = active / minimized / closed）、覆写局部样式（tokens）。未给出的字段不动。',
-    example: { kind: 'update_component', id: 'n_xxx', status: 'minimized' },
+      '修改已有组件（这就是"调整窗口"）。未给出的字段不动。' +
+      '换源码 source；改标题 name；显隐 status = active / minimized / closed；覆写局部样式 tokens；' +
+      '层级 z 或 focus=true 置顶。' +
+      '**几何**：绝对 `pos {x,y}` / `size {w,h}`；相对 `dx` `dy` `dw` `dh`；' +
+      '或直接用视口算好的 `center=true`（居中）、`fill=true`（铺满）、`align`（left/right/top/bottom/center 贴边）。' +
+      '所有几何结果都会夹进视口，不会跑到屏幕外。',
+    example: { kind: 'update_component', id: 'n_xxx', dx: 120, dy: 0, focus: true },
     mutates: true,
     handler: (op) => {
       const id = strOr(op.id, '');
@@ -250,6 +256,40 @@ export function registerNodeInterfaces(): void {
         };
         touched.push('尺寸');
       }
+      // ---- 几何：相对位移 / 缩放，以及"用视口算好的"居中 / 铺满 / 贴边 ----
+      const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+      const dx = num(op.dx);
+      const dy = num(op.dy);
+      const dw = num(op.dw);
+      const dh = num(op.dh);
+      let rect: Rect | null = null;
+      if (dx || dy || dw || dh) {
+        rect = {
+          x: (patch.pos?.x ?? node.pos.x) + dx,
+          y: (patch.pos?.y ?? node.pos.y) + dy,
+          w: (patch.size?.w ?? node.size.w) + dw,
+          h: (patch.size?.h ?? node.size.h) + dh,
+        };
+        touched.push('相对调整');
+      }
+      const viewW = desktop().viewW;
+      const viewH = desktop().viewH;
+      if (op.fill === true) {
+        rect = fillRect(viewW, viewH);
+        touched.push('铺满');
+      } else if (op.center === true) {
+        rect = centerRect(rect ?? { ...node.pos, ...node.size }, viewW, viewH);
+        touched.push('居中');
+      } else if (typeof op.align === 'string' && op.align) {
+        rect = alignRect(rect ?? { ...node.pos, ...node.size }, op.align, viewW, viewH);
+        touched.push('贴边');
+      }
+      if (rect) {
+        const clamped = clampRect(rect, viewW, viewH);
+        patch.pos = { x: clamped.x, y: clamped.y };
+        patch.size = { w: clamped.w, h: clamped.h };
+      }
+
       if (typeof op.status === 'string' && ['active', 'minimized', 'closed'].includes(op.status)) {
         patch.status = op.status as ComponentNode['status'];
         touched.push(op.status === 'active' ? '显示' : op.status === 'minimized' ? '最小化' : '关闭');
@@ -266,13 +306,23 @@ export function registerNodeInterfaces(): void {
       if (op.tokens && Object.keys(tokenPatch).length === 0 && Object.keys(tokensOf(op.tokens)).length > 0) {
         return fail('tokens 里没有合法的 --ygg- 变量。');
       }
+      if (op.focus === true) touched.push('置顶');
       if (touched.length === 0) {
-        return fail('update_component 没有给出任何要改的字段（source / name / pos / size / status / z / tokens）。');
+        return fail(
+          'update_component 没有给出任何要改的字段（source / name / pos / size / dx / dy / dw / dh / ' +
+            'center / fill / align / focus / status / z / tokens）。',
+        );
       }
       useDesktopStore.getState().updateNode(id, patch as Partial<YggNode>);
+      // 置顶走 store 的统一层级逻辑，比自己编一个 z 值可靠。
+      if (op.focus === true) useDesktopStore.getState().bringToFront(id);
       desktop().log('op', '~ comp ' + node.name + ' [' + touched.join('+') + ']', id);
+      const after = findComponent(id);
+      const geo = after
+        ? '现在 pos=' + after.pos.x + ',' + after.pos.y + ' size=' + after.size.w + 'x' + after.size.h
+        : '';
       return ok('已修改组件「' + node.name + '」：' + touched.join('、'), {
-        observation: '组件 id=' + id + ' 的 ' + touched.join('、') + ' 已更新。',
+        observation: '组件 id=' + id + ' 的 ' + touched.join('、') + ' 已更新。' + geo,
       });
     },
   });

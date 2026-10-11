@@ -54,6 +54,34 @@ function agentsText(): string {
     .join('\n');
 }
 
+/** 把一个节点的完整现状写成文本（"查看这个页面"）。 */
+function nodeText(n: YggNode): string {
+  const lines = [
+    'id: ' + n.id,
+    'kind: ' + n.kind,
+    'name: ' + n.name,
+    'status: ' + n.status,
+    'pos: ' + (n.pos ? n.pos.x + ',' + n.pos.y : '（无）'),
+    'size: ' + (n.size ? n.size.w + 'x' + n.size.h : '（无）'),
+    'z: ' + (typeof n.z === 'number' ? n.z : '（无）'),
+    n.parentId ? 'parentId: ' + n.parentId : 'parentId: （无）',
+  ];
+  const tokens = n.tokens ? Object.entries(n.tokens) : [];
+  if (tokens.length > 0) lines.push('局部样式: ' + tokens.map(([k, v]) => k + '=' + v).join(' '));
+  if (n.kind === 'component') {
+    lines.push(
+      n.agent
+        ? 'agent 能力: 已接入（职责：' + (n.agent.systemPrompt || '（空）') + '；工具：' +
+          (n.agent.toolIds.join(', ') || '全部') + '；消息 ' + n.agent.messages.length + ' 条）'
+        : 'agent 能力: 未接入',
+    );
+  }
+  const src = (n.kind === 'component' || n.kind === 'tool') && n.source ? n.source : '';
+  if (!src) return lines.join('\n');
+  const clipped = src.length > 30000 ? src.slice(0, 30000) + '\n…（源码过长已截断，共 ' + src.length + ' 字符）' : src;
+  return lines.join('\n') + '\n\n源码：\n' + clipped;
+}
+
 export function registerCoreInterfaces(): void {
   registerInterface({
     kind: 'create_tool',
@@ -148,20 +176,39 @@ export function registerCoreInterfaces(): void {
     kind: 'inspect',
     label: '查看界面结构',
     description:
-      '读取当前界面结构并回传给你自己，用于改动前确认 id 与现状。before 可选：windows（窗口）/ agents（Agent）/ tree / tokens / surfaces / tools / all。',
-    example: { kind: 'inspect', before: 'all' },
+      '查看当前界面结构（"看看页面上现在有什么"）。before 可选：' +
+      'windows（视口 + 全部窗口）/ component（**某一个页面的完整现状与源码**，需同时给 id）/ ' +
+      'agents / tree / tokens / surfaces / tools / all。',
+    example: { kind: 'inspect', before: 'component', id: 'n_xxx' },
     handler: (op) => {
       const s = desktop();
       const part = strOr(op.before, 'all');
       const chunks: string[] = [];
-      if (part === 'all' || part === 'windows') chunks.push('## 窗口\n' + windowsText());
+      const viewport = '## 视口\n' + s.viewW + ' x ' + s.viewH + '（窗口坐标原点在左上角）';
+      if (part === 'all' || part === 'windows') {
+        chunks.push(viewport);
+        chunks.push('## 窗口\n' + windowsText());
+      }
       if (part === 'all' || part === 'agents') chunks.push('## Agent\n' + agentsText());
       if (part === 'all' || part === 'tree') chunks.push('## 节点树\n' + treeText(s.nodes, s.rootId));
       if (part === 'all' || part === 'tokens') chunks.push('## 样式变量\n' + themeText(s.tokens));
       if (part === 'all' || part === 'surfaces') chunks.push('## 界面插槽\n' + surfacesText());
       if (part === 'all' || part === 'tools') chunks.push('## 工具\n' + toolCatalogText(toolCatalog()));
+      if (part === 'component') {
+        const cid = strOr(op.id, '');
+        const target = cid ? s.nodes[cid] : undefined;
+        if (!target) {
+          const list = Object.values(s.nodes)
+            .filter((n) => n.kind === 'component' && !n.root)
+            .map((n) => n.name + '(' + n.id + ')')
+            .join('、');
+          return fail('inspect before="component" 需要 id。当前窗口：' + (list || '（没有窗口）'));
+        }
+        chunks.push(viewport);
+        chunks.push('## 页面 ' + target.name + '\n' + nodeText(target));
+      }
       if (chunks.length === 0) {
-        return fail('inspect 的 before 只接受 windows / agents / tree / tokens / surfaces / tools / all。');
+        return fail('inspect 的 before 只接受 windows / component / agents / tree / tokens / surfaces / tools / all。');
       }
       if (part === 'all') {
         const total = Object.keys(s.nodes).length;

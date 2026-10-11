@@ -30,18 +30,22 @@ export function queueLength(): number {
  * 提交一条输入。
  * 空闲 → 立刻开跑；忙碌 → 入队，等当前任务结束后自动发送。
  * 目标 Agent 不存在时在**提交那一刻**回落到基底。
+ *
+ * 返回是否真的收下了。调用方据此决定要不要清空输入框 ——
+ * 先清空再判断，一旦这里没收下，用户的话就凭空消失了（"内容被吞掉"）。
  */
-export function submitInput(text: string, originId?: NodeId): void {
+export function submitInput(text: string, originId?: NodeId): boolean {
   const value = text.trim();
-  if (!value) return;
+  if (!value) return false;
   const store = useDesktopStore.getState();
   const target = originId && store.nodes[originId] ? originId : store.rootId;
 
   if (busy) {
     store.enqueue({ id: newId(), text: value, originId: target, createdAt: Date.now() });
-    return;
+    return true;
   }
   void drain(value, target);
+  return true;
 }
 
 /**
@@ -71,7 +75,11 @@ async function drain(firstText: string, firstOrigin: NodeId): Promise<void> {
         next = useDesktopStore.getState().shiftQueued();
       }
       text = next ? next.text : null;
-      if (next) origin = next.originId;
+      if (next) {
+        origin = next.originId;
+        // 出队时留一条日志：排队项到底有没有被发出去，日志里能查。
+        useDesktopStore.getState().log('info', 'queue → ' + next.text.slice(0, 60));
+      }
     }
   } finally {
     busy = false;

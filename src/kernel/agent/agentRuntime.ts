@@ -57,11 +57,20 @@ function stripFence(text: string): string {
   return (m ? m[1] : text).trim();
 }
 
-/** Agent 的上下文历史：只放对话，不放每步的执行回执（那些走 trace）。 */
-function transcriptToMessages(node: YggNode): ChatMessage[] {
+/**
+ * Agent 的上下文历史：只放对话，不放每步的执行回执（那些走 trace）。
+ *
+ * 读**最新**的节点，然后**只去掉末尾那一条当前输入**。
+ * 之前是拿 runDerivation 开头那份旧快照再按内容全局过滤，有两个毛病：
+ * 1. 同一句话连发两次时，会把上一次那条真实请求也从历史里删掉（历史被改写）；
+ * 2. 旧快照与真实历史可能已经不一致。
+ */
+function historyMessages(nodeId: NodeId, input: string): ChatMessage[] {
+  const node = useDesktopStore.getState().nodes[nodeId];
   if (!isAgentic(node)) return [];
-  return node.agent.messages
-    .slice(-MAX_HISTORY_MESSAGES)
+  const list = node.agent.messages.slice(-MAX_HISTORY_MESSAGES);
+  if (list.length > 0 && list[list.length - 1].content === input) list.pop();
+  return list
     .filter((m: Message) => m.role !== 'system')
     .map((m: Message) => ({ role: m.role, content: m.content }));
 }
@@ -98,6 +107,13 @@ function isRetryable(msg: string): boolean {
 
 const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
 
+/**
+ * 单次模型请求的超时。
+ * 没有它，一个卡住的连接会让调度器永远停在 busy —— 之后所有输入都只会进队列、永远发不出去，
+ * 用户看到的就是"消息被吞掉"。
+ */
+const REQUEST_TIMEOUT_MS = 120000;
+
 /** 单次运行允许的"出错后重来"次数上限，防止反复失败烧掉轮次。 */
 const MAX_RECOVERIES = 3;
 
@@ -120,13 +136,17 @@ async function chatWithRetry(
 ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
   let lastError = '';
   for (let i = 0; i < attempts; i += 1) {
+    const ctl = new AbortController();
+    const timer = window.setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const text = await chatStream(settings, messages, { onDelta });
+      const text = await chatStream(settings, messages, { onDelta, signal: ctl.signal });
       return { ok: true, text };
     } catch (e) {
       lastError = (e as Error).message;
       if (!isRetryable(lastError) || i === attempts - 1) break;
       await sleep(400 * (i + 1));
+    } finally {
+      window.clearTimeout(timer);
     }
   }
   return { ok: false, error: lastError };
@@ -235,6 +255,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
       const systemPrompt = buildSystemPrompt({
         nodes: deskNodes(),
         rootId: desktop().rootId,
+        viewW: desktop().viewW,
+        viewH: desktop().viewH,
         tokens: desktop().tokens,
         tools: agentTools(origin),
         originName: origin.name,
@@ -246,7 +268,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
 
       const messages: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
-        ...transcriptToMessages(origin).filter((m) => m.content !== input),
+        ...historyMessages(originId, input),
         { role: 'user', content: input },
       ];
       if (observationLog.length > 0) {

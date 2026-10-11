@@ -15,6 +15,8 @@ const MAX_LINES = 6;
 export function YggdrasilInput() {
   const [text, setText] = useState('');
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  /** 输入法正在拼字。拼字期间的回车是"确认候选词"，不是"发送"。 */
+  const composing = useRef(false);
   const [areaH, setAreaH] = useState(LINE_H);
   const running = useDesktopStore((s) => s.status.running);
   const phase = useDesktopStore((s) => s.status.phase);
@@ -32,12 +34,20 @@ export function YggdrasilInput() {
   // 正在跑、或者还有排队项没消化完，都算"忙"：此时提交进入队列而不是被拒。
   const busy = running || queue.length > 0;
 
+  /**
+   * 提交。
+   *
+   * 两点是"内容被吞掉 / 读回上一条"的根治：
+   * 1. **直接读 textarea 的当前值**，不读 React state —— 中文输入法确认候选词的瞬间，
+   *    state 可能还停在上一帧，读 state 就会把上一条内容再发一次。
+   * 2. **确认真的收下了才清空**。先清空再提交，一旦提交没被接受，用户的话就没了。
+   */
   const submit = () => {
-    const value = text.trim();
+    const el = areaRef.current;
+    const value = (el ? el.value : text).trim();
     if (!value) return;
-    setText('');
     // 空闲就立刻开跑，忙碌就排队 —— 由调度器判断，界面不需要知道。
-    submitInput(value);
+    if (submitInput(value)) setText('');
   };
 
   /**
@@ -95,7 +105,19 @@ export function YggdrasilInput() {
             rows={1}
             spellCheck={false}
             onChange={(e) => setText(e.target.value)}
+            onCompositionStart={() => {
+              composing.current = true;
+            }}
+            onCompositionEnd={() => {
+              composing.current = false;
+            }}
             onKeyDown={(e) => {
+              /*
+               * 中文输入法用回车**确认候选词**，那不是"发送"。
+               * 不拦住的话：发出去的是还没提交的拼音、或者上一帧的旧内容 ——
+               * 这正是"排队系统把内容吞掉/读回上一条"的根因。
+               */
+              if (composing.current || e.nativeEvent.isComposing || e.keyCode === 229) return;
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 submit();
