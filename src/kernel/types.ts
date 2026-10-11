@@ -132,6 +132,14 @@ export interface SurfaceDef {
   critical?: boolean;
   /** critical 插槽必须保留的能力说明，写给 Agent 看。 */
   capabilityHint?: string;
+  /**
+   * **内置实现是什么**，写给 Agent 看。
+   *
+   * 插槽的"内置实现"是宿主自己的代码，不是 Agent 写的、也读不到源码 ——
+   * 但 Agent 要替换它、就必须知道它原本长什么样、靠哪些类名和结构工作。
+   * 没有这段说明，Agent 只能对着一个"使用内置实现"的字符串干猜。
+   */
+  builtinHint?: string;
 }
 
 export interface SurfaceState {

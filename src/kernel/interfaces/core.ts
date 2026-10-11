@@ -40,6 +40,105 @@ function windowsText(): string {
 }
 
 /**
+ * 一个 Agent 的完整现状：职责全文、工具子集、作用域、账本、最近消息。
+ *
+ * 为什么需要：组件出问题时，光有源码不够 —— 还要知道"它接收过什么、
+ * 它做过什么"。账本记录的是跨刷新保留的"已做过的事"，消息记录的是它自己的对话。
+ * 没有这个入口，调一个 Agent 组件就只能靠猜它记得什么。
+ */
+function agentDetailText(id: string): string {
+  const node = desktop().nodes[id];
+  if (!node || !isAgentNode(node)) return '（' + id + ' 不是 Agent）';
+  const f = node.agent!;
+  const lines: string[] = [];
+  lines.push('- 名称：「' + node.name + '」 id=' + id);
+  lines.push('- 位置：' + (node.root === true ? '基底（所有消息的默认接收者）' : '挂在组件 ' + node.parentId + ' 上'));
+  lines.push('- 职责（systemPrompt）：' + (f.systemPrompt || '（空）'));
+  lines.push('- 工具子集：' + (f.toolIds.length ? f.toolIds.join(', ') : '全部可用工具'));
+  lines.push('- 作用域：' + (f.scope === '*' ? '全部节点' : (f.scope as string[]).join(', ') || '（空）'));
+
+  lines.push('', '账本（跨刷新保留，"已经做过的事"，共 ' + f.ledger.length + ' 条）：');
+  if (f.ledger.length === 0) lines.push('（空）');
+  else for (const e of f.ledger.slice(-30)) lines.push('- ' + e);
+
+  lines.push('', '最近消息（共 ' + f.messages.length + ' 条，只列最近 ' + Math.min(10, f.messages.length) + ' 条）：');
+  if (f.messages.length === 0) lines.push('（空）');
+  else {
+    for (const m of f.messages.slice(-10)) {
+      const text = m.content.length > 200 ? m.content.slice(0, 200) + '…' : m.content;
+      lines.push('[' + m.role + '] ' + text + (m.images?.length ? '（含 ' + m.images.length + ' 张图片）' : ''));
+    }
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 一个工具的完整现状：说明、参数 schema、源码。
+ *
+ * 内置工具由宿主实现，没有可编辑的源码 —— 但必须**说清楚**，
+ * 而不是让 Agent 对着一个列在目录里的 id 查不到东西。
+ */
+function toolDetailText(id: string): string {
+  const tool = getTool(id);
+  if (!tool) return '（工具 ' + id + ' 已不在注册表里）';
+  const lines: string[] = [];
+  lines.push('- 说明：' + (tool.description || '（无）'));
+  lines.push('- 类型：' + (tool.builtin ? '内置（宿主实现）' : '派生（Agent 写的）'));
+  lines.push('- 参数 schema：' + JSON.stringify(tool.paramsSchema ?? {}));
+  const node = desktop().nodes[id];
+  if (node) {
+    lines.push('- 所属：挂在 ' + node.parentId + ' 下' + (node.description ? '；备注：' + node.description : ''));
+  }
+  lines.push('');
+  if (tool.source) {
+    const clipped =
+      tool.source.length > 30000
+        ? tool.source.slice(0, 30000) + '\n…（源码过长已截断，共 ' + tool.source.length + ' 字符）'
+        : tool.source;
+    lines.push('源码（这就是它现在真实执行的东西）：', clipped);
+  } else {
+    lines.push(
+      '源码：**没有** —— 这是宿主内置的工具（' + id + '），没有可编辑的源码。',
+      '要改它的行为：用 create_tool 派生一个自己的工具（在源码里实现你要的算法），再用 call_tool 调它。',
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 一个插槽的完整现状：状态、可用 props、内置实现说明、以及**当前源码**。
+ *
+ * 这是"把背景换成 WebGL"这类请求的关键一环：
+ * 插槽不是窗口，inspect before="component" 找不到它；
+ * 而 list_surfaces 只给目录。没有这个入口，Agent 拿不到背景的现状，
+ * 只能对着一个名字凭空写一份替换实现 —— 或者干脆放弃。
+ */
+function surfaceDetailText(def: ReturnType<typeof getSurfaceDef> & object): string {
+  const lines: string[] = [];
+  lines.push('- 说明：' + def.description);
+  lines.push('- 状态：' + (getSurfaceState(def.id) ? '已被覆写（Agent 写的）' : '使用内置实现（宿主内置，非 Agent 源码）'));
+  if (def.propsHint) lines.push('- 可用 props：' + def.propsHint);
+  lines.push('- 关键插槽：' + (def.critical ? '是（不要替换）' : '否'));
+  if (def.capabilityHint) lines.push('- 能力约束：' + def.capabilityHint);
+  if (def.builtinHint) lines.push('- 内置实现：' + def.builtinHint);
+
+  const cur = getSurfaceState(def.id)?.source;
+  if (cur) {
+    const clipped = cur.length > 30000 ? cur.slice(0, 30000) + '\n…（源码过长已截断，共 ' + cur.length + ' 字符）' : cur;
+    lines.push('', '当前源码（这就是它现在真实渲染的东西）：', clipped);
+    lines.push('', '要改它就用 patch_source 的 surface 参数定点改；要整体换掉用 replace_surface。');
+  } else {
+    lines.push(
+      '',
+      '当前源码：**没有** —— 它现在渲染的是宿主内置实现，没有可读的源码。',
+      '要换成你自己的实现：用 replace_surface 给一份完整 source；之后它就变成"已被覆写"，' +
+        '再用 inspect before="surface" 就能读到源码，也就能用 patch_source 定点改了。',
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
  * 应用日志。**组件运行时报错只在这里**（ErrorBoundary 会记一条 error），
  * 所以这是"修一个坏掉的组件"的第一步：先看日志里到底报了什么，
  * 再 inspect before="component" 看当前源码，最后用 patch_source 定点改。
@@ -200,6 +299,9 @@ export function registerCoreInterfaces(): void {
     description:
       '查看当前界面结构（"看看页面上现在有什么"）。before 可选：' +
       'windows（视口 + 全部窗口）/ component（**某一个页面的完整现状与源码**，需同时给 id）/ ' +
+      'tool（**某一个工具的源码**，需同时给 id）/ ' +
+      'agent（**某一个 Agent 的职责全文、账本与最近消息**，需同时给 id）/ ' +
+      'surface（**某一个插槽的当前源码与内置实现说明**，需同时给 surface）/ ' +
       'logs（**应用日志，组件运行时报错就在这里**）/ agents / tree / tokens / surfaces / tools / all。',
     example: { kind: 'inspect', before: 'component', id: 'n_xxx' },
     handler: (op) => {
@@ -217,6 +319,45 @@ export function registerCoreInterfaces(): void {
       if (part === 'all' || part === 'surfaces') chunks.push('## 界面插槽\n' + surfacesText());
       if (part === 'all' || part === 'tools') chunks.push('## 工具\n' + toolCatalogText(toolCatalog()));
       if (part === 'all' || part === 'logs') chunks.push('## 日志\n' + logsText());
+      if (part === 'agent') {
+        const aid = strOr(op.id, '');
+        const a = aid ? s.nodes[aid] : undefined;
+        if (!aid || !a || !isAgentNode(a)) {
+          const list = Object.values(s.nodes)
+            .filter(isAgentNode)
+            .map((n) => n.name + '(' + n.id + ')')
+            .join('、');
+          return fail('inspect before="agent" 需要 id，且该节点要具备 agent 能力。当前 Agent：' + (list || '（没有）'));
+        }
+        chunks.push('## Agent ' + a.name + '\n' + agentDetailText(aid));
+      }
+      if (part === 'surface') {
+        const sid = strOr(op.surface, '');
+        const def = sid ? getSurfaceDef(sid) : undefined;
+        if (!sid || !def) {
+          return fail(
+            'inspect before="surface" 需要 surface。可用插槽：' +
+              (listSurfaces().map((s) => s.id).join('、') || '（无）'),
+          );
+        }
+        chunks.push('## 插槽 ' + def.id + '「' + def.label + '」\n' + surfaceDetailText(def));
+      }
+      if (part === 'tool') {
+        const tid = strOr(op.id, '');
+        /*
+         * 从**工具注册表**查，而不是从节点树查：
+         * 内置工具（builtin.calc 等）只有注册表条目、没有节点 ——
+         * 从节点查会对着一份列着它们 id 的目录报"找不到"，这是纯粹的误导。
+         */
+        const tool = tid ? getTool(tid) : undefined;
+        if (!tid || !tool) {
+          const list = toolCatalog()
+            .map((t) => t.name + '(' + t.id + ')')
+            .join('、');
+          return fail('inspect before="tool" 需要 id，且该 id 必须是已注册的工具。当前工具：' + (list || '（没有工具）'));
+        }
+        chunks.push('## 工具 ' + tool.name + '\n' + toolDetailText(tid));
+      }
       if (part === 'component') {
         const cid = strOr(op.id, '');
         const target = cid ? s.nodes[cid] : undefined;
@@ -232,7 +373,7 @@ export function registerCoreInterfaces(): void {
       }
       if (chunks.length === 0) {
         return fail(
-          'inspect 的 before 只接受 windows / component / logs / agents / tree / tokens / surfaces / tools / all。',
+          'inspect 的 before 只接受 windows / component / tool / surface / agent / logs / agents / tree / tokens / surfaces / tools / all。',
         );
       }
       if (part === 'all') {
@@ -309,8 +450,9 @@ export function registerCoreInterfaces(): void {
         const cur = getSurfaceState(surface)?.source;
         if (!cur) {
           return fail(
-            '插槽 ' + surface + ' 目前还是**内置实现**，没有可改的源码。' +
-              '要换成你自己的实现请用 replace_surface 整段给一次 source。',
+            '插槽 ' + surface + ' 目前还是**内置实现**（宿主内置，没有可读的源码），不能 patch。' +
+              '先 `inspect before="surface" surface="' + surface + '"` 看它现在的结构与内置实现说明，' +
+              '再用 replace_surface 给一份**完整**实现；之后它就是"已被覆写"，也就能用 patch_source 定点改了。',
           );
         }
         current = cur;

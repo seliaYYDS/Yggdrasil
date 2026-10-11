@@ -69,14 +69,22 @@ export function importSurfaceStates(saved: Record<string, string> | undefined | 
   emit();
 }
 
-/** 描述界面结构，供 LLM 阅读。 */
+/**
+ * 描述界面结构，供 LLM 阅读。
+ *
+ * 这里**只给目录**，不给源码 —— 源码可能很长，全部塞进系统提示会把上下文占满。
+ * 所以每一项都附上"怎么读它"的命令：`inspect before="surface" surface=...`。
+ * 没有这条指引的话，Agent 会卡在"抓不到这个插槽的源码"上（背景换 WebGL 就是这么卡的）。
+ */
 export function surfacesText(): string {
   const list = listSurfaces();
   if (list.length === 0) return '（当前没有可替换的界面插槽）';
   return list
     .map((s) => {
       const cur = states.get(s.id);
-      const state = cur ? '已被覆写' : '使用内置实现';
+      const state = cur
+        ? `已被覆写（${cur.source.length} 字符）—— 看它当前源码：inspect before="surface" surface="${s.id}"`
+        : '使用内置实现（读不到源码，看它长什么样：inspect before="surface"）';
       const hint = s.propsHint ? `；可用 props：${s.propsHint}` : '';
       const warn = s.critical
         ? `\n    ⚠ 关键插槽：承载窗口基础能力（${s.capabilityHint ?? '未知'}）。替换它会破坏这些能力，**不要动它**。`
