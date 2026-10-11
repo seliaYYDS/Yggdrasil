@@ -368,10 +368,14 @@ Agent 的每一步都可查看。
 默认指向**扁平与克制**：界面上没有多余的框线，重点靠颜色与位置表达。
 
 - 变量集中在 `src/theme/engine.ts`，`--ygg-shadow` 与 `--ygg-glow` 默认都是 `none`。
-- **字体**：默认走衬线（贴合"世界树 / 古树刻痕"）。`--ygg-font` 正文、
-  `--ygg-font-display` 标题、`--ygg-font-mono` 等宽，三个都在主题白名单里，Agent 可以改。
-  全部使用本地字体、不下载 webfont —— 离线可用，也不受网络与地区限制。
-  拉丁衬线排在中文衬线前面（反过来的话拉丁字母会用中文字体画）。
+- **字体**：主字体是**霞鹜文楷**（LXGW WenKai TC Regular，楷体），文件在
+  `public/fonts/LXGWWenKaiTC-Regular.ttf`（12.5 MB，随仓库一起提交，附 `OFL.txt`）。
+  由 `src/styles/tokens.css` 里的 `@font-face` 加载：`local()` 优先（机器上装了就不用下载）、
+  `font-display: swap`（字体没加载好也先显示回退字）。**完全离线，不依赖任何 webfont 服务。**
+- 三个字体令牌都在主题白名单里，Agent 可以改：`--ygg-font` 正文、`--ygg-font-display` 标题、
+  `--ygg-font-mono` 等宽（代码 / 日志 / 轨迹耗时仍走等宽，不受文楷影响）。
+  回退栈是"拉丁衬线在前、中文衬线在后"——反过来的话拉丁字母会用中文字体画。
+  删掉字体文件也不会坏：会静默落到回退的衬线字体。
 - 没有渐变，没有单侧边框：桌面背景是纯色；成败提示与错误面板用整圈描边；Agent 消息条用整块底色。
   **边只出现在窗口根容器这一层，容器内部不画任何分隔线。**
 - 只有 `THEMEABLE_KEYS` 里列出的变量允许被改写；动效时长与缓动（`--ygg-t-fast` / `--ygg-t` /
