@@ -85,6 +85,12 @@ export function emptyStatus(): RunStatus {
 export function sessionIdOf(n: number): string {
   return n <= 1 ? MAIN_SESSION : 'input-' + n;
 }
+/** 反过来：从 id 取回序号。认不出来返回 0。 */
+export function numberOfSessionId(id: string): number {
+  if (id === MAIN_SESSION) return 1;
+  const m = /^input-(\d+)$/.exec(id);
+  return m ? Number(m[1]) : 0;
+}
 export function sessionTitleOf(n: number): string {
   return n <= 1 ? 'Yggdrasil' : 'Yggdrasil ' + n;
 }
@@ -665,10 +671,27 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     const viewW = window.innerWidth;
     const viewH = window.innerHeight;
     const firstRect = panels?.input ?? resolveInputRect(viewW, viewH);
-    const restored: InputSession[] = Array.isArray(sessions) && sessions.length > 0
-      ? sessions.slice(0, MAX_SESSIONS).map((p, i) => ({
-          id: typeof p.id === 'string' && p.id ? p.id : sessionIdOf(i + 1),
-          title: typeof p.title === 'string' && p.title ? p.title : sessionTitleOf(i + 1),
+    const restored: InputSession[] = [];
+    if (Array.isArray(sessions) && sessions.length > 0) {
+      const taken = new Set<string>();
+      for (const [i, p] of sessions.slice(0, MAX_SESSIONS).entries()) {
+        let id = typeof p.id === 'string' && p.id ? p.id : sessionIdOf(i + 1);
+        /*
+         * 去重：早期版本用 `length + 1` 编序号，关掉中间的输入框后会把同一个 id
+         * 发给两个会话 —— 那种脏数据可能已经存进浏览器了，恢复时必须修掉，
+         * 否则两个窗口会互相顶掉（同样的 id = 同一个 DOM key、同一个 store 项）。
+         */
+        if (taken.has(id)) {
+          let n = 1;
+          while (taken.has(sessionIdOf(n))) n += 1;
+          id = sessionIdOf(n);
+        }
+        taken.add(id);
+        // 标题跟着 id 走，避免"id 是 input-3、标题却写着 Yggdrasil 2"这种错位。
+        const n = numberOfSessionId(id) || i + 1;
+        restored.push({
+          id,
+          title: sessionTitleOf(n),
           rect: fitRectToViewport(
             p.rect ?? firstRect,
             viewW,
@@ -676,13 +699,16 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
             PANEL_MIN_SESSION.w,
             PANEL_MIN_SESSION.h,
           ),
-          z: typeof p.z === 'number' ? p.z : 2 + i,
+          z: typeof p.z === 'number' ? p.z : 2 + n,
           minimized: p.minimized === true,
           status: emptyStatus(),
           trace: [],
           queue: [],
-        }))
-      : [makeSession(1, firstRect, viewW, viewH)];
+        });
+      }
+    } else {
+      restored.push(makeSession(1, firstRect, viewW, viewH));
+    }
     const legacyZ = panelZ?.input;
     if (typeof legacyZ === 'number' && restored[0]) restored[0].z = legacyZ;
 
@@ -834,8 +860,15 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   addSession: () => {
     const s = get();
-    const n = s.sessions.length + 1;
-    if (n > MAX_SESSIONS) return '';
+    if (s.sessions.length >= MAX_SESSIONS) return '';
+    /*
+     * 序号要挑**空出来的**，不能直接用 `length + 1`。
+     * 关掉中间一个（或关掉第一个）之后 length 会变小，再加就会撞上已存在的 id ——
+     * 例如只剩 'input-2' 时 length === 1，length + 1 又算回 2，于是开出第二个 'input-2'。
+     */
+    const used = new Set(s.sessions.map((x) => x.id));
+    let n = 1;
+    while (used.has(sessionIdOf(n))) n += 1;
     const fresh = makeSession(n, resolveInputRect(s.viewW, s.viewH), s.viewW, s.viewH);
     set({ sessions: [...s.sessions, fresh], focusedId: fresh.id });
     schedulePersist();
