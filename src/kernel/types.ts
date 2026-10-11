@@ -11,6 +11,11 @@ export type NodeStatus = 'active' | 'minimized' | 'closed' | 'error';
 export interface Message {
   role: 'system' | 'user' | 'assistant';
   content: string;
+  /**
+   * 这一条附带的图片（data URL）。用户在输入框里粘贴或拖进来的。
+   * 只有 user 消息会带。发请求时会被拼成多模态 content。
+   */
+  images?: string[];
 }
 
 export interface JsonSchema {

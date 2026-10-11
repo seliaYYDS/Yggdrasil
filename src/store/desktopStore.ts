@@ -50,6 +50,8 @@ export interface QueuedInput {
   /** 目标 Agent（组件 id）。发出时若该组件已被删，会自动回落到基底。 */
   originId: NodeId;
   createdAt: number;
+  /** 这条排队输入附带的图片（data URL）。 */
+  images?: string[];
 }
 
 /**

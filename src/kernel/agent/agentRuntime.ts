@@ -12,7 +12,7 @@ import type {
 } from '../types';
 import { newId } from '../ids';
 import { chatStream } from '../llm/client';
-import type { ChatMessage } from '../llm/types';
+import type { ChatMessage, ContentPart } from '../llm/types';
 import { parsePlan } from './parse';
 import {
   buildObservationPrompt,
@@ -72,7 +72,7 @@ function historyMessages(nodeId: NodeId, input: string): ChatMessage[] {
   if (list.length > 0 && list[list.length - 1].content === input) list.pop();
   return list
     .filter((m: Message) => m.role !== 'system')
-    .map((m: Message) => ({ role: m.role, content: m.content }));
+    .map((m: Message) => ({ role: m.role, content: userContent(m.content, m.images) }));
 }
 
 function appendMessage(nodeId: NodeId, message: Message): void {
@@ -86,6 +86,21 @@ export interface RunOptions {
   originId?: NodeId;
   /** 发起这次运行的输入框（会话）。工作状态按会话隔离，默认是主会话。 */
   sessionId?: string;
+  /** 这次请求附带的图片（data URL）。用户在输入框里粘贴或拖进来的。 */
+  images?: string[];
+}
+
+/**
+ * 一条用户消息的 content。
+ * 没有图片就是纯文本；有图片时拼成多模态内容块（OpenAI 兼容格式）。
+ * 抽成独立函数是为了能直接单测形状。
+ */
+export function userContent(text: string, images?: string[]): ChatMessage['content'] {
+  const list = (images ?? []).filter((u) => typeof u === 'string' && u.startsWith('data:image/'));
+  if (list.length === 0) return text;
+  const parts: ContentPart[] = [{ type: 'text', text }];
+  for (const url of list) parts.push({ type: 'image_url', image_url: { url } });
+  return parts;
 }
 
 export interface RunSummary {
@@ -131,6 +146,26 @@ const MAX_RAW_CHARS = 20000;
 /** 流式刷新节流：每个 chunk 都写一次 store 会让轨迹面板不停重渲染。 */
 const STREAM_FLUSH_MS = 120;
 
+
+/**
+ * 带图片的请求失败时，给用户一句能直接照做的提示。
+ *
+ * 浏览器的报错千奇百怪，但"模型不支持识图"是这类失败里最常见的一种 ——
+ * 而且用户从原始报错里基本看不出来该做什么。这里不假装能精确判定，
+ * 只在错误里能看出跟图片/多模态有关时说得更肯定一点。
+ */
+function visionHint(images: string[], error: string): string {
+  if (images.length === 0) return '';
+  const looksVision = /image|vision|multi-?modal|modalit|content|unsupported|not support/i.test(error);
+  return (
+    '\n\n' +
+    (looksVision
+      ? '这个报错看起来和图片有关：**当前模型大概率不支持识图**。'
+      : '这次请求带了 ' + images.length + ' 张图片。如果模型不支持识图，就会像这样整条失败。') +
+    '请在右上角设置里换一个支持视觉的模型（例如 gpt-4o / claude-3.5 / qwen-vl）再试；' +
+    '换成纯文本模型时，先把图片去掉。'
+  );
+}
 
 /** 当前请求的标记，与提示词里的「你每次只处理标注为【本次请求】的那一条消息」对应。 */
 const CURRENT_REQUEST_TAG = '【本次请求】';
@@ -200,10 +235,13 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
   }
 
   const sessionId = options.sessionId ?? MAIN_SESSION;
+  const images = (options.images ?? []).filter(
+    (u) => typeof u === 'string' && u.startsWith('data:image/'),
+  );
   const runId = newId();
   store.beginSessionTrace(sessionId, runId);
   store.setSessionStatus(sessionId, { running: true, phase: '准备上下文', detail: '', round: 0, runId });
-  appendMessage(originId, { role: 'user', content: input });
+  appendMessage(originId, { role: 'user', content: input, ...(images.length ? { images } : {}) });
 
   const pushStep = (step: TraceStep) => useDesktopStore.getState().upsertSessionStep(sessionId, step);
   const setRunStatus = (patch: Partial<RunStatus>): void =>
@@ -314,7 +352,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           ...historyMessages(originId, input),
           // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
           // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
-          { role: 'user', content: CURRENT_REQUEST_TAG + '\n' + input },
+          { role: 'user', content: userContent(CURRENT_REQUEST_TAG + '\n' + input, images) },
         ];
         if (observationLog.length > 0) {
           messages.push({ role: 'user', content: buildObservationPrompt(observationLog) });
@@ -374,7 +412,13 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             notifyRetry(round, '模型调用失败，正在重试：' + msg);
             continue;
           }
-          useDesktopStore.getState().setFeedback(mkFeedback('fail', '模型调用失败（已重试）', msg));
+          useDesktopStore.getState().setFeedback(
+            mkFeedback(
+              'fail',
+              images.length > 0 ? '带图片的请求失败' : '模型调用失败（已重试）',
+              msg + visionHint(images, msg),
+            ),
+          );
           return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: msg });
         }
         const raw = call.text;
@@ -400,7 +444,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             continue;
           }
           useDesktopStore.getState().setFeedback(
-            mkFeedback('fail', '模型反复没有输出合法指令', err),
+            mkFeedback('fail', '模型反复没有输出合法指令', err + visionHint(images, err)),
           );
           return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: err });
         }

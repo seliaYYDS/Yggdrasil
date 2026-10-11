@@ -43,20 +43,28 @@ export function queueLength(sessionId: string = MAIN_SESSION): number {
  */
 export function submitInput(
   text: string,
-  options: { originId?: NodeId; sessionId?: string } = {},
+  options: { originId?: NodeId; sessionId?: string; images?: string[] } = {},
 ): boolean {
   const value = text.trim();
-  if (!value) return false;
+  const images = options.images ?? [];
+  // 只有图片没有文字也要能发（"看看这张图"）。
+  if (!value && images.length === 0) return false;
   const store = useDesktopStore.getState();
   const sessionId = options.sessionId ?? MAIN_SESSION;
   if (!store.sessions.some((s) => s.id === sessionId)) return false;
   const target = options.originId && store.nodes[options.originId] ? options.originId : store.rootId;
 
   if (busy.has(sessionId)) {
-    store.enqueue(sessionId, { id: newId(), text: value, originId: target, createdAt: Date.now() });
+    store.enqueue(sessionId, {
+      id: newId(),
+      text: value,
+      originId: target,
+      createdAt: Date.now(),
+      ...(images.length ? { images } : {}),
+    });
     return true;
   }
-  void drain(sessionId, value, target);
+  void drain(sessionId, value, target, images);
   return true;
 }
 
@@ -69,14 +77,20 @@ export function submitInput(
  * 排队期间目标组件被删掉的条目**直接丢弃**，不静默改发给基底：
  * 那会让人以为在跟子 Agent 说话，实际基底收走了（同 §5.30 的教训）。
  */
-async function drain(sessionId: string, firstText: string, firstOrigin: NodeId): Promise<void> {
+async function drain(
+  sessionId: string,
+  firstText: string,
+  firstOrigin: NodeId,
+  firstImages: string[] = [],
+): Promise<void> {
   busy.add(sessionId);
   let text: string | null = firstText;
   let origin: NodeId = firstOrigin;
+  let images: string[] = firstImages;
   try {
     while (text !== null) {
       try {
-        await runDerivation(text, { originId: origin, sessionId });
+        await runDerivation(text, { originId: origin, sessionId, images });
       } catch (e) {
         useDesktopStore.getState().log('error', 'run ✕ ' + (e as Error).message);
       }
@@ -89,7 +103,10 @@ async function drain(sessionId: string, firstText: string, firstOrigin: NodeId):
       text = next ? next.text : null;
       if (next) {
         origin = next.originId;
-        useDesktopStore.getState().log('info', 'queue → ' + next.text.slice(0, 60));
+        images = next.images ?? [];
+        useDesktopStore
+          .getState()
+          .log('info', 'queue → ' + (next.text || '（图片）').slice(0, 60));
       }
     }
   } finally {

@@ -45,6 +45,10 @@ export function SettingsPanel() {
             onChange={(e) => setSettings({ model: e.target.value })}
             spellCheck={false}
           />
+          <div className="ygg-hint">
+            识图需要支持视觉的模型（如 gpt-4o / claude-3.5 / qwen-vl）。
+            纯文本模型收到图片整条请求会失败，输入框会提示。
+          </div>
         </div>
         <div className="ygg-field">
           <label className="ygg-label">Temperature {settings.temperature.toFixed(2)}</label>
