@@ -65,13 +65,13 @@ pnpm preview
 
 ## Agent
 
-**Agent 不是窗口，是一段可挂载的运行时。** 它有一个 `hostId` 指向自己寄生在哪里：
+**Agent 不是窗口，也不是另一种组件 —— 它是挂在组件上的一份能力。**
 
-- `hostId="root"` —— 基底 Agent 或其协作分身。
-- `hostId="<组件 id>"` —— 在某个组件窗口里长出一个子 Agent，它的对话界面嵌在组件内部，
-  拥有独立上下文，可以继续用同一套接口往下创建组件与 Agent。
+- 基底 Agent 是唯一那个 `root` 组件：`scope` 为 `*`，不渲染成窗口、不进任务栏。
+- 任一普通组件的 `agent` facet 就是"子 Agent"：它有自己的上下文、职责与作用域，
+  可以在自己的界面里继续用同一套接口往下创建组件与 Agent。
 
-这就是"无限派生"的形态：不是一条 Agent 链，而是 Agent 挂在组件上、组件又能长出新 Agent 的树。
+这就是"无限派生"的形态：不是一条 Agent 链，而是能力挂在组件上、组件又能长出新的带能力组件的树。
 
 ### Agent 是"能力"，不是界面
 
@@ -99,6 +99,34 @@ pnpm preview
 
 `agent` 里只放能力：`systemPrompt`（职责）、`tools`（工具子集）、`scope`（作用域）。
 **没有 source。**
+
+### 什么时候该接（默认不接）
+
+**agent 能力是重武器，默认不接。** 多一次模型调用、多一份上下文、多一层作用域限制，
+一个本来只是"把东西显示出来"的组件接上它，只会变得又慢又绕。
+
+只有下面任一情况成立才接：
+
+1. 用户明确要求「一个能自己…的助手 / agent / 机器人」；
+2. 用户要求这个组件**持续自主运行**（定时刷新、盯着变化、自主决定下一步）；
+3. 用户要求它**自己接收后续输入并独立决策**，而不是由你一次性做完。
+
+拿不准时**不要接** —— 先做普通组件，之后想让它动起来再 `attach_agent`。
+
+与 agent 无关的请求就更是如此，例如：
+
+| 请求 | 做法 |
+| --- | --- |
+| 「上网搜集新闻」 | `fetch_url` 抓取 + `create_component` 渲染成列表（**普通组件**） |
+| 「做个计算器」 | `create_component`（普通组件） |
+| 「生成一个日历」 | `create_component`（普通组件） |
+| 「把背景换成 WebGL 动画」 | `replace_surface`，与 agent 无关 |
+
+为了不依赖模型自觉，执行器还有一道闸：
+
+- `create_component` 的 `agent` 字段必须是**有实质内容**的（至少一条 `systemPrompt` 或一组 `tools`）。
+  空壳 `agent: {}`、只写了 `scope` 的、`systemPrompt` 全空白的，一律**忽略**，并在返回信息里说明。
+- `attach_agent` 同样要求职责或工具，否则直接拒绝。
 
 ### 在界面里使用这份能力
 
@@ -139,8 +167,9 @@ export default function Weather() {
 之所以要这么严格，是因为早期版本里"未接入"会退回基底 Agent，消息被静默收走，
 从界面上完全看不出来。现在这种情况会立刻暴露。
 
-好消息是通常不用手动处理：**`create_component` 与 `update_component` 检测到源码里有
-`useAgent` 时会自动接入能力**（创建时的返回信息里会注明）。
+好消息是通常不用手动处理：**`create_component` 与 `update_component` 检测到源码里同时出现
+`from "yggdrasil"` 与 `useAgent` 时会自动接入能力**（创建时的返回信息里会注明）。
+只在一句注释里提到 `useAgent` 不会触发。
 
 ### 作用域是硬约束
 
@@ -161,13 +190,13 @@ kind，它只查表、调用 handler。
 
 | kind | 作用 |
 | --- | --- |
-| `create_component` | 创建组件窗口 |
+| `create_component` | 创建组件窗口。**默认（也是唯一）的创建入口**；`agent` 字段可选且默认不写 |
 | `update_component` | 改已有组件：换源码 / 改标题 / 移动 / 缩放 / 显隐 / 层级 / 覆写局部样式 |
 | `set_window_state` | 按 id 或名字设置窗口为 显示 / 最小化 / 关闭 |
 | `list_nodes` | 按名字或类型查找节点，返回 id、位置、状态、是否挂了 Agent |
 | `create_tool` | 派生工具并注册 |
 | `call_tool` | 调用工具取值 |
-| `attach_agent` | 给已有组件接入 agent 能力（界面不变） |
+| `attach_agent` | 给已有组件接入 agent 能力（界面不变），必须给出 `systemPrompt` 或 `tools` |
 | `detach_agent` | 移除组件的 agent 能力 |
 | `remove_node` | 级联删除节点 |
 | `update_theme` | 改写全局 CSS 变量 |

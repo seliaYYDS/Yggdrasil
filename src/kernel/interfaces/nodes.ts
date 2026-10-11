@@ -21,6 +21,33 @@ function parseScope(raw: unknown, selfId: string): string[] | '*' {
 }
 
 /**
+ * agent 字段是不是"真的要一个 Agent"。
+ *
+ * 写成空对象、或只给 scope 这类空壳，都不算需求 —— 它们只会把普通组件意外变成 Agent。
+ * 真正的 Agent 至少要有一条职责（systemPrompt）或一组工具（tools）。
+ */
+function hasAgentSubstance(role: unknown, tools: unknown): boolean {
+  const hasRole = typeof role === 'string' && role.trim().length > 0;
+  const hasTools = Array.isArray(tools) && tools.length > 0;
+  return hasRole || hasTools;
+}
+
+/**
+ * 判断 create_component 的 op 是否真的要接能力（见 hasAgentSubstance）。
+ *
+ * 只认两种写法：显式给了 agent 对象，或顶层直接给了职责 systemPrompt。
+ * 顶层单独的 tools 不算 —— 那更像"顺手写上的字段"，不是"我要一个 Agent"。
+ */
+function isSubstantiveAgent(op: DerivationOp): boolean {
+  const raw = op.agent;
+  if (raw && typeof raw === 'object') {
+    const a = raw as Record<string, unknown>;
+    return hasAgentSubstance(a.systemPrompt ?? op.systemPrompt, a.tools);
+  }
+  return hasAgentSubstance(op.systemPrompt, null);
+}
+
+/**
  * 创建组件的唯一实现。
  *
  * 没有"创建 Agent"这条独立路径 —— **创建一个带 agent 能力的组件，就是创建 Agent**。
@@ -31,18 +58,24 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
   const store = useDesktopStore.getState();
   const id = newNodeId();
 
-  const agentRaw = (op.agent && typeof op.agent === 'object' ? op.agent : null) as Record<string, unknown> | null;
+  // agent 字段必须是"有实质内容"的需求才算数。
+  // 空壳（agent: {}）或只写了 scope 的 agent 字段一律忽略 —— 否则模型出于惯性
+  // 顺手带一个空 agent，就会把普通组件变成 Agent（这是"对派生 agent 太敏感"的直接原因）。
+  const substantiveAgent = isSubstantiveAgent(op);
+  const agentRaw = substantiveAgent ? (op.agent as Record<string, unknown>) : null;
+  const ignoredAgent = !!op.agent && !substantiveAgent;
 
   // 只有一份源码：组件的 source。
   // Agent 能力不携带界面 —— 界面永远是组件自己的事。
   const source = typeof op.source === 'string' ? op.source : '';
 
-  // 源码里 import/调用了 useAgent，就等于声明"这个组件需要 agent 能力"。
+  // 源码里从 "yggdrasil" 引入了 useAgent 并调用它，就等于声明"这个组件需要 agent 能力"。
   // 此时若没显式给 agent 字段，就自动接上 —— 否则 useAgent() 拿不到能力，
   // 消息会发不出去（更早的版本甚至会静默发给基底 agent）。
-  const declaresAgent = /\buseAgent\b/.test(source);
-  const wantAgent = !!op.agent || declaresAgent;
-  const autoAttached = wantAgent && !op.agent;
+  // 必须同时出现 import 与调用：只提一句名字（注释、字符串）不该装上能力。
+  const declaresAgent = /from\s*['"]yggdrasil['"]/.test(source) && /\buseAgent\b/.test(source);
+  const wantAgent = substantiveAgent || declaresAgent;
+  const autoAttached = wantAgent && !substantiveAgent;
   if (source.trim()) {
     const compiled = compileComponent(id, source);
     if (!compiled.ok) {
@@ -102,7 +135,8 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
     ? '它已具备 agent 能力（作用域 ' + scopeText +
       (autoAttached ? '，检测到源码用了 useAgent 已自动接入' : '') +
       '），可在自己的界面里用 useAgent() 驱动它。'
-    : '它目前是普通组件；若需要它自己思考、行动，用 attach_agent 接入 agent 能力（界面不变）。';
+    : '它目前是普通组件（默认如此）；只有当用户明确要求它自己思考、自己行动时，才用 attach_agent 接入 agent 能力（界面不变）。' +
+      (ignoredAgent ? ' 你给的 agent 字段里没有职责也没有工具，已按空壳忽略。' : '');
 
   return ok('已创建组件「' + name + '」', {
     createdId: id,
@@ -148,23 +182,22 @@ export function registerNodeInterfaces(): void {
     label: '创建组件',
     description:
       '生成一个界面组件，作为可拖动窗口插入桌面。' +
-      '**这是唯一的创建入口 —— 创建 Agent 也是这里。**' +
-      '如果这个组件需要自己思考、行动（也就是"派生一个 agent"），' +
-      '就在 source 里用 useAgent 驱动它，或同时给出 agent 字段写上它的职责 / 工具 / 作用域。' +
-      '产出的永远是一个普通组件，只是它可能具备 agent 能力。',
+      '**这是默认也是唯一的创建入口**，绝大多数任务（计算器、列表、图表、看板、抓取结果展示）都到这里为止：' +
+      '给一个 source，产出一个普通组件。' +
+      'agent 字段是**可选的、默认不写**的重武器，只有用户明确要求"这个组件自己思考 / 自己行动 / 定时自主运行"时才附带；' +
+      '判据见提示词「agent 能力」一节。',
     example: {
       kind: 'create_component',
-      name: '天气助手',
-      description: '能自己查天气',
-      size: { w: 380, h: 420 },
+      name: '计算器',
+      description: '一个普通计算器',
+      size: { w: 320, h: 420 },
       pos: { x: 200, y: 120 },
       source:
-        'import * as React from "react";\nimport { useAgent } from "yggdrasil";\n' +
-        'export default function Weather(){ const a = useAgent(); return <div>{a.messages.length}</div>; }',
-      agent: {
-        systemPrompt: '你负责回答天气问题',
-        scope: ['self'],
-      },
+        'import * as React from "react";\n' +
+        'export default function Calc(){ const [v, setV] = React.useState("0");\n' +
+        '  return <div style={{ width: "100%", height: "100%", boxSizing: "border-box", overflow: "auto",' +
+        ' background: "var(--ygg-surface)", color: "var(--ygg-fg)", border: "1px solid var(--ygg-border)",' +
+        ' borderRadius: "var(--ygg-radius)" }}>{v}</div>; }',
     },
     mutates: true,
     handler: (op, ctx) => createComponentNode(op, ctx),
@@ -193,9 +226,9 @@ export function registerNodeInterfaces(): void {
         patch.source = op.source;
         touched.push('源码');
 
-        // 新源码用到了 useAgent 但组件还没有能力时，顺手接上 ——
-        // 否则界面上的交互会静默失效。
-        if (/\buseAgent\b/.test(op.source) && !node.agent) {
+        // 新源码真的从 "yggdrasil" 引入并调用了 useAgent，但组件还没有能力时，顺手接上 ——
+        // 否则界面上的交互会静默失效。只提一句名字（注释）不触发。
+        if (/from\s*['"]yggdrasil['"]/.test(op.source) && /\buseAgent\b/.test(op.source) && !node.agent) {
           useDesktopStore.getState().setFacet(id, makeFacet({ scope: [id] }));
           touched.push('自动接入 agent 能力');
         }
@@ -252,7 +285,9 @@ export function registerNodeInterfaces(): void {
       '可以自己思考并行动。' +
       '**界面不变** —— 组件长什么样完全由它自己的 source 决定；' +
       '要让它在界面上呈现消息或按钮，就在它的源码里用 import { useAgent } from "yggdrasil" 自行渲染。' +
-      '这是"派生 Agent"的正解：Agent 是能力，不是另一种窗口。',
+      '这是"派生 Agent"的正解：Agent 是能力，不是另一种窗口。' +
+      '**默认不要用**：用户没明确要求"它自己思考 / 自己行动 / 定时自主运行"时，普通组件就够了。' +
+      '必须给出 systemPrompt（它的职责）或 tools，否则会被拒绝。',
     example: {
       kind: 'attach_agent',
       id: 'n_xxx',
@@ -268,6 +303,14 @@ export function registerNodeInterfaces(): void {
       }
       if (node.agent) {
         return fail('组件「' + node.name + '」已经具备 agent 能力了。改它的职责用 set_agent_config。');
+      }
+      // 没有职责也没有工具的空壳接入会让这个组件变成"没有用途的 Agent"，
+      // 这正是"对派生 agent 太敏感"的另一种表现，直接拒绝并把默认做法说清楚。
+      if (!hasAgentSubstance(op.systemPrompt, op.tools)) {
+        return fail(
+          'attach_agent 需要给出这个组件自己的职责（systemPrompt）或工具（tools）。' +
+          '若你只是想让它把内容显示出来，普通组件就够了 —— 不要接入 agent 能力。',
+        );
       }
       const rawScope = op.scope;
       // 必须用 setFacet 而不是 updateFacet：后者只在 facet 已存在时才生效，
