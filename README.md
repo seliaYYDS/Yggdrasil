@@ -37,7 +37,7 @@ pnpm preview
 | `把窗口标题栏换成极简风格` | 用 `replace_surface` 替换界面插槽 |
 | `先看看现在界面上有什么` | 用 `inspect` 读结构，再进入下一轮动手 |
 | `抓取 example.com 并总结` | 用 `fetch_url` 联网取回正文再处理 |
-| `在计算器里挂一个 Agent` | 用 `create_agent` 把 Agent 装进已有组件窗口 |
+| `在计算器里挂一个 Agent` | 用 `attach_agent` 给那个组件接入能力 |
 | `把计算器最小化` | 用 `set_window_state` 收起窗口，可从任务栏恢复 |
 | `你好` | 同样要派生 —— Agent 会建一个窗口来回应，因为它无法直接说话 |
 
@@ -86,12 +86,16 @@ pnpm preview
 
 怎么用：
 
+**创建 Agent 没有单独的入口 —— 它就是创建一个带 agent 能力的组件。**
+
 | 目的 | 做法 |
 | --- | --- |
-| 新建一个会思考的组件 | `create_component` 带 `source`（界面）+ `agent`（能力） |
+| 创建带能力的组件（= 派生 Agent） | `create_component` 带 `source`（界面）+ `agent`（能力） |
 | 给已有组件接入能力 | `attach_agent` 带 `id` —— **界面不变** |
 | 移除能力 | `detach_agent` |
 | 改职责 / 作用域 / 工具 | `set_agent_config` |
+
+有能力与没能力的组件**在渲染上完全一致** —— 不贴标签、不换外观。
 
 `agent` 里只放能力：`systemPrompt`（职责）、`tools`（工具子集）、`scope`（作用域）。
 **没有 source。**
@@ -163,7 +167,6 @@ kind，它只查表、调用 handler。
 | `list_nodes` | 按名字或类型查找节点，返回 id、位置、状态、是否挂了 Agent |
 | `create_tool` | 派生工具并注册 |
 | `call_tool` | 调用工具取值 |
-| `create_agent` | 创建组件并接入 agent 能力（create_component + attach_agent 一步到位） |
 | `attach_agent` | 给已有组件接入 agent 能力（界面不变） |
 | `detach_agent` | 移除组件的 agent 能力 |
 | `remove_node` | 级联删除节点 |

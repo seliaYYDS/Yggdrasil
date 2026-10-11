@@ -21,11 +21,12 @@ function parseScope(raw: unknown, selfId: string): string[] | '*' {
 }
 
 /**
- * 创建组件的统一实现。
- * create_component 与 create_agent 都走这里 —— 两者的差别只在于是否带 agent facet，
- * 这正是"派生 Agent 作为创建组件时的一种思路"。
+ * 创建组件的唯一实现。
+ *
+ * 没有"创建 Agent"这条独立路径 —— **创建一个带 agent 能力的组件，就是创建 Agent**。
+ * 带不带能力由 op.agent 或源码里的 useAgent 决定，产出的都是一个普通组件。
  */
-function createComponentNode(op: DerivationOp, ctx: { originId: string }, forceAgent = false) {
+function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
   const name = strOr(op.name, '组件');
   const store = useDesktopStore.getState();
   const id = newNodeId();
@@ -40,13 +41,13 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }, forceA
   // 此时若没显式给 agent 字段，就自动接上 —— 否则 useAgent() 拿不到能力，
   // 消息会发不出去（更早的版本甚至会静默发给基底 agent）。
   const declaresAgent = /\buseAgent\b/.test(source);
-  const wantAgent = forceAgent || !!op.agent || declaresAgent;
-  const autoAttached = wantAgent && !forceAgent && !op.agent;
+  const wantAgent = !!op.agent || declaresAgent;
+  const autoAttached = wantAgent && !op.agent;
   if (source.trim()) {
     const compiled = compileComponent(id, source);
     if (!compiled.ok) {
-      desktop().log('error', (wantAgent ? 'agent ' : 'comp ') + name + ' \u2715 ' + compiled.error);
-      return fail((wantAgent ? 'Agent' : '组件') + '「' + name + '」编译失败：' + compiled.error);
+      desktop().log('error', 'comp ' + name + ' \u2715 ' + compiled.error);
+      return fail('组件「' + name + '」编译失败：' + compiled.error);
     }
   }
 
@@ -92,29 +93,22 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }, forceA
 
   store.addNode(node);
   store.focus(id);
-  desktop().log('op', (wantAgent ? '+ agent ' : '+ comp ') + name, id);
+  desktop().log('op', '+ comp ' + name, id);
 
-  if (!wantAgent) {
-    return ok('已创建组件「' + name + '」', {
-      createdId: id,
-      observation:
-        '组件 id=' + id + ' name=' + name + ' 已插入桌面。' +
-        '若这个组件还需要自己思考、行动，可以给它接入 agent 能力（用 attach_agent，或在创建时带 agent 字段）。',
-    });
-  }
+  // 返回信息只说明"这个组件有没有 agent 能力"，不把它叫成另一种东西。
+  const scopeText =
+    node.agent && node.agent.scope !== '*' ? (node.agent.scope as string[]).join(', ') : '全部';
+  const capNote = wantAgent
+    ? '它已具备 agent 能力（作用域 ' + scopeText +
+      (autoAttached ? '，检测到源码用了 useAgent 已自动接入' : '') +
+      '），可在自己的界面里用 useAgent() 驱动它。'
+    : '它目前是普通组件；若需要它自己思考、行动，用 attach_agent 接入 agent 能力（界面不变）。';
 
-  const scopeText = node.agent!.scope === '*' ? '全部' : (node.agent!.scope as string[]).join(', ');
-  return ok('已创建带 agent 能力的组件「' + name + '」', {
+  return ok('已创建组件「' + name + '」', {
     createdId: id,
-    observation:
-      'id=' + id + ' name=' + name + ' 作用域=' + scopeText +
-      (autoAttached ? '（检测到源码用了 useAgent，已自动接入能力）' : '') + '。' +
-      '它的界面就是你给的 source —— 想让它在界面上呈现消息，就在源码里用 ' +
-      'import { useAgent } from "yggdrasil" 自行渲染。' +
-      (source.trim() ? '' : '当前 source 为空，给它写一个界面。'),
+    observation: '组件 id=' + id + ' name=' + name + ' 已插入桌面。' + capNote,
   });
 }
-
 /** 取工具 id 列表。 */
 function pickToolIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -153,25 +147,23 @@ export function registerNodeInterfaces(): void {
     kind: 'create_component',
     label: '创建组件',
     description:
-      '生成一个可交互的界面组件，作为可拖动窗口插入桌面。' +
-      '**如果这个组件还需要自己思考、自己行动，就同时给出 agent 字段** —— ' +
-      '那样它就是一个 Agent。Agent 不是另一种东西，它就是"带 agent 能力的组件"，' +
-      '这里与 create_agent 走的是同一条创建路径。' +
-      'agent 里的 source 写它自己的界面（import { useAgent } from "yggdrasil"），' +
-      'scope 限定它能看到的范围（不写则默认只有它自己）。',
+      '生成一个界面组件，作为可拖动窗口插入桌面。' +
+      '**这是唯一的创建入口 —— 创建 Agent 也是这里。**' +
+      '如果这个组件需要自己思考、行动（也就是"派生一个 agent"），' +
+      '就在 source 里用 useAgent 驱动它，或同时给出 agent 字段写上它的职责 / 工具 / 作用域。' +
+      '产出的永远是一个普通组件，只是它可能具备 agent 能力。',
     example: {
       kind: 'create_component',
       name: '天气助手',
-      description: '能自己查天气的 Agent',
+      description: '能自己查天气',
       size: { w: 380, h: 420 },
       pos: { x: 200, y: 120 },
-      source: 'export default function Calc(){ ... }',
+      source:
+        'import * as React from "react";\nimport { useAgent } from "yggdrasil";\n' +
+        'export default function Weather(){ const a = useAgent(); return <div>{a.messages.length}</div>; }',
       agent: {
         systemPrompt: '你负责回答天气问题',
         scope: ['self'],
-        source:
-          'import * as React from "react";\nimport { useAgent } from "yggdrasil";\n' +
-          'export default function A(){ const a = useAgent(); return <div>{a.messages.length}</div>; }',
       },
     },
     mutates: true,
@@ -249,52 +241,6 @@ export function registerNodeInterfaces(): void {
       return ok('已修改组件「' + node.name + '」：' + touched.join('、'), {
         observation: '组件 id=' + id + ' 的 ' + touched.join('、') + ' 已更新。',
       });
-    },
-  });
-
-  registerInterface({
-    kind: 'create_agent',
-    label: '创建 Agent',
-    description:
-      '创建一个组件**并给它接入 agent 能力**。' +
-      '这是 attach_agent 的"创建时一步到位"版本，等价于 create_component + attach_agent。' +
-      '**界面完全由 source 决定**；agent 字段只提供能力（职责 systemPrompt、工具子集 tools、作用域 scope），' +
-      '不提供任何界面。想让界面呈现消息或按钮，在 source 里用 ' +
-      'import { useAgent } from "yggdrasil" 自己渲染。' +
-      'scope 是硬约束，越界操作会被执行器拒绝。',
-    example: {
-      kind: 'create_agent',
-      name: '天气助手',
-      description: '查询天气',
-      systemPrompt: '你负责回答天气问题',
-      scope: ['self'],
-      source:
-        'import * as React from "react";\nimport { useAgent } from "yggdrasil";\n' +
-        'export default function WeatherAgent() {\n' +
-        '  const a = useAgent();\n' +
-        '  const [t, setT] = React.useState("");\n' +
-        '  return <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>\n' +
-        '    <div style={{ flex: 1, overflow: "auto" }}>{a.messages.map((m, i) => <div key={i}>{m.content}</div>)}</div>\n' +
-        '    <input value={t} onChange={(e) => setT(e.target.value)}\n' +
-        '      onKeyDown={(e) => { if (e.key === "Enter") { a.send(t); setT(""); } }} />\n' +
-        '  </div>;\n}',
-    },
-    mutates: true,
-    handler: (op, ctx) => {
-      // 与 create_component 同一条路径，只是强制带上 agent 能力。
-      // 注意：agent 里只有能力，没有界面 —— 界面来自 op.source（组件自己的源码）。
-      const agent = (op.agent && typeof op.agent === 'object' ? op.agent : {}) as Record<string, unknown>;
-      const merged: DerivationOp = {
-        ...op,
-        kind: 'create_component',
-        source: typeof op.source === 'string' ? op.source : '',
-        agent: {
-          systemPrompt: typeof op.systemPrompt === 'string' ? op.systemPrompt : agent.systemPrompt,
-          tools: Array.isArray(op.tools) ? op.tools : agent.tools,
-          scope: Array.isArray(op.scope) ? op.scope : agent.scope,
-        },
-      };
-      return createComponentNode(merged, ctx, true);
     },
   });
 

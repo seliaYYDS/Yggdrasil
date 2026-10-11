@@ -285,51 +285,45 @@ function surfaceRules(): string[] {
 
 function agentRules(): string[] {
   return [
-    '## Agent 能力（attach_agent / detach_agent / create_agent 的 agent 字段）',
+    '## 创建带 agent 能力的组件（create_component / attach_agent / detach_agent）',
     '',
-    '**Agent 不是一种窗口，也不是另一种组件。它是一种"能力"。**',
-    '把这种能力接到一个组件上，这个组件就获得了自己的上下文、职责与作用域，能自己思考并行动。',
-    '组件本身长什么样，和它有没有 agent 能力**完全无关**。',
+    '**没有「创建 Agent」这个单独的操作。** Agent 不是一种窗口、也不是另一种组件，' +
+      '它是一种能力；把能力接到组件上，就得到了一个能自己思考行动的组件。',
+    '所以「派生一个 agent」永远等于：**创建一个组件，并让它具备 agent 能力**。',
     '',
-    '### 为什么界面不会变',
-    '- 一个组件永远只有**一份源码**：它自己的 `source`。',
-    '- **agent 能力不携带任何界面。** 没有"agent 专属的界面"这种东西 —— ' +
-      '如果你接入能力后发现窗口里还是老样子，那是正常的：界面由 source 决定。',
-    '- 所以**不要**指望接入 agent 后就自动出现聊天框、消息列表或输入框。' +
-      '想让界面呈现这些，你必须改它的 `source`，在源码里自己去渲染。',
+    '### 怎么做',
+    '- 一步到位：\`create_component\` 给 \`source\`（界面）+ \`agent\`（能力）。',
+    '- 两步：先 \`create_component\` 建组件，再 \`attach_agent\` 接入能力（界面不变）。',
+    '- 移除能力：\`detach_agent\`。改职责 / 作用域 / 工具：\`set_agent_config\`。',
+    '- \`agent\` 里只放能力：\`systemPrompt\`（职责）、\`tools\`（工具子集）、\`scope\`（作用域）。**没有 source。**',
+    '- 源码里出现 \`useAgent\` 时，系统会自动接入能力（返回信息里会说明）。',
     '',
-    '### 怎么用',
-    '- 新建一个会思考的组件：`create_component` 带 `source`（界面）+ `agent`（能力）两个字段。' +
-      '（如果 source 里用了 useAgent 但你没给 agent 字段，系统会自动帮你接上，并在返回里说明。）',
-    '- 给已有组件接入能力：`attach_agent` 带 `id`。界面不变。',
-    '- 移除能力：`detach_agent`。',
-    '- `agent` 里只放能力相关的：`systemPrompt`（职责）、`tools`（工具子集）、`scope`（作用域）。**没有 source。**',
+    '### 界面不会因为接入能力而改变',
+    '- 一个组件永远只有**一份源码**：它自己的 \`source\`。界面长什么样只由它决定。',
+    '- **agent 能力不携带任何界面。** 接入后发现窗口还是老样子，那是正常的。',
+    '- **不要**指望接入 agent 后就自动出现聊天框、消息列表或输入框。' +
+      '想在界面上呈现这些，必须在 \`source\` 里自己渲染。',
+    '- 也因此：不要因为"这是个 Agent"就给它套一个特殊外观；它就是普通组件。',
     '',
-    '### 在界面里使用这份能力',
-    '- ⚠ **源码里一旦 import/调用 useAgent，这个组件就必须有 agent 能力。**' +
-      '没有任何能力时调用 `a.send()` 是**空操作**，消息不会发出去，也不会替你转给基底 Agent ——' +
-      '你会在控制台看到警告，用户则什么反应都没有。' +
-      '（创建时用了 useAgent 会自动接入，但 `update_component` 改源码时请自己确认。）',
-    '- 不确定某个组件有没有能力时，用 `inspect before="agents"` 看。',
-    '组件源码里通过 `import { useAgent } from "yggdrasil"` 拿到它：',
-    '```tsx',
-    'import { useAgent } from "yggdrasil";',
-    'const a = useAgent();   // { id, name, host, messages, running, role, send, clear }',
-    '```',
-    '- 想显示对话就把 `a.messages` 渲染出来；想让它干活就调 `a.send(text)`。',
-    '- **怎么呈现完全由你决定**：聊天框、按钮排、表格、卡片都行，没有规定形状。',
+    '### 在界面里驱动这份能力',
+    '- 源码里通过 \`import { useAgent } from "yggdrasil"\` 拿到它：',
+    '  \`const a = useAgent();\` → \`{ id, name, host, attached, messages, running, role, send, clear }\`',
+    '- 想显示对话就渲染 \`a.messages\`；想让它干活就调 \`a.send(text)\`。呈现方式完全由你决定。',
+    '- ⚠ **源码里一旦用了 useAgent，这个组件就必须有 agent 能力。**' +
+      '没有能力时 \`a.send()\` 是**空操作**（\`a.attached\` 为 false、\`a.id\` 为 null），' +
+      '消息不会发出去，也**不会转给基底 Agent**。创建时用 useAgent 会自动接入；' +
+      '用 \`update_component\` 改源码时请自己确认，或用 \`inspect before="agents"\` 检查。',
     '',
     '### 作用域是硬约束',
-    '- `scope` 限定它能读写的节点。不写时默认只有它自己。',
-    '- 越界操作会被执行器直接拒绝：改别的组件、改全局样式（`update_theme`）、' +
-      '替换界面插槽（`replace_surface`）都会失败。',
+    '- \`scope\` 限定它能读写的节点。不写时默认只有它自己。',
+    '- 越界操作会被执行器直接拒绝：改别的组件、改全局样式（\`update_theme\`）、' +
+      '替换界面插槽（\`replace_surface\`）都会失败。',
     '',
     '### 窗口操作',
-    '- 想让窗口消失但保留状态用 `set_window_state` 的 minimized；彻底卸载用 closed；都能从任务栏恢复。',
-    '- 层级由用户点击决定会自动提升；要显式指定用 `update_component` 的 z 字段。',
+    '- 想让窗口消失但保留状态用 \`set_window_state\` 的 minimized；彻底卸载用 closed；都能从任务栏恢复。',
+    '- 层级由用户点击决定会自动提升；要显式指定用 \`update_component\` 的 z 字段。',
   ];
 }
-
 function netRules(): string[] {
   return [
     '## 联网（fetch_url / fetch_image）',

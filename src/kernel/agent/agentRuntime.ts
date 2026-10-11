@@ -399,8 +399,6 @@ function recordLedger(
     const created = outcome.createdId ? store.nodes[outcome.createdId] : undefined;
     if (op.kind === 'create_component' && created) {
       entries.push('组件「' + created.name + '」(id=' + created.id + ')');
-    } else if (op.kind === 'create_agent' && created) {
-      entries.push('Agent「' + created.name + '」(id=' + created.id + ')');
     } else if (op.kind === 'create_tool' && created) {
       entries.push('工具「' + created.name + '」(id=' + created.id + ')');
     } else if (op.kind === 'replace_surface' && typeof op.surface === 'string') {

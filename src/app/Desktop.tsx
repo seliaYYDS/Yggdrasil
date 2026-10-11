@@ -52,7 +52,6 @@ export function Desktop() {
           key={node.id}
           id={node.id}
           title={node.name}
-          kindLabel={node.agent ? 'agent' : undefined}
           rect={{ x: node.pos.x, y: node.pos.y, w: node.size.w, h: node.size.h }}
           zIndex={node.z}
           focused={focusedId === node.id}
