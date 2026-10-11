@@ -113,19 +113,69 @@ export const PANEL_RECT_KEY: Record<
   trace: 'traceRect',
 };
 
-/** 输入框贴底居中；其余错开。 */
-export function resolvePanels(viewW: number, viewH: number): PanelRects {
-  const inputW = Math.min(DEFAULT_PANELS.input.w, Math.max(320, viewW - 48));
+/** 各面板的尺寸下限，与 PanelWindow 传的 minW / minH 对齐。 */
+export const PANEL_MIN: Record<PanelKey, { w: number; h: number }> = {
+  input: { w: 300, h: 70 },
+  inspector: { w: 280, h: 220 },
+  settings: { w: 300, h: 280 },
+  trace: { w: 320, h: 240 },
+};
+
+/**
+ * 把一个矩形夹进视口。
+ *
+ * 尺寸语义：正常情况下不低于 min，也不超过视口；
+ * **视口比 min 还小时以视口为准** —— 自适应优先于最小尺寸，否则小窗口下必然出界。
+ * 只保留一个绝对下限（160×48），免得算出一个不可用的窗口。
+ */
+export function fitSizeIn(rect: PanelRect, viewW: number, viewH: number, minW: number, minH: number) {
+  const maxW = Math.max(160, viewW - 8);
+  const maxH = Math.max(48, viewH - 8);
   return {
-    input: {
+    w: Math.max(Math.min(minW, maxW), Math.min(rect.w, maxW)),
+    h: Math.max(Math.min(minH, maxH), Math.min(rect.h, maxH)),
+  };
+}
+
+export function fitRectToViewport(
+  rect: PanelRect,
+  viewW: number,
+  viewH: number,
+  minW: number,
+  minH: number,
+): PanelRect {
+  const { w, h } = fitSizeIn(rect, viewW, viewH, minW, minH);
+  return {
+    x: Math.max(0, Math.min(rect.x, Math.max(0, viewW - w))),
+    y: Math.max(0, Math.min(rect.y, Math.max(0, viewH - h))),
+    w,
+    h,
+  };
+}
+
+/** 输入框贴底居中；其余错开。所有面板都按视口夹一遍，小窗口下也不会跑到屏幕外。 */
+export function resolvePanels(viewW: number, viewH: number): PanelRects {
+  const inputW = Math.min(DEFAULT_PANELS.input.w, Math.max(PANEL_MIN.input.w, viewW - 48));
+  const place = (key: PanelKey, rect: PanelRect) =>
+    fitRectToViewport(rect, viewW, viewH, PANEL_MIN[key].w, PANEL_MIN[key].h);
+  return {
+    input: place('input', {
       ...DEFAULT_PANELS.input,
       w: inputW,
       x: Math.max(24, Math.round((viewW - inputW) / 2)),
       y: Math.max(80, viewH - DEFAULT_PANELS.input.h - 20),
-    },
-    inspector: { ...DEFAULT_PANELS.inspector, x: 24, y: 72 },
-    settings: { ...DEFAULT_PANELS.settings, x: Math.max(24, viewW - DEFAULT_PANELS.settings.w - 380), y: 72 },
-    trace: { ...DEFAULT_PANELS.trace, x: Math.max(24, viewW - DEFAULT_PANELS.trace.w - 24), y: 72 },
+    }),
+    inspector: place('inspector', { ...DEFAULT_PANELS.inspector, x: 24, y: 72 }),
+    settings: place('settings', {
+      ...DEFAULT_PANELS.settings,
+      x: Math.max(24, viewW - DEFAULT_PANELS.settings.w - 380),
+      y: 72,
+    }),
+    trace: place('trace', {
+      ...DEFAULT_PANELS.trace,
+      x: Math.max(24, viewW - DEFAULT_PANELS.trace.w - 24),
+      y: 72,
+    }),
   };
 }
 
@@ -136,6 +186,9 @@ const MAX_LOGS = 200;
  * 窗口先播完这段动画，才真正切换成 minimized —— 否则窗口会先消失、动画无从谈起。
  */
 const LEAVE_MS = 260;
+
+/** "从任务栏展开"动画时长，与收进去的时长一致，来回对称。 */
+const RESTORE_MS = 260;
 
 /** 造一个 agent facet。 */
 export function makeFacet(partial: Partial<AgentFacet> = {}): AgentFacet {
@@ -303,6 +356,8 @@ interface DesktopState {
   queue: QueuedInput[];
   /** 正在播"收进任务栏"动画的窗口 id（节点 id 或 panel-x）。不进持久化。 */
   leaving: Record<string, true>;
+  /** 刚从任务栏展开、正在播"长回原位"动画的窗口 id。不进持久化。 */
+  restoring: Record<string, true>;
 
   hydrate: () => Promise<void>;
   addNode: (node: YggNode) => void;
@@ -332,6 +387,8 @@ interface DesktopState {
   setFeedback: (feedback: RunFeedback | null) => void;
   appendLedger: (agentId: NodeId, entries: string[]) => void;
   setPanelRect: (panel: PanelKey, rect: PanelRect) => void;
+  /** 视口变化时把面板与窗口都夹回可见区域，别让用户够不到标题栏。 */
+  fitToViewport: (viewW: number, viewH: number) => void;
 
   applyTokens: (tokens: ThemeTokens) => void;
 
@@ -348,6 +405,11 @@ interface DesktopState {
    * windowId 是节点 id 或 `panel-<key>`，两种情况都在这里分流。
    */
   requestMinimize: (windowId: string) => void;
+  /**
+   * 从任务栏恢复：先把窗口切回 active 并标记 restoring，WindowFrame 据此播"展开"动画。
+   * 与 requestMinimize 对称。
+   */
+  requestRestore: (windowId: string) => void;
 
   resetAll: () => Promise<void>;
 }
@@ -428,6 +490,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   panelZ: { ...DEFAULT_PANEL_Z },
   queue: [],
   leaving: {},
+  restoring: {},
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -647,6 +710,31 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
+  fitToViewport: (viewW, viewH) => {
+    set((s) => {
+      const nodes = { ...s.nodes };
+      let touched = false;
+      for (const n of Object.values(nodes)) {
+        if (n.kind !== 'component' || n.root || !n.pos || !n.size) continue;
+        const { w, h } = fitSizeIn({ x: 0, y: 0, w: n.size.w, h: n.size.h }, viewW, viewH, 200, 120);
+        const x = Math.max(0, Math.min(n.pos.x, Math.max(0, viewW - w)));
+        const y = Math.max(0, Math.min(n.pos.y, Math.max(0, viewH - h)));
+        if (w !== n.size.w || h !== n.size.h || x !== n.pos.x || y !== n.pos.y) {
+          nodes[n.id] = { ...n, size: { w, h }, pos: { x, y } };
+          touched = true;
+        }
+      }
+      return {
+        inputRect: fitRectToViewport(s.inputRect, viewW, viewH, PANEL_MIN.input.w, PANEL_MIN.input.h),
+        inspectorRect: fitRectToViewport(s.inspectorRect, viewW, viewH, PANEL_MIN.inspector.w, PANEL_MIN.inspector.h),
+        settingsRect: fitRectToViewport(s.settingsRect, viewW, viewH, PANEL_MIN.settings.w, PANEL_MIN.settings.h),
+        traceRect: fitRectToViewport(s.traceRect, viewW, viewH, PANEL_MIN.trace.w, PANEL_MIN.trace.h),
+        ...(touched ? { nodes } : {}),
+      };
+    });
+    schedulePersist();
+  },
+
   applyTokens: (tokens) => {
     const merged = mergeTokens(DEFAULT_TOKENS, sanitizeTokens(tokens));
     applyTheme(merged);
@@ -684,6 +772,28 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         get().updateNode(windowId, { status: 'minimized' } as Partial<YggNode>);
       }
     }, LEAVE_MS);
+  },
+
+  requestRestore: (windowId) => {
+    if (get().restoring[windowId]) return;
+    const isPanel = windowId.startsWith('panel-');
+    const key = isPanel ? (windowId.slice('panel-'.length) as PanelKey) : null;
+    if (isPanel) {
+      if (!key || !ALL_PANELS.includes(key)) return;
+    } else if (!get().nodes[windowId]) {
+      return;
+    }
+    // 先标记再切状态：无论 React 是否把两次更新批到一起，窗口挂载时都能看到 restoring。
+    set((s) => ({ restoring: { ...s.restoring, [windowId]: true } }));
+    if (isPanel && key) get().setPanelMinimized(key, false);
+    else get().updateNode(windowId, { status: 'active' } as Partial<YggNode>);
+    window.setTimeout(() => {
+      set((s) => {
+        const restoring = { ...s.restoring };
+        delete restoring[windowId];
+        return { restoring };
+      });
+    }, RESTORE_MS);
   },
 
   resetAll: async () => {
@@ -724,6 +834,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       panelZ: { ...DEFAULT_PANEL_Z },
       queue: [],
       leaving: {},
+      restoring: {},
       inputRect: panels.input,
       inspectorRect: panels.inspector,
       settingsRect: panels.settings,

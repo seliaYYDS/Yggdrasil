@@ -72,30 +72,46 @@ export function WindowFrame({
   const [drag, setDrag] = useState<DragMode | null>(null);
   const origin = useRef({ x: 0, y: 0, px: 0, py: 0 });
 
-  // 最小化由 store 统一驱动：先标记 leaving 播动画，260ms 后才真正变成 minimized。
+  // 最小化 / 恢复都由 store 驱动：先标记 leaving（或 restoring），动画播完才真正收放。
   const leaving = useDesktopStore((s) => !!s.leaving[id]);
-  const [lunge, setLunge] = useState<{ dx: number; dy: number } | null>(null);
+  const restoring = useDesktopStore((s) => !!s.restoring[id]);
+  const [lunge, setLunge] = useState(false);
+  /** 挂载那一刻决定：从任务栏展开的窗口不再播入场动画，改播"长回原位"。 */
+  const [fromTaskbar] = useState(restoring);
+  const [settled, setSettled] = useState(!restoring);
 
   const move = useCallback((next: WindowRect) => onRect?.(next), [onRect]);
 
   /**
-   * 收进任务栏的动画分两帧：先切到 .is-leaving（关掉入场动画、只留 transform/opacity 过渡），
-   * 下一帧再给位移 —— 同一帧里改，过渡不一定被触发。
-   * 终点取左下角任务栏的位置，于是窗口看起来是"缩着飞向任务栏"。
+   * 动画分两帧：先切类（关掉入场动画、只留 transform/opacity 过渡），下一帧再给位移 ——
+   * 同一帧里改，过渡不一定被触发。
+   * 起点 / 终点都是左下角任务栏：收进去时从原位缩向它，展开时从它长回原位。
    */
   useEffect(() => {
     if (!leaving) {
-      setLunge(null);
+      setLunge(false);
       return;
     }
-    const raf = window.requestAnimationFrame(() => {
-      setLunge({
-        dx: TASKBAR_ANCHOR_X - (rect.x + rect.w / 2),
-        dy: window.innerHeight - TASKBAR_ANCHOR_Y_FROM_BOTTOM - (rect.y + rect.h / 2),
-      });
-    });
+    const raf = window.requestAnimationFrame(() => setLunge(true));
     return () => window.cancelAnimationFrame(raf);
   }, [leaving, rect.x, rect.y, rect.w, rect.h]);
+
+  useEffect(() => {
+    if (!restoring) {
+      setSettled(true);
+      return;
+    }
+    const raf = window.requestAnimationFrame(() => setSettled(true));
+    return () => window.cancelAnimationFrame(raf);
+  }, [restoring]);
+
+  /** 窗口中心指向任务栏锚点的位移 + 缩到很小。收进去与展开共用同一段换算。 */
+  const flyToTaskbar =
+    'translate(' +
+    Math.round(TASKBAR_ANCHOR_X - (rect.x + rect.w / 2)) + 'px, ' +
+    Math.round(window.innerHeight - TASKBAR_ANCHOR_Y_FROM_BOTTOM - (rect.y + rect.h / 2)) + 'px) scale(' +
+    LEAVE_SCALE + ')';
+  const flying = lunge || !settled;
 
   /**
    * 按下窗口顶部区域开始拖动。
@@ -194,7 +210,9 @@ export function WindowFrame({
         (focused ? ' is-focused' : '') +
         (drag ? ' is-dragging' : '') +
         (minimized ? ' is-minimized' : '') +
-        (leaving ? ' is-leaving' : '')
+        (leaving ? ' is-leaving' : '') +
+        // 从任务栏展开的窗口整个生命周期都不播入场动画，避免动画结束后又被它顶一下。
+        (fromTaskbar ? ' is-restoring' : '')
       }
       style={{
         left: rect.x,
@@ -204,13 +222,7 @@ export function WindowFrame({
         zIndex,
         ...(minHeightCss ? { '--ygg-win-min-h': minHeightCss + 'px' } : {}),
         ...(tokens ?? {}),
-        ...(lunge
-          ? {
-              transform:
-                'translate(' + Math.round(lunge.dx) + 'px, ' + Math.round(lunge.dy) + 'px) scale(' + LEAVE_SCALE + ')',
-              opacity: 0,
-            }
-          : {}),
+        ...(flying ? { transform: flyToTaskbar, opacity: 0 } : {}),
       }}
       // 聚焦提升用 capture；拖动判定在同一个 handler 里做，
       // 两者都挂在容器上，不受插槽被替换的影响。

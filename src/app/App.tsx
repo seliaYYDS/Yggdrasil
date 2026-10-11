@@ -13,6 +13,15 @@ export function App() {
     void hydrate();
   }, [hydrate]);
 
+  // 视口变化时把所有面板与窗口夹回可见区域 —— 不然缩小浏览器后标题栏会够不到。
+  useEffect(() => {
+    const onResize = () => {
+      useDesktopStore.getState().fitToViewport(window.innerWidth, window.innerHeight);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   if (!loaded) {
     return (
       <div className="ygg-desktop">

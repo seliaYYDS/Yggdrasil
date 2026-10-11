@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { useDesktopStore } from '../store/desktopStore';
 import { submitInput } from '../kernel/agent/scheduler';
@@ -8,8 +8,14 @@ import { PanelWindow } from './PanelWindow';
 const QUEUE_ROW_H = 22;
 const QUEUE_MAX_ROWS = 2;
 
+/** 输入行高与最多长到几行（内容多时输入框自己变高，窗口跟着长）。 */
+const LINE_H = 26;
+const MAX_LINES = 6;
+
 export function YggdrasilInput() {
   const [text, setText] = useState('');
+  const areaRef = useRef<HTMLTextAreaElement>(null);
+  const [areaH, setAreaH] = useState(LINE_H);
   const running = useDesktopStore((s) => s.status.running);
   const phase = useDesktopStore((s) => s.status.phase);
   const detail = useDesktopStore((s) => s.status.detail);
@@ -34,11 +40,32 @@ export function YggdrasilInput() {
     submitInput(value);
   };
 
+  /**
+   * 输入框内容自适应：先把高度清成 auto 量一次 scrollHeight，再夹到 [1 行, 6 行]。
+   * Shift+Enter 换行、粘贴长文本都会自动长高，清空后缩回一行。
+   */
+  useLayoutEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const next = Math.min(Math.max(el.scrollHeight, LINE_H), LINE_H * MAX_LINES);
+    el.style.height = next + 'px';
+    setAreaH(next);
+  }, [text]);
+
   // 有排队项时窗口临时长高一点（最多两项），队列清空后自动缩回。
   const growth = Math.min(queue.length, QUEUE_MAX_ROWS) * QUEUE_ROW_H;
+  // 输入框长高了，窗口也得跟着长，否则会被窗口的 min-height 卡住。
+  const areaExtra = Math.max(0, areaH - LINE_H);
 
   return (
-    <PanelWindow panel="input" title="Yggdrasil" minW={300} minH={70} minHeightCss={70 + growth}>
+    <PanelWindow
+      panel="input"
+      title="Yggdrasil"
+      minW={300}
+      minH={70}
+      minHeightCss={70 + growth + areaExtra}
+    >
       <div className="ygg-compose">
         {queue.length > 0 ? (
           <div className="ygg-queue">
@@ -61,6 +88,7 @@ export function YggdrasilInput() {
 
         <div className="ygg-compose-row">
           <textarea
+            ref={areaRef}
             className="ygg-compose-area"
             value={text}
             placeholder={busy ? '排队发送…' : '描述你想让 Yggdrasil 做什么…'}

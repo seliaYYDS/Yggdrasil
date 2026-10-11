@@ -98,14 +98,25 @@ button:focus:not(:focus-visible) { outline: none; }
  * 关掉入场动画（它的 fill-mode 会一直占着 transform），只留 transform / opacity 两段过渡；
  * 位移终点由 WindowFrame 按窗口矩形算好写在行内 style 上。
  */
-.ygg-window.is-leaving {
+/* 收进去与展开共用一套：关掉入场动画，只留 transform / opacity 两段过渡。 */
+.ygg-window.is-leaving,
+.ygg-window.is-restoring {
   animation: none;
-  pointer-events: none;
   transform-origin: center center;
   will-change: transform, opacity;
+}
+.ygg-window.is-leaving {
+  pointer-events: none;
+  /* 收进去：加速离开 */
   transition:
     transform var(--ygg-t-slow) var(--ygg-ease-in),
     opacity var(--ygg-t-slow) var(--ygg-ease-in);
+}
+/* 展开：减速落位 */
+.ygg-window.is-restoring {
+  transition:
+    transform var(--ygg-t-slow) var(--ygg-ease-out),
+    opacity var(--ygg-t-slow) var(--ygg-ease-out);
 }
 .ygg-window.is-dragging { cursor: grabbing; }
 .ygg-window.is-dragging .ygg-titlebar { cursor: grabbing; }
@@ -418,9 +429,8 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-compose-area {
   flex: 1;
   min-width: 0;
-  height: 100%;
+  /* 高度由 JS 按内容设（1 行起，最多 6 行），这里只给下限与过渡 */
   min-height: 26px;
-  max-height: 26px;
   resize: none;
   border: none;
   outline: none;
