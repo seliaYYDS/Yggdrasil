@@ -19,7 +19,7 @@ import {
   buildSystemPrompt,
   MAX_HISTORY_MESSAGES,
 } from './prompts';
-import { executeOps, formatOutcomes, rollback } from '../bus/derivationBus';
+import { executeOps, formatOutcomes, rollback, type ExecuteResult } from '../bus/derivationBus';
 import { desktop, useDesktopStore } from '../../store/desktopStore';
 import { toolCatalog } from '../registry/toolRegistry';
 
@@ -99,10 +99,19 @@ function mkFeedback(level: FeedbackLevel, title: string, detail: string): RunFee
   return { id: newId(), at: Date.now(), level, title, detail };
 }
 
-/** 判断一个错误是否值得重试（网络/限流/5xx 是，4xx 参数错误不是）。 */
+/**
+ * 判断一个错误是否值得重试。
+ *
+ * 之前是"先排除 4xx、再看白名单关键词" —— 白名单太窄（没覆盖 408/409/425/520~527 等），
+ * 于是不少本来能重试的错直接放弃，用户看到的就是"错误处理有时不触发"。
+ * 现在改成：**只有明确的 4xx 客户端错误才不重试，其余一律重试**（重试本身有次数上限）。
+ */
 function isRetryable(msg: string): boolean {
-  if (/\b(400|401|403|404|422)\b/.test(msg)) return false;
-  return /(429|500|502|503|504|timeout|fetch|network|ECONN|aborted|Failed to fetch)/i.test(msg);
+  // 请求本身有问题：重试多少次都一样。
+  if (/\b(400|401|403|404|405|406|410|413|414|415|422|451)\b/.test(msg)) return false;
+  // 参数/响应格式类错误也不值得重试。
+  if (/没有可读流|空内容/.test(msg)) return false;
+  return true;
 }
 
 const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
@@ -113,6 +122,13 @@ const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
  * 用户看到的就是"消息被吞掉"。
  */
 const REQUEST_TIMEOUT_MS = 120000;
+
+/** trace 里最多保留多少字符的思考 / 原始输出（够看，又不会把存储撑爆）。 */
+const MAX_THINK_CHARS = 20000;
+const MAX_RAW_CHARS = 20000;
+/** 流式刷新节流：每个 chunk 都写一次 store 会让轨迹面板不停重渲染。 */
+const STREAM_FLUSH_MS = 120;
+
 
 /** 当前请求的标记，与提示词里的「你每次只处理标注为【本次请求】的那一条消息」对应。 */
 const CURRENT_REQUEST_TAG = '【本次请求】';
@@ -131,18 +147,34 @@ const OBSERVATION_BUDGET = 40000;
  * 出错不再直接终止整轮 —— 先退避重试；仍失败则把错误交回上层，
  * 由上层决定是否让 Agent 换个做法继续（见 §5.28）。
  */
+interface StreamHandlers {
+  onDelta: (chunk: string) => void;
+  onThinking?: (chunk: string) => void;
+  /**
+   * 每次尝试开始前回调。
+   * **必须用它清空累积的正文 / 思考缓冲** —— 否则重试会把上一次的半截输出和新输出
+   * 拼在一起，解析器取到的可能是上一次那半截坏 JSON。这是"重试好像没生效"的一个真实成因。
+   */
+  onAttempt?: (attempt: number) => void;
+}
+
 async function chatWithRetry(
   settings: Parameters<typeof chatStream>[0],
   messages: ChatMessage[],
-  onDelta: (chunk: string) => void,
+  handlers: StreamHandlers,
   attempts = 3,
 ): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
   let lastError = '';
   for (let i = 0; i < attempts; i += 1) {
+    handlers.onAttempt?.(i);
     const ctl = new AbortController();
     const timer = window.setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const text = await chatStream(settings, messages, { onDelta, signal: ctl.signal });
+      const text = await chatStream(settings, messages, {
+        onDelta: handlers.onDelta,
+        onThinking: handlers.onThinking,
+        signal: ctl.signal,
+      });
       return { ok: true, text };
     } catch (e) {
       lastError = (e as Error).message;
@@ -238,171 +270,270 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
     let lastSignature = '';
 
     while (continueLoop) {
-      round += 1;
-      useDesktopStore.getState().setStatus({ running: true, phase: '模型思考中', round });
+    /** 本轮的执行结果。catch 里用它回滚，避免异常留下半成品。 */
+    let roundResult: ExecuteResult | null = null;
+    try {
+        round += 1;
+        useDesktopStore.getState().setStatus({ running: true, phase: '模型思考中', round });
 
-      const modelStep: TraceStep = {
+        const modelStep: TraceStep = {
+          id: newId(),
+          runId,
+          round,
+          index: -1,
+          kind: 'llm',
+          label: '模型推理',
+          summary: '第 ' + round + ' 轮',
+          status: 'running',
+          message: '等待模型返回…',
+          startedAt: Date.now(),
+        };
+        pushStep(modelStep);
+
+        const systemPrompt = buildSystemPrompt({
+          nodes: deskNodes(),
+          rootId: desktop().rootId,
+          viewW: desktop().viewW,
+          viewH: desktop().viewH,
+          tokens: desktop().tokens,
+          tools: agentTools(origin),
+          originName: origin.name,
+          hostId: originId,
+          rolePrompt: isAgentic(origin) ? origin.agent.systemPrompt : '',
+          ledger: currentLedger(originId),
+          scope: isAgentic(origin) ? origin.agent.scope : undefined,
+        });
+
+        const messages: ChatMessage[] = [
+          { role: 'system', content: systemPrompt },
+          ...historyMessages(originId, input),
+          // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
+          // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
+          { role: 'user', content: CURRENT_REQUEST_TAG + '\n' + input },
+        ];
+        if (observationLog.length > 0) {
+          messages.push({ role: 'user', content: buildObservationPrompt(observationLog) });
+        }
+
+        // 正文与思考分开收集：思考单独展示，不参与 JSON 解析。
+        let buffer = '';
+        let thinking = '';
+        let lastFlush = 0;
+        const flush = (force = false): void => {
+          const now = Date.now();
+          if (!force && now - lastFlush < STREAM_FLUSH_MS) return;
+          lastFlush = now;
+          pushStep({
+            ...modelStep,
+            message: (thinking || buffer).slice(-200) || '等待模型返回…',
+            thinking: thinking ? thinking.slice(0, MAX_THINK_CHARS) : undefined,
+            raw: buffer ? buffer.slice(0, MAX_RAW_CHARS) : undefined,
+          });
+        };
+        const call = await chatWithRetry(settings, messages, {
+          // 每次重试都从头累积，绝不把上一次的半截输出留下来
+          onAttempt: () => {
+            buffer = '';
+            thinking = '';
+            flush(true);
+          },
+          onDelta: (chunk) => {
+            buffer += chunk;
+            flush();
+            useDesktopStore.getState().setStatus({ phase: '模型生成指令中', detail: buffer.slice(-140) });
+          },
+          onThinking: (chunk) => {
+            thinking += chunk;
+            flush();
+            useDesktopStore.getState().setStatus({ phase: '模型思考中', detail: chunk.slice(-140) });
+          },
+        }, 3);
+
+        if (!call.ok) {
+          // 重试仍失败：不断整轮终止，而是把错误回灌，让 Agent 下一轮换个做法。
+          const msg = call.error;
+          pushStep({
+            ...modelStep,
+            status: 'fail',
+            message: msg,
+            thinking: thinking ? thinking.slice(0, MAX_THINK_CHARS) : undefined,
+            raw: buffer ? buffer.slice(0, MAX_RAW_CHARS) : undefined,
+            endedAt: Date.now(),
+          });
+          store.log('error', 'llm ✕ ' + msg);
+          if (recoveries < MAX_RECOVERIES) {
+            pushObservations([
+              '上一轮模型调用失败：' + msg,
+              '请换一个更简单的做法重试；如果任务无法完成，用空 ops 结束。',
+            ]);
+            notifyRetry(round, '模型调用失败，正在重试：' + msg);
+            continue;
+          }
+          useDesktopStore.getState().setFeedback(mkFeedback('fail', '模型调用失败（已重试）', msg));
+          return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: msg });
+        }
+        const raw = call.text;
+
+        const parsed = parsePlan(raw);
+        if (!parsed.ok || !parsed.plan) {
+          // 解析失败也交给 Agent 自己修：把错误与原始输出片段回灌，下一轮重来。
+          const err = parsed.error ?? '解析失败';
+          pushStep({
+            ...modelStep,
+            status: 'fail',
+            message: '未返回合法指令：' + err,
+            endedAt: Date.now(),
+          });
+          store.log('error', 'parse ✕ ' + err);
+          if (recoveries < MAX_RECOVERIES) {
+            pushObservations([
+              '你上一轮的输出不是合法指令，解析失败：' + err,
+              '原始输出片段：' + raw.slice(0, 300),
+              '请只输出一个 JSON 对象，kind 必须是可用接口之一。',
+            ]);
+            notifyRetry(round, '指令格式错误，正在让其自行修复：' + err);
+            continue;
+          }
+          useDesktopStore.getState().setFeedback(
+            mkFeedback('fail', '模型反复没有输出合法指令', err),
+          );
+          return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: err });
+        }
+        const plan = parsed.plan;
+        // 收尾时把这一步标记成完成，并把全文（思考 / 原始输出）留在 trace 上 ——
+        // 之前这一支忘了把 status 改成 ok，轨迹里会一直显示"进行中"。
+        const finalizeModel = (msg: string): void => {
+          pushStep({
+            ...modelStep,
+            status: 'ok',
+            message: msg,
+            thinking: thinking ? thinking.slice(0, MAX_THINK_CHARS) : undefined,
+            raw: buffer ? buffer.slice(0, MAX_RAW_CHARS) : undefined,
+            endedAt: Date.now(),
+          });
+        };
+        if (plan.reasoning) {
+          store.log('llm', round + ' ' + plan.reasoning);
+          // 模型的判断写进这一步的 trace，而不是当作对话消息。
+          finalizeModel(plan.reasoning);
+        } else {
+          finalizeModel('已返回 ' + raw.length + ' 字符');
+        }
+        if (plan.ops.length === 0) {
+          rounds.push({ round, plan, observations: [] });
+          break;
+        }
+
+        useDesktopStore.getState().setStatus({ phase: '执行指令', detail: plan.ops.length + ' 条', round });
+        const result = await executeOps(plan.ops, originId, {
+          runId,
+          round,
+          onStep: (step) => {
+            pushStep(step);
+            useDesktopStore.getState().setStatus({
+              phase: '执行 ' + (step.index + 1) + '/' + plan.ops.length,
+              detail: step.label + ' · ' + step.summary,
+              round,
+            });
+          },
+        });
+        roundResult = result;
+
+        const allFailed = result.outcomes.length > 0 && result.outcomes.every((o) => !o.ok);
+        if (allFailed) {
+          rollback(result);
+          const text = formatOutcomes(result.outcomes);
+          store.log('error', 'rollback ' + text.join(' | '));
+          rounds.push({ round, plan, observations: text });
+          // 全部失败：回滚这一轮，但**不终止整个任务** —— 把失败原因回灌，
+          // 让 Agent 下一轮换个写法（常见于源码编译错误）。
+          if (recoveries < MAX_RECOVERIES) {
+            /*
+             * 这一轮已经回滚、马上会重试，所以**不计入最终成败**。
+             * 之前是先记账再恢复，于是哪怕模型自己修好了，用户最后仍会收到一条
+             * "部分完成：N 成功 / M 失败" 的提示 —— 这就是"每次有错都通知用户"的来源。
+             */
+            pushObservations([
+              '你上一轮的所有指令都失败了，已回滚它们造成的改动。失败原因：',
+              ...text,
+              '请修正后重试。常见原因：源码语法错误、引用了不存在的 id、变量未定义。',
+            ]);
+            notifyRetry(round, '全部指令失败，正在重试：' + (text[0] ?? ''));
+            continue;
+          }
+          // 重试机会用完了：这时才把失败算进最终结果，并明确告诉用户。
+          failCount += result.outcomes.length;
+          useDesktopStore.getState().setFeedback(mkFeedback('fail', '反复失败，已回滚', text.join('\n')));
+          return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: text[0] });
+        }
+
+        okCount += result.outcomes.filter((o) => o.ok).length;
+        failCount += result.outcomes.filter((o) => !o.ok).length;
+        totalAdded += result.createdIds.length;
+        const observations = formatOutcomes(result.outcomes);
+        rounds.push({ round, plan, observations });
+        // 把这一轮真正做成的事记进 ledger：跨刷新保留，避免下次重做。
+        recordLedger(originId, plan.ops, result, input);
+        // 执行回执只进 trace 与本轮的观察通道，**不写进消息历史** ——
+        // 历史里留下"已创建 X"会让后续轮次误以为 X 还存在（见 §5.19）。
+        pushObservations(observations);
+
+        // 无轮次上限下的空转保护：指令与结果都与上一轮完全一致时停下来。
+        // 只判"完全一致"，因此真实的推进（哪怕只是新建了一个同名字的组件）不会被误伤。
+        const signature = JSON.stringify(plan.ops) + '\u0000' + observations.join('\u0001');
+        if (plan.continue === true && signature === lastSignature) {
+          store.log('warn', 'loop ✕ 连续两轮指令与结果完全一致，判定空转');
+          useDesktopStore.getState().setFeedback(
+            mkFeedback('fail', '检测到空转，已停止', '连续两轮的指令与结果完全一致，继续下去不会有新结果。'),
+          );
+          return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: '空转' });
+        }
+        lastSignature = signature;
+        continueLoop = plan.continue === true;
+    } catch (e) {
+      /*
+       * 单轮里出现意外异常（编排代码本身出错、store 状态异常等）时，**不直接结束整个任务** ——
+       * 和 op 失败一样走恢复流程：回滚这一轮的改动、把原因回灌、重试。
+       * 之前这类异常直接落到最外层 catch，一次就把任务判死，看起来就是"错误处理没触发"。
+       */
+      const msg = (e as Error)?.message ?? String(e);
+      store.log('error', 'round ' + round + ' ✕ ' + msg);
+      if (roundResult) rollback(roundResult);
+      pushStep({
         id: newId(),
         runId,
         round,
-        index: -1,
-        kind: 'llm',
-        label: '模型推理',
-        summary: '第 ' + round + ' 轮',
-        status: 'running',
-        message: '等待模型返回…',
+        index: -3,
+        kind: 'recover',
+        label: '单轮异常',
+        summary: '第 ' + round + ' 轮抛出异常' + (roundResult ? '（已回滚该轮改动）' : ''),
+        status: 'fail',
+        message: msg,
         startedAt: Date.now(),
-      };
-      pushStep(modelStep);
-
-      const systemPrompt = buildSystemPrompt({
-        nodes: deskNodes(),
-        rootId: desktop().rootId,
-        viewW: desktop().viewW,
-        viewH: desktop().viewH,
-        tokens: desktop().tokens,
-        tools: agentTools(origin),
-        originName: origin.name,
-        hostId: originId,
-        rolePrompt: isAgentic(origin) ? origin.agent.systemPrompt : '',
-        ledger: currentLedger(originId),
-        scope: isAgentic(origin) ? origin.agent.scope : undefined,
+        endedAt: Date.now(),
       });
-
-      const messages: ChatMessage[] = [
-        { role: 'system', content: systemPrompt },
-        ...historyMessages(originId, input),
-        // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
-        // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
-        { role: 'user', content: CURRENT_REQUEST_TAG + '\n' + input },
-      ];
-      if (observationLog.length > 0) {
-        messages.push({ role: 'user', content: buildObservationPrompt(observationLog) });
+      if (recoveries < MAX_RECOVERIES) {
+        pushObservations([
+          '你上一轮执行时出现了内部异常：' + msg,
+          '请换一个更简单、更保守的做法重试。',
+        ]);
+        notifyRetry(round, '单轮异常，正在重试：' + msg);
+        continue;
       }
+      useDesktopStore.getState().setFeedback(mkFeedback('fail', '执行异常（已重试）', msg));
+      return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: msg });
+    }
+    }
 
-      let buffer = '';
-      const call = await chatWithRetry(settings, messages, (chunk) => {
-        buffer += chunk;
-        // 思考过程只进 trace。
-        pushStep({ ...modelStep, message: buffer.slice(-200) });
-        useDesktopStore.getState().setStatus({ phase: '模型生成指令中', detail: buffer.slice(-140) });
-      });
-
-      if (!call.ok) {
-        // 重试仍失败：不断整轮终止，而是把错误回灌，让 Agent 下一轮换个做法。
-        const msg = call.error;
-        pushStep({ ...modelStep, status: 'fail', message: msg, endedAt: Date.now() });
-        store.log('error', 'llm ✕ ' + msg);
-        if (recoveries < MAX_RECOVERIES) {
-          pushObservations([
-            '上一轮模型调用失败：' + msg,
-            '请换一个更简单的做法重试；如果任务无法完成，用空 ops 结束。',
-          ]);
-          notifyRetry(round, '模型调用失败，正在重试：' + msg);
-          continue;
-        }
-        useDesktopStore.getState().setFeedback(mkFeedback('fail', '模型调用失败（已重试）', msg));
-        return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: msg });
-      }
-      const raw = call.text;
-
-      const parsed = parsePlan(raw);
-      if (!parsed.ok || !parsed.plan) {
-        // 解析失败也交给 Agent 自己修：把错误与原始输出片段回灌，下一轮重来。
-        const err = parsed.error ?? '解析失败';
-        pushStep({
-          ...modelStep,
-          status: 'fail',
-          message: '未返回合法指令：' + err,
-          endedAt: Date.now(),
-        });
-        store.log('error', 'parse ✕ ' + err);
-        if (recoveries < MAX_RECOVERIES) {
-          pushObservations([
-            '你上一轮的输出不是合法指令，解析失败：' + err,
-            '原始输出片段：' + raw.slice(0, 300),
-            '请只输出一个 JSON 对象，kind 必须是可用接口之一。',
-          ]);
-          notifyRetry(round, '指令格式错误，正在让其自行修复：' + err);
-          continue;
-        }
-        useDesktopStore.getState().setFeedback(
-          mkFeedback('fail', '模型反复没有输出合法指令', err),
-        );
-        return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: err });
-      }
-      const plan = parsed.plan;
-      if (plan.reasoning) {
-        store.log('llm', round + ' ' + plan.reasoning);
-        // 模型的判断写进这一步的 trace，而不是当作对话消息。
-        pushStep({ ...modelStep, message: plan.reasoning, endedAt: Date.now() });
-      } else {
-        pushStep({ ...modelStep, status: 'ok', message: '已返回 ' + raw.length + ' 字符', endedAt: Date.now() });
-      }
-      if (plan.ops.length === 0) {
-        rounds.push({ round, plan, observations: [] });
-        break;
-      }
-
-      useDesktopStore.getState().setStatus({ phase: '执行指令', detail: plan.ops.length + ' 条', round });
-      const result = await executeOps(plan.ops, originId, {
-        runId,
-        round,
-        onStep: (step) => {
-          pushStep(step);
-          useDesktopStore.getState().setStatus({
-            phase: '执行 ' + (step.index + 1) + '/' + plan.ops.length,
-            detail: step.label + ' · ' + step.summary,
-            round,
-          });
-        },
-      });
-
-      okCount += result.outcomes.filter((o) => o.ok).length;
-      failCount += result.outcomes.filter((o) => !o.ok).length;
-
-      const allFailed = result.outcomes.length > 0 && result.outcomes.every((o) => !o.ok);
-      if (allFailed) {
-        rollback(result);
-        const text = formatOutcomes(result.outcomes);
-        store.log('error', 'rollback ' + text.join(' | '));
-        rounds.push({ round, plan, observations: text });
-        // 全部失败：回滚这一轮，但**不终止整个任务** —— 把失败原因回灌，
-        // 让 Agent 下一轮换个写法（常见于源码编译错误）。
-        if (recoveries < MAX_RECOVERIES) {
-          pushObservations([
-            '你上一轮的所有指令都失败了，已回滚它们造成的改动。失败原因：',
-            ...text,
-            '请修正后重试。常见原因：源码语法错误、引用了不存在的 id、变量未定义。',
-          ]);
-          notifyRetry(round, '全部指令失败，正在重试：' + (text[0] ?? ''));
-          continue;
-        }
-        useDesktopStore.getState().setFeedback(mkFeedback('fail', '反复失败，已回滚', text.join('\n')));
-        return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: text[0] });
-      }
-
-      totalAdded += result.createdIds.length;
-      const observations = formatOutcomes(result.outcomes);
-      rounds.push({ round, plan, observations });
-      // 把这一轮真正做成的事记进 ledger：跨刷新保留，避免下次重做。
-      recordLedger(originId, plan.ops, result, input);
-      // 执行回执只进 trace 与本轮的观察通道，**不写进消息历史** ——
-      // 历史里留下"已创建 X"会让后续轮次误以为 X 还存在（见 §5.19）。
-      pushObservations(observations);
-
-      // 无轮次上限下的空转保护：指令与结果都与上一轮完全一致时停下来。
-      // 只判"完全一致"，因此真实的推进（哪怕只是新建了一个同名字的组件）不会被误伤。
-      const signature = JSON.stringify(plan.ops) + '\u0000' + observations.join('\u0001');
-      if (plan.continue === true && signature === lastSignature) {
-        store.log('warn', 'loop ✕ 连续两轮指令与结果完全一致，判定空转');
-        useDesktopStore.getState().setFeedback(
-          mkFeedback('fail', '检测到空转，已停止', '连续两轮的指令与结果完全一致，继续下去不会有新结果。'),
-        );
-        return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: '空转' });
-      }
-      lastSignature = signature;
-      continueLoop = plan.continue === true;
+    /*
+     * 模型可能回一个空 ops 说"已完成"，界面上却什么都没变。
+     * 这种情况不能报成功 —— 用户什么都看不到，只会以为系统坏了。
+     */
+    if (okCount === 0 && failCount === 0 && totalAdded === 0) {
+      useDesktopStore.getState().setFeedback(
+        mkFeedback('fail', '没有产生任何改动', '模型这一轮没有给出可执行的指令，界面上什么都没变。换个说法再说一次通常就好了。'),
+      );
+      return finish({ ok: false, added: 0, rounds: rounds.length, okCount: 0, failCount: 0, error: '空指令' });
     }
 
     const level: FeedbackLevel = failCount === 0 ? 'ok' : 'partial';

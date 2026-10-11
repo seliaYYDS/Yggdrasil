@@ -24,7 +24,13 @@
   --ygg-radius: 4px;
   --ygg-danger: #C4553B;
   --ygg-ok: #7FA65A;
-  --ygg-font: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  /*
+   * 字体：世界树 = 古树 / 刻痕 / 史诗，走衬线。全部本地字体，不下载 webfont。
+   * 拉丁衬线在前、中文衬线在后 —— 反过来拉丁字母会用中文字体画。
+   */
+  --ygg-font: "Palatino Linotype", "Book Antiqua", Palatino, Georgia, Cambria, "Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", STSong, SimSun, "Times New Roman", serif;
+  --ygg-font-display: "Trajan Pro", Cinzel, "Palatino Linotype", "Book Antiqua", Palatino, Georgia, "Source Han Serif SC", "Songti SC", STSong, SimSun, serif;
+  --ygg-font-mono: "Cascadia Mono", "JetBrains Mono", "DejaVu Sans Mono", Consolas, "Courier New", ui-monospace, monospace;
 
   /*
    * 动效时长与缓动。

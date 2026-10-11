@@ -7,12 +7,25 @@ function endpoint(baseUrl: string): string {
 }
 
 export interface StreamOptions {
+  /** 正文增量。 */
   onDelta?: (chunk: string) => void;
+  /**
+   * 思考增量。
+   * DeepSeek 的推理模型把思维链放在 `delta.reasoning_content`，
+   * 另一些服务端放在 `delta.reasoning` —— 两个都收。
+   */
+  onThinking?: (chunk: string) => void;
   signal?: AbortSignal;
 }
 
+interface StreamDelta {
+  content?: string | null;
+  reasoning_content?: string | null;
+  reasoning?: string | null;
+}
+
 interface StreamChunk {
-  choices?: Array<{ delta?: { content?: string | null }; message?: { content?: string | null } }>;
+  choices?: Array<{ delta?: StreamDelta; message?: { content?: string | null } }>;
   error?: { message?: string };
 }
 
@@ -76,7 +89,11 @@ export async function chatStream(
         continue;
       }
       if (chunk.error?.message) throw new LlmError(chunk.error.message);
-      const delta = chunk.choices?.[0]?.delta?.content ?? chunk.choices?.[0]?.message?.content ?? '';
+      const d = chunk.choices?.[0]?.delta;
+      // 思考流单独走一条回调：它不进正文，也不参与 JSON 解析。
+      const thought = d?.reasoning_content ?? d?.reasoning ?? '';
+      if (thought) options.onThinking?.(thought);
+      const delta = d?.content ?? chunk.choices?.[0]?.message?.content ?? '';
       if (delta) {
         full += delta;
         options.onDelta?.(delta);

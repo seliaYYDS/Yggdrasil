@@ -151,7 +151,12 @@ export interface TraceStep {
   summary: string;
   status: TraceStatus;
   message: string;
+  /** op 类步骤的返回内容（接口的 observation）。 */
   observation?: string;
+  /** 模型推理步：模型单独的思考流（部分服务端会返回 reasoning_content）。 */
+  thinking?: string;
+  /** 模型推理步：模型这一轮的原始输出全文。 */
+  raw?: string;
   startedAt: number;
   endedAt?: number;
 }

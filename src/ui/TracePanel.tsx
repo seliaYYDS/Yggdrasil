@@ -96,6 +96,10 @@ export function TracePanel() {
           </div>
         </div>
 
+        {view === 'steps' && trace.length > 0 ? (
+          <div className="ygg-panel-hint">点任意一行展开：模型的思考、原始输出与接口返回内容</div>
+        ) : null}
+
         {view === 'log' ? (
           <div className="ygg-section">
             <div className="ygg-log">
@@ -142,10 +146,37 @@ export function TracePanel() {
                       <span className="dur">{step.status === 'running' ? '…' : duration(step)}</span>
                     </div>
                     <div className="ygg-step-sum">{step.summary}</div>
-                    {isOpen && step.observation ? (
-                      <div className="ygg-step-obs">{step.observation}</div>
+
+                    {/*
+                      展开后能看到模型的**思考过程**与原始输出。
+                      思考来自服务端的 reasoning_content（推理模型）或流式拼接的正文；
+                      折叠时只显示一句话结论，并提示"可以点开看"。
+                    */}
+                    {isOpen && step.thinking ? (
+                      <div className="ygg-step-block">
+                        <div className="ygg-step-block-label">思考</div>
+                        <pre className="ygg-step-pre">{step.thinking}</pre>
+                      </div>
                     ) : null}
+                    {isOpen && step.raw && step.raw !== step.thinking ? (
+                      <div className="ygg-step-block">
+                        <div className="ygg-step-block-label">模型原始输出</div>
+                        <pre className="ygg-step-pre">{step.raw}</pre>
+                      </div>
+                    ) : null}
+                    {isOpen && step.observation ? (
+                      <div className="ygg-step-block">
+                        <div className="ygg-step-block-label">返回内容</div>
+                        <pre className="ygg-step-pre">{step.observation}</pre>
+                      </div>
+                    ) : null}
+
                     {!isOpen && step.message ? <div className="ygg-step-msg">{step.message}</div> : null}
+                    {!isOpen && (step.thinking || step.raw) ? (
+                      <div className="ygg-step-hint">
+                        {step.thinking ? '有思考内容 · ' : ''}点开看全文
+                      </div>
+                    ) : null}
                     {isOpen && step.message ? <div className="ygg-step-msg">{step.message}</div> : null}
                   </div>
                 );

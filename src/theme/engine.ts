@@ -20,7 +20,21 @@ export const DEFAULT_TOKENS: ThemeTokens = {
   '--ygg-radius': '4px',
   '--ygg-danger': '#C4553B',
   '--ygg-ok': '#7FA65A',
-  '--ygg-font': 'system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif',
+  /*
+   * 字体：世界树 = 古树 / 刻痕 / 史诗，所以走**衬线**而不是无衬线。
+   * 全部用本地字体，不下载 webfont —— 离线可用，也不受网络与地区限制。
+   * 拉丁衬线在前、中文衬线在后：反过来的话拉丁字母会用中文字体画，很难看。
+   */
+  '--ygg-font':
+    '"Palatino Linotype", "Book Antiqua", Palatino, Georgia, Cambria, ' +
+    '"Source Han Serif SC", "Noto Serif CJK SC", "Songti SC", STSong, SimSun, ' +
+    '"Times New Roman", serif',
+  /** 标题用：更古老的衬线 + 拉开的字距，用来区分层级。 */
+  '--ygg-font-display':
+    '"Trajan Pro", Cinzel, "Palatino Linotype", "Book Antiqua", Palatino, Georgia, ' +
+    '"Source Han Serif SC", "Songti SC", STSong, SimSun, serif',
+  '--ygg-font-mono':
+    '"Cascadia Mono", "JetBrains Mono", "DejaVu Sans Mono", Consolas, "Courier New", ui-monospace, monospace',
 };
 
 /**

@@ -6,6 +6,8 @@ body {
   color: var(--ygg-fg);
   font-family: var(--ygg-font);
   font-size: 13px;
+  /* 衬线 + 一点点字距，读起来更像刻在树皮上的字 */
+  letter-spacing: .015em;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
@@ -148,7 +150,10 @@ button:focus:not(:focus-visible) { outline: none; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  letter-spacing: .03em;
+  /* 标题用"更古老的"那一支衬线并拉开字距，和正文区分层级 */
+  font-family: var(--ygg-font-display);
+  font-size: 13px;
+  letter-spacing: .09em;
   transition: color var(--ygg-t-fast) var(--ygg-ease);
 }
 .ygg-window.is-focused .ygg-title-text { color: var(--ygg-accent-hi); }
@@ -291,7 +296,14 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-input:focus, .ygg-select:focus { border-color: var(--ygg-accent-hi); background: var(--ygg-surface); }
 .ygg-input::placeholder { color: var(--ygg-fg-muted); opacity: .6; }
 
-.ygg-label { display: block; font-size: 11px; color: var(--ygg-fg-muted); margin-bottom: 4px; letter-spacing: .06em; }
+.ygg-label {
+  display: block;
+  font-family: var(--ygg-font-display);
+  font-size: 11px;
+  color: var(--ygg-fg-muted);
+  margin-bottom: 4px;
+  letter-spacing: .12em;
+}
 .ygg-field { margin-bottom: 11px; }
 .ygg-form { padding: 11px; animation: ygg-fade-in var(--ygg-t) var(--ygg-ease) both; }
 .ygg-range { width: 100%; accent-color: var(--ygg-accent); }
@@ -421,7 +433,7 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-queue-idx {
   flex: none;
   min-width: 11px;
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--ygg-font-mono);
   font-size: 9px;
   color: var(--ygg-accent-dim);
   transition: color var(--ygg-t-fast) var(--ygg-ease);
@@ -505,7 +517,7 @@ button:focus:not(:focus-visible) { outline: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
   opacity: .7;
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--ygg-font-mono);
 }
 .ygg-compose-hint { opacity: .6; letter-spacing: .03em; }
 
@@ -591,7 +603,7 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 
 .ygg-log {
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--ygg-font-mono);
   font-size: 11px;
   line-height: 1.6;
   white-space: pre-wrap;
@@ -609,6 +621,14 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-log-line:hover { color: var(--ygg-accent-hi); transform: translateX(2px); }
 
 .ygg-empty, .ygg-muted { color: var(--ygg-fg-muted); font-size: 11px; }
+
+.ygg-panel-hint {
+  font-size: 10px;
+  color: var(--ygg-fg-muted);
+  letter-spacing: .04em;
+  padding: 0 2px 8px;
+  opacity: .8;
+}
 
 .ygg-seg { display: inline-flex; gap: 4px; }
 .ygg-seg button {
@@ -699,17 +719,47 @@ button:focus:not(:focus-visible) { outline: none; }
   letter-spacing: .06em;
   flex: none;
 }
-.ygg-step-head .label { color: var(--ygg-fg); }
+.ygg-step-head .label { color: var(--ygg-fg); font-family: var(--ygg-font-display); letter-spacing: .06em; }
 .ygg-step-head .spacer { flex: 1; }
-.ygg-step-head .dur { color: var(--ygg-fg-muted); font-family: ui-monospace, Consolas, monospace; font-size: 10px; }
+.ygg-step-head .dur { color: var(--ygg-fg-muted); font-family: var(--ygg-font-mono); font-size: 10px; }
 .ygg-step-sum {
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--ygg-font-mono);
   font-size: 10px;
   color: var(--ygg-fg-muted);
   margin-top: 2px;
   padding-left: 16px;
   word-break: break-all;
   opacity: .8;
+}
+/* 展开后看到的内容块：思考 / 原始输出 / 观察结果 */
+.ygg-step-block { margin: 4px 0 0; padding-left: 16px; }
+.ygg-step-block-label {
+  font-family: var(--ygg-font-display);
+  font-size: 9px;
+  letter-spacing: .14em;
+  color: var(--ygg-fg-muted);
+  margin-bottom: 3px;
+}
+.ygg-step-pre {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--ygg-font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--ygg-fg);
+  background: var(--ygg-bg);
+  border-radius: var(--ygg-radius);
+  padding: 8px 10px;
+}
+.ygg-step-hint {
+  font-size: 9px;
+  letter-spacing: .1em;
+  color: var(--ygg-accent-dim);
+  margin-top: 3px;
+  padding-left: 16px;
 }
 .ygg-step-msg {
   font-size: 11px;
@@ -746,7 +796,7 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-toast.is-ok { border-color: var(--ygg-ok); }
 .ygg-toast.is-partial { border-color: var(--ygg-accent); }
 .ygg-toast.is-fail { border-color: var(--ygg-danger); }
-.ygg-toast .t { font-size: 12px; }
+.ygg-toast .t { font-family: var(--ygg-font-display); font-size: 12px; letter-spacing: .06em; }
 .ygg-toast.is-ok .t { color: var(--ygg-ok); }
 .ygg-toast.is-fail .t { color: var(--ygg-danger); }
 .ygg-toast .d {
@@ -757,14 +807,14 @@ button:focus:not(:focus-visible) { outline: none; }
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--ygg-font-mono);
 }
 
 /* ---------------- 错误面板 ---------------- */
 
 .ygg-error-panel {
   padding: 11px;
-  font-family: ui-monospace, Consolas, monospace;
+  font-family: var(--ygg-font-mono);
   font-size: 11px;
   line-height: 1.6;
   color: var(--ygg-fg);
