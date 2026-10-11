@@ -102,6 +102,12 @@ const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
 const MAX_RECOVERIES = 3;
 
 /**
+ * 观察结果的滚动预算（字符）。超过就丢掉最老的几条。
+ * 取 40000 —— 大约能留住 3~4 次默认长度的抓取，够多步任务用，单次请求也不会失控。
+ */
+const OBSERVATION_BUDGET = 40000;
+
+/**
  * 带重试的模型调用。
  * 出错不再直接终止整轮 —— 先退避重试；仍失败则把错误交回上层，
  * 由上层决定是否让 Agent 换个做法继续（见 §5.28）。
@@ -183,7 +189,21 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
     let totalAdded = 0;
     let okCount = 0;
     let failCount = 0;
-    let lastObservations: string[] | null = null;
+    /**
+     * 所有轮次的观察结果，滚动保留。
+     *
+     * 不能只带最后一轮：多步任务里第 1 轮抓到的页面，到第 3 轮就看不见了，
+     * 模型只能反复重抓同一页。用字符预算保留最近的内容。
+     */
+    const observationLog: string[] = [];
+    const pushObservations = (lines: string[]): void => {
+      if (lines.length === 0) return;
+      observationLog.push(...lines);
+      let total = observationLog.reduce((n, s) => n + s.length, 0);
+      while (observationLog.length > 1 && total > OBSERVATION_BUDGET) {
+        total -= observationLog.shift()!.length;
+      }
+    };
     let continueLoop = true;
     let round = 0;
     /**
@@ -229,8 +249,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         ...transcriptToMessages(origin).filter((m) => m.content !== input),
         { role: 'user', content: input },
       ];
-      if (lastObservations) {
-        messages.push({ role: 'user', content: buildObservationPrompt(lastObservations) });
+      if (observationLog.length > 0) {
+        messages.push({ role: 'user', content: buildObservationPrompt(observationLog) });
       }
 
       let buffer = '';
@@ -247,10 +267,10 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         pushStep({ ...modelStep, status: 'fail', message: msg, endedAt: Date.now() });
         store.log('error', 'llm ✕ ' + msg);
         if (recoveries < MAX_RECOVERIES) {
-          lastObservations = [
+          pushObservations([
             '上一轮模型调用失败：' + msg,
             '请换一个更简单的做法重试；如果任务无法完成，用空 ops 结束。',
-          ];
+          ]);
           notifyRetry(round, '模型调用失败，正在重试：' + msg);
           continue;
         }
@@ -271,11 +291,11 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         });
         store.log('error', 'parse ✕ ' + err);
         if (recoveries < MAX_RECOVERIES) {
-          lastObservations = [
+          pushObservations([
             '你上一轮的输出不是合法指令，解析失败：' + err,
             '原始输出片段：' + raw.slice(0, 300),
             '请只输出一个 JSON 对象，kind 必须是可用接口之一。',
-          ];
+          ]);
           notifyRetry(round, '指令格式错误，正在让其自行修复：' + err);
           continue;
         }
@@ -323,11 +343,11 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         // 全部失败：回滚这一轮，但**不终止整个任务** —— 把失败原因回灌，
         // 让 Agent 下一轮换个写法（常见于源码编译错误）。
         if (recoveries < MAX_RECOVERIES) {
-          lastObservations = [
+          pushObservations([
             '你上一轮的所有指令都失败了，已回滚它们造成的改动。失败原因：',
             ...text,
             '请修正后重试。常见原因：源码语法错误、引用了不存在的 id、变量未定义。',
-          ];
+          ]);
           notifyRetry(round, '全部指令失败，正在重试：' + (text[0] ?? ''));
           continue;
         }
@@ -342,7 +362,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
       recordLedger(originId, plan.ops, result);
       // 执行回执只进 trace 与本轮的观察通道，**不写进消息历史** ——
       // 历史里留下"已创建 X"会让后续轮次误以为 X 还存在（见 §5.19）。
-      lastObservations = observations;
+      pushObservations(observations);
 
       // 无轮次上限下的空转保护：指令与结果都与上一轮完全一致时停下来。
       // 只判"完全一致"，因此真实的推进（哪怕只是新建了一个同名字的组件）不会被误伤。

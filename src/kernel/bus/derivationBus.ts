@@ -211,8 +211,33 @@ export function rollback(result: ExecuteResult): void {
   store.applyTokens(result.tokensBefore);
 }
 
+/**
+ * 单条观察结果回灌给模型的上限。
+ * fetch_url 的正文长度由模型自己用 maxChars 指定（最大 60000），这里只做兜底，不额外收紧。
+ */
+const MAX_OBSERVATION_CHARS = 64000;
+
+/**
+ * 一条执行结果转成回灌给模型的文本。
+ *
+ * **必须带上 observation。** 此前这里只回 message，于是模型看到的全部内容就是
+ * 「✓ 已抓取 url（正文 8000 字符 · 图 37 · 链接 20）」这种结论 —— 正文、图片直链、
+ * 链接清单、inspect 的结构快照全都只进了轨迹面板，**人能看到，模型看不到**。
+ * 结果是模型拿不到任何数据，只能反复重抓同一页。
+ */
 export function formatOutcomes(outcomes: OpOutcome[]): string[] {
-  return outcomes.map((o) => (o.ok ? '✓ ' : '✗ ') + o.message);
+  return outcomes.map((o) => {
+    const head = (o.ok ? '✓ ' : '✗ ') + o.message;
+    const body = (o.observation ?? '').trim();
+    // 很多接口的 observation 与 message 本来就是同一句，别重复贴两遍。
+    if (!body || body === o.message.trim()) return head;
+    const clipped =
+      body.length > MAX_OBSERVATION_CHARS
+        ? body.slice(0, MAX_OBSERVATION_CHARS) +
+          '\n…（这一条结果过长，已截断；原始长度 ' + body.length + ' 字符）'
+        : body;
+    return head + '\n' + clipped;
+  });
 }
 
 export { fail, ok };

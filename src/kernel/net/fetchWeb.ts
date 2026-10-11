@@ -9,7 +9,7 @@
  */
 
 export interface WebFetchOptions {
-  /** 只取正文前 N 个字符，默认 8000。注意链接与图片不受这个限制。 */
+  /** 只取正文前 N 个字符，默认 12000。注意链接与图片不受这个限制。 */
   maxChars?: number;
   signal?: AbortSignal;
 }
@@ -33,7 +33,7 @@ export interface WebFetchResult {
 export const DEFAULT_PROXY = 'https://r.jina.ai/';
 
 /** 正文裁剪的默认值与上限。 */
-export const DEFAULT_MAX_CHARS = 8000;
+export const DEFAULT_MAX_CHARS = 12000;
 export const MAX_MAX_CHARS = 60000;
 
 /** 单类 URL（链接 / 图片）最多回多少个，防止一个列表页把上下文塞满。 */

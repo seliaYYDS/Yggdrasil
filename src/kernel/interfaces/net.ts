@@ -14,7 +14,7 @@ export function registerNetInterfaces(): void {
       '抓取一个网址，返回正文文本（HTML 会被剥标签）、页面里的**图片直链**与可跟进的链接。' +
       '找图片时直接看返回里的「图片直链」一节，那些地址可以直接写进 <img src>，不需要再抓一遍。' +
       '直连被 CORS 拦时会自动走渲染代理（代理回 markdown，链接与图片同样会被抽出来）。' +
-      'maxChars 可选，默认 8000，最大 60000；只裁正文，链接与图片不受影响。失败会返回原因。',
+      'maxChars 可选，默认 12000，最大 60000；只裁正文，链接与图片不受影响。失败会返回原因。',
     example: { kind: 'fetch_url', url: 'https://example.com', maxChars: 4000 },
     handler: async (op) => {
       const url = strOr(op.url, '');
