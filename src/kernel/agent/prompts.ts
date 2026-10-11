@@ -151,6 +151,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     ...styleRules(),
     ...surfaceRules(),
     ...agentRules(),
+    ...browserRules(),
     ...netRules(),
     '',
     ...ledgerRules(input.ledger),
@@ -358,6 +359,28 @@ function agentRules(): string[] {
     '- 层级由用户点击决定会自动提升；要显式指定用 `update_component` 的 z 字段。',
   ];
 }
+/**
+ * 真实浏览器环境的控制。
+ * 必须把浏览器的**硬限制**说在前面，否则模型会一轮轮重试注定失败的操作。
+ */
+function browserRules(): string[] {
+  return [
+    '## 真实浏览器（和应用内部桌面不是一回事）',
+    '- 应用内部桌面：每个组件是一个窗口，尺寸见「桌面视口」一节，用 create_component / update_component / ' +
+      'arrange_windows 操作。',
+    '- 真实浏览器：用 browser_* 这几个接口。',
+    '  - `browser_info` 读浏览器窗口（可视区 / 窗口 / 屏幕 / 像素比 / 是否全屏）。',
+    '  - `browser_open` 新建页面（新标签；给 width/height 就是新窗口），会记下句柄。',
+    '  - `browser_pages` 看本应用打开过哪些页面；`browser_close` 关闭它们；`browser_resize` 调整它们的尺寸。',
+    '- **三条硬限制，遇到就照实说，不要硬试**：',
+    '  1. 网页**不能**改用户主窗口的尺寸 —— `browser_resize` 对当前页面会被浏览器忽略（返回里会说明）。',
+    '  2. 新窗口**只能在用户手势里**打开。模型是异步执行的，`browser_open` 被弹窗拦截是常态；' +
+      '被拦时地址会自动挂到输入框的「打开」按钮上等用户点，**不要重复调用**。',
+    '  3. 浏览器**不允许**枚举用户自己开的标签页，`browser_pages` 只能看到本应用开出去的。',
+    '- 如果只是想**看页面内容**，用 `fetch_url` 取回正文再渲染成组件，比开新窗口可靠得多。',
+  ];
+}
+
 function netRules(): string[] {
   return [
     '## 联网（fetch_url / fetch_image）',

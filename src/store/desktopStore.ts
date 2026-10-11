@@ -361,6 +361,14 @@ interface DesktopState {
   viewH: number;
   /** 等待发送的输入，先来先跑。不进持久化。 */
   queue: QueuedInput[];
+  /**
+   * 被浏览器弹窗拦截、等用户点一下的待打开页面。不进持久化。
+   *
+   * 网页只能在"用户手势"里打开新窗口，而 Agent 的指令是异步执行的 ——
+   * 所以 `browser_open` 经常会被拦。这里把被拦下的地址存下来，
+   * 由用户在输入框里点一下（那是真的手势），页面才打得开。
+   */
+  pendingOpen: { id: string; url: string }[];
   /** 正在播"收进任务栏"动画的窗口 id（节点 id 或 panel-x）。不进持久化。 */
   leaving: Record<string, true>;
   /** 刚从任务栏展开、正在播"长回原位"动画的窗口 id。不进持久化。 */
@@ -398,6 +406,10 @@ interface DesktopState {
   fitToViewport: (viewW: number, viewH: number) => void;
 
   applyTokens: (tokens: ThemeTokens) => void;
+
+  /** 记下一个被弹窗拦截、等用户点开的地址。 */
+  addPendingOpen: (item: { id: string; url: string }) => void;
+  clearPendingOpen: () => void;
 
   /** 追加一条排队输入。 */
   enqueue: (item: QueuedInput) => void;
@@ -498,6 +510,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   viewW: typeof window === 'undefined' ? 1280 : window.innerWidth,
   viewH: typeof window === 'undefined' ? 800 : window.innerHeight,
   queue: [],
+  pendingOpen: [],
   leaving: {},
   restoring: {},
 
@@ -800,6 +813,11 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
+  addPendingOpen: (item) =>
+    set((s) => (s.pendingOpen.some((p) => p.url === item.url) ? s : { pendingOpen: [...s.pendingOpen, item] })),
+
+  clearPendingOpen: () => set({ pendingOpen: [] }),
+
   enqueue: (item) => set((s) => ({ queue: [...s.queue, item] })),
 
   removeQueued: (id) => set((s) => ({ queue: s.queue.filter((q) => q.id !== id) })),
@@ -893,6 +911,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       minimizedPanels: {},
       panelZ: { ...DEFAULT_PANEL_Z },
       queue: [],
+      pendingOpen: [],
       leaving: {},
       restoring: {},
       inputRect: panels.input,

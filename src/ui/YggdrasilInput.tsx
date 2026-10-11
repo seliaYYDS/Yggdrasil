@@ -13,6 +13,7 @@ const COMPOSE_PAD_V = 16; // .ygg-compose padding 8px 上下
 const GAP = 5; // .ygg-compose gap
 const STATE_H = 15; // .ygg-compose-state min-height
 
+const PENDING_H = 20; // .ygg-pending 行高
 const QUEUE_ITEM_H = 18; // .ygg-queue-item height
 const QUEUE_GAP = 2; // .ygg-queue gap
 const QUEUE_PAD_V = 6; // .ygg-queue padding 3px 上下
@@ -29,12 +30,14 @@ const MAX_LINES = 6;
  * 比实际需要少 20px 左右 —— 于是窗口总是不够高，输入区被窗口 body 的滚动条裁掉一截，
  * 看起来就是"输入区域大小固定、只是贴在底部"。
  */
-export function inputMinHeight(areaH: number, queueCount: number): number {
+export function inputMinHeight(areaH: number, queueCount: number, pendingCount = 0): number {
   const rows = Math.min(Math.max(queueCount, 0), QUEUE_MAX_ROWS);
   const queueH = rows > 0 ? rows * QUEUE_ITEM_H + (rows - 1) * QUEUE_GAP + QUEUE_PAD_V : 0;
+  const pendingH = pendingCount > 0 ? PENDING_H + GAP : 0;
   return (
     TITLEBAR_H +
     COMPOSE_PAD_V +
+    pendingH +
     queueH +
     (queueH > 0 ? GAP : 0) +
     areaH +
@@ -54,6 +57,8 @@ export function YggdrasilInput() {
   const detail = useDesktopStore((s) => s.status.detail);
   const queue = useDesktopStore((s) => s.queue);
   const removeQueued = useDesktopStore((s) => s.removeQueued);
+  const pendingOpen = useDesktopStore((s) => s.pendingOpen);
+  const clearPendingOpen = useDesktopStore((s) => s.clearPendingOpen);
   // 只订阅"每条队列项的目标名字"，不订阅整棵节点树 ——
   // 否则拖动窗口时每个 pointermove 都会把输入窗口一起重渲染。
   const queueTargets = useDesktopStore(
@@ -104,7 +109,7 @@ export function YggdrasilInput() {
     setAreaH(next);
   }, [text]);
 
-  const needed = inputMinHeight(areaH, queue.length);
+  const needed = inputMinHeight(areaH, queue.length, pendingOpen.length);
 
   /**
    * 把"内容需要多高"同步回面板矩形。
@@ -134,6 +139,30 @@ export function YggdrasilInput() {
       minHeightCss={needed}
     >
       <div className="ygg-compose">
+        {/*
+          被弹窗拦截的页面：网页只能在"用户手势"里开新窗口，所以这里由用户点一下。
+          点这个按钮就是真正的手势，window.open 不会被拦。
+        */}
+        {pendingOpen.length > 0 ? (
+          <button
+            className="ygg-pending"
+            title={pendingOpen.map((p) => p.url).join('\n')}
+            onClick={() => {
+              for (const p of pendingOpen) {
+                try {
+                  window.open(p.url, '_blank');
+                } catch {
+                  /* 用户禁用了弹窗就只能作罢 */
+                }
+              }
+              clearPendingOpen();
+            }}
+          >
+            <span className="ygg-pending-dot" />
+            打开 {pendingOpen.length} 个被拦截的页面
+          </button>
+        ) : null}
+
         {queue.length > 0 ? (
           <div className="ygg-queue">
             {queue.map((q, i) => (

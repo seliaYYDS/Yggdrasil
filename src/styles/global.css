@@ -363,6 +363,33 @@ button:focus:not(:focus-visible) { outline: none; }
   min-height: 26px;
 }
 
+/* 被浏览器弹窗拦截的页面：用户点一下（真手势）才会打开 */
+.ygg-pending {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 20px;
+  padding: 0 9px;
+  border: 1px solid var(--ygg-accent-dim);
+  background: transparent;
+  color: var(--ygg-accent);
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  animation: ygg-row-in var(--ygg-t) var(--ygg-ease-out) both;
+  transition: background-color var(--ygg-t-fast) var(--ygg-ease), color var(--ygg-t-fast) var(--ygg-ease), border-color var(--ygg-t-fast) var(--ygg-ease);
+}
+.ygg-pending:hover { background: var(--ygg-accent); border-color: var(--ygg-accent); color: var(--ygg-bg); }
+.ygg-pending:active { transform: scale(.97); }
+.ygg-pending-dot {
+  width: 5px; height: 5px;
+  border-radius: 50%;
+  flex: none;
+  background: currentColor;
+}
+
 /* 排队中的输入：贴在输入行上方的一块暗棕底，逐条可删 */
 .ygg-queue {
   flex: none;
