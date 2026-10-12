@@ -1,0 +1,179 @@
+import { hostAllowed } from './package';
+
+/**
+ * 插件 js 工具的**隔离执行**。
+ *
+ * 安全模型（三句话）：
+ * 1. 工具在 **Worker** 里跑，主页面读不到、也读不到主页面；
+ * 2. 那个 Worker **自己没有网络**：进工具之前，全局的
+ *    fetch / XMLHttpRequest / WebSocket / EventSource / importScripts 全部抹掉；
+ * 3. 唯一的出口是 ~~ctx.fetch()~~ —— 它把请求发回主线程，由主线程**按插件的主机白名单**
+ *    校验后代为执行，再把结果递回去。所以 js 工具和声明式端点受同一堵墙管着。
+ *
+ * 拿不到 Worker 时**拒绝执行**（而不是退回主线程裸跑）：
+ * "隔离不了就不跑"比"偷偷不隔离"诚实。
+ */
+export interface SandboxJob {
+  /** 工具源码：一个函数表达式（async (args, ctx) => ...）。 */
+  source: string;
+  args: Record<string, unknown>;
+  /** 用户填的字段（含密钥）—— 工具可以用 ctx.fields 读，但它不该写进返回值。 */
+  fields: Record<string, string>;
+  plugin: { id: string; name: string; version: string };
+  timeoutMs: number;
+  /** 允许 ctx.fetch 访问的主机（就是插件生效的那份白名单）。 */
+  allowHosts: string[];
+  /** 桥接出去的请求；默认用全局 fetch。测试里可以换成桩。 */
+  fetchImpl?: typeof fetch;
+}
+
+export interface SandboxResult {
+  ok: boolean;
+  value?: unknown;
+  error?: string;
+  logs: string[];
+  fetches: number;
+}
+
+/** 可注入的执行器：测试用它在 Node 里跑同一套协议（Node 没有 Worker）。 */
+export type ToolExecutor = (job: SandboxJob) => Promise<SandboxResult>;
+
+let injected: ToolExecutor | null = null;
+
+export function setToolExecutor(fn: ToolExecutor | null): void {
+  injected = fn;
+}
+
+/** 这个环境能不能安全地跑 js 工具。 */
+export function toolSandboxKind(): 'injected' | 'worker' | 'unavailable' {
+  if (injected) return 'injected';
+  return typeof Worker === 'undefined' ? 'unavailable' : 'worker';
+}
+
+export async function runTool(job: SandboxJob): Promise<SandboxResult> {
+  if (injected) return injected(job);
+  if (typeof Worker === 'undefined') {
+    return {
+      ok: false,
+      error: '这个环境不支持隔离执行（没有 Worker），所以插件的 js 工具被停用了。声明式端点不受影响。',
+      logs: [],
+      fetches: 0,
+    };
+  }
+  return runInWorker(job);
+}
+
+/** Worker 里的引导代码：抹掉网络能力，只留 ctx.fetch 这一个出口。 */
+export const WORKER_SHIM = [
+  'const pending = new Map();',
+  'let seq = 0;',
+  "self.addEventListener('message', async (e) => {",
+  '  const m = e.data || {};',
+  "  if (m.type === 'fetch-result') { const p = pending.get(m.id); if (p) { pending.delete(m.id); p(m.result); } return; }",
+  "  if (m.type !== 'run') return;",
+  '  // 断网：Worker 自己不能发请求，唯一的出口是 ctx.fetch（主线程校验主机后代跑）',
+  "  for (const k of ['fetch', 'XMLHttpRequest', 'WebSocket', 'EventSource', 'importScripts']) {",
+  '    try { self[k] = undefined; } catch (err) { /* 有的全局不可写，忽略 */ }',
+  '  }',
+  '  const ctx = {',
+  '    args: m.args,',
+  '    fields: m.fields,',
+  '    plugin: m.plugin,',
+  "    log: (t) => self.postMessage({ type: 'log', text: String(t).slice(0, 400) }),",
+  '    fetch: (url, init) => new Promise((resolve, reject) => {',
+  '      const id = ++seq;',
+  '      pending.set(id, (r) => {',
+  "        if (!r) return reject(new Error('fetch 没有结果'));",
+  "        if (r.error) return reject(new Error(r.error));",
+  '        resolve(r);',
+  '      });',
+  "      self.postMessage({ type: 'fetch', id, url: String(url), init: init || null });",
+  '    }),',
+  '  };',
+  '  try {',
+  "    const fn = (0, eval)('(' + m.source + ')');",
+  "    if (typeof fn !== 'function') throw new Error('工具源码必须是一个函数（形如 async (args, ctx) => {...}）');",
+  '    let value = await fn(m.args, ctx);',
+  '    value = value === undefined ? null : JSON.parse(JSON.stringify(value));',
+  "    self.postMessage({ type: 'done', value });",
+  '  } catch (err) {',
+  "    self.postMessage({ type: 'error', message: (err && err.message) || String(err) });",
+  '  }',
+  '});',
+].join('\n');
+
+/** 把一次 ctx.fetch 桥接到主线程：**这里是主机白名单真正生效的地方**。 */
+export async function bridgeFetch(
+  raw: string,
+  init: unknown,
+  allowHosts: string[],
+  fetchImpl: typeof fetch,
+): Promise<Record<string, unknown>> {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return { error: '不是合法地址：' + raw };
+  }
+  if (!/^https?:$/.test(url.protocol)) return { error: '只允许 http(s)：' + url.protocol };
+  if (!hostAllowed(url.hostname, allowHosts)) {
+    return { error: '插件不允许访问 ' + url.hostname + '（白名单：' + (allowHosts.join(', ') || '空') + '）' };
+  }
+  try {
+    const res = await fetchImpl(url.href, (init as RequestInit) || undefined);
+    const text = await res.text();
+    // 工具拿到的正文也限制一下：不然一个 100MB 的响应会先炸内存再炸上下文。
+    return { ok: res.ok, status: res.status, text: text.slice(0, 200000) };
+  } catch (e) {
+    return { error: '请求 ' + url.hostname + ' 失败：' + (e as Error).message };
+  }
+}
+
+async function runInWorker(job: SandboxJob): Promise<SandboxResult> {
+  const fetchImpl = job.fetchImpl ?? fetch;
+  const logs: string[] = [];
+  let fetches = 0;
+
+  const url = URL.createObjectURL(new Blob([WORKER_SHIM], { type: 'text/javascript' }));
+  const worker = new Worker(url);
+  return await new Promise<SandboxResult>((resolve) => {
+    let settled = false;
+    const finish = (r: SandboxResult) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      worker.terminate();
+      URL.revokeObjectURL(url);
+      resolve(r);
+    };
+    const timer = window.setTimeout(() => {
+      finish({ ok: false, error: '执行超时（' + job.timeoutMs + 'ms），已终止。', logs, fetches });
+    }, job.timeoutMs);
+
+    worker.onmessage = (e: MessageEvent) => {
+      const m = (e.data || {}) as Record<string, unknown>;
+      if (m.type === 'log') {
+        logs.push(String(m.text).slice(0, 400));
+        return;
+      }
+      if (m.type === 'fetch') {
+        fetches += 1;
+        void bridgeFetch(String(m.url), m.init, job.allowHosts, fetchImpl).then((result) => {
+          worker.postMessage({ type: 'fetch-result', id: m.id, result });
+        });
+        return;
+      }
+      if (m.type === 'done') return finish({ ok: true, value: m.value, logs, fetches });
+      if (m.type === 'error') return finish({ ok: false, error: String(m.message), logs, fetches });
+    };
+    worker.onerror = (e: ErrorEvent) => finish({ ok: false, error: 'Worker 出错：' + (e.message || '未知'), logs, fetches });
+
+    worker.postMessage({
+      type: 'run',
+      source: job.source,
+      args: job.args,
+      fields: job.fields,
+      plugin: job.plugin,
+    });
+  });
+}

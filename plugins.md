@@ -65,7 +65,11 @@
 | `author` | | 显示用 |
 | `hosts` | ✔ | 允许访问的主机白名单，至少一个 |
 | `fields` | | 用户可以填的字段（密钥或配置） |
-| `endpoints` | ✔ | 至少一个，最多 60 个 |
+| `endpoints` | | 声明式端点，最多 60 个（与 tools 至少要有其一） |
+| `tools` | | js 工具（~~tools/*.js~~，在 Worker 里隔离执行） |
+| `ui` | | 自带界面（~~ui/*.tsx~~，Agent 用 plugin_ui 摆出来） |
+| `signature` | | Ed25519 签名；验不过是**拒绝安装** |
+| `update` | | 版本更新地址（主机必须在 hosts 里） |
 
 **不认识的顶层字段会被拒绝**（防拼错）。`format` 只出现在单文件形态的顶层，不在 manifest 里。
 
@@ -449,6 +453,115 @@ URL 会进日志、进 Trace、进你贴给别人的截图；请求头不会。
 | `weather` | `plugins/weather/` | 两个主机、两个端点串起来用、配置字段（温度单位）、指南里带代码表 |
 | `music-search` | `plugins/music-search/` | 可覆盖的参数（市场）与 `emptyHint`、`pick` 削响应、指南里写清"不要 autoplay / 不要 fetch 音频字节 / 你听不到声音" |
 
+
+---
+
+## js 工具（能执行代码的那一半）
+
+~~tools/*.js~~ 里放的是**函数表达式**，装进包、由 Agent 按需调用：
+
+    // tools/summarise.js  —— 整个文件就是一个函数
+    async (args, ctx) => {
+      const nums = String(args.numbers).split(',').map(Number);
+      ctx.log('拿到 ' + nums.length + ' 个数');
+      return { sum: nums.reduce((a, b) => a + b, 0) };
+    }
+
+清单里声明它：
+
+    "tools": [
+      { "name": "summarise", "label": "统计", "description": "…", "file": "tools/summarise.js",
+        "params": [ { "name": "numbers", "description": "逗号分隔", "required": true } ],
+        "cap": null, "timeoutMs": 3000 }
+    ]
+
+**ctx 能拿到什么**：
+
+| | |
+| --- | --- |
+| ~~args~~ | 模型给的参数（按 ~~params~~ 校验过，必填缺了不会进来） |
+| ~~ctx.fields~~ | 用户在插件面板填的值（含密钥）。**别把它写进返回值** —— 返回值会被回灌进提示词 |
+| ~~ctx.log(text)~~ | 一行日志，会跟结果一起回给模型（最多 400 字符） |
+| ~~ctx.fetch(url, init)~~ | **唯一的网络出口**，主机由主线程按白名单校验后代跑 |
+
+**隔离模型（这是它敢被称为"能执行代码"的原因）**：
+
+1. 工具在 **Worker** 里跑，碰不到主页面；
+2. 进工具之前，那个 Worker 的 ~~fetch~~ / ~~XMLHttpRequest~~ / ~~WebSocket~~ / ~~EventSource~~ / ~~importScripts~~ **全部被抹掉**，
+   所以它自己没有网络；
+3. 要联网只能走 ~~ctx.fetch~~，而那一跳在主线程上做**主机白名单校验** —— 和声明式端点同一堵墙；
+4. ~~timeoutMs~~（默认 8000，上限 30000）到点直接 ~~terminate()~~；
+5. **拿不到 Worker 时拒绝执行**，不会退回主线程裸跑。界面上会说明"这个环境不支持隔离执行"。
+
+**契约**：返回值必须能被 JSON 序列化（返回函数/DOM 会报错）；抛出的错误会如实回灌给模型；
+源码里不能用 ~~import~~（包在 Worker 里以字符串执行，没有模块解析）。
+
+**写工具时的三个坑**：~~Number('')~~ 是 0（先滤空串再转数）；返回值别太大（会被截断）；
+密钥别放进返回值。
+
+---
+
+## 插件自带界面（ui/*.tsx）
+
+~~ui/*.tsx~~ 是一个**普通 TSX 模块**，和组件源码同一套契约（~~export default~~ 一个函数组件，
+可以 ~~import * as React from "react"~~，也可以用 ~~"yggdrasil"~~ 里的东西）：
+
+    import * as React from "react";
+    export default function Board() {
+      const rows = (typeof data === "object" && data && data.rows) || [];
+      return <div>{rows.map((r, i) => <div key={i}>{r.label}: {r.value}</div>)}</div>;
+    }
+
+**组件没有 props**（主页面就是 ~~<C />~~）。需要数据时，Agent 调 ~~plugin_ui~~ 传 ~~data~~，
+它会被**注入成模块顶层的常量~~ data ~~** —— 所以上面那行直接读 ~~data~~ 就行。没传就是 ~~null~~。
+
+    { "kind": "plugin_ui", "id": "status-board", "ui": "board",
+      "data": { "title": "今天的数字", "rows": [{ "label": "合计", "value": "23" }] } }
+
+清单里声明：
+
+    "ui": [ { "name": "board", "label": "状态看板", "description": "…", "file": "ui/board.tsx",
+              "dataDoc": "{ title?: string; rows?: {label,value}[] }" } ]
+
+**建出来的窗口是锁定的**（~~locked: true~~）：它是插件作者的代码，
+~~patch_source~~ 与 ~~remove_node~~ 都会拒绝，用户可以在 Nodes 面板解锁。
+这样"插件代码只读"这条约定才不是空话。
+
+---
+
+## 签名与版本更新
+
+**签名**是清单里的一个块（脚本帮你生成）：
+
+    node scripts/sign-plugin.mjs keygen                       生成一对密钥
+    node scripts/sign-plugin.mjs sign plugins/my-plugin key.priv
+    node scripts/sign-plugin.mjs verify plugins/my-plugin
+
+它输出一段 ~~signature~~，贴进 manifest.json 顶层：
+
+    "signature": { "alg": "ed25519", "publicKey": "<base64 32 字节>", "value": "<base64 64 字节>" }
+
+签的是**包内容哈希**：包内所有文件按名字排序拼起来做 SHA-256，
+其中 ~~manifest.json~~ 的 ~~signature~~ 块**不参与**（否则签名把自己算进去，永远验不过）。
+两类哈希必须用**作者写的原始清单**算，不能用校验后的对象 —— 校验会补齐/重排字段，
+用它算出来的哈希对不上，报错还写着"内容被改过"，极难查。这个坑真踩过一次。
+
+- 验不过（bad）→ **拒绝安装**（"内容与签名不符"）；
+- 环境不支持 Ed25519 → 标成 ~~unsupported~~，**不假装验过**，也不因此拒装；
+- 没签名 → ~~none~~。三种状态在插件面板里如实显示，并给出公钥指纹与包哈希前几位。
+
+**版本更新**：清单里声明一个地址，返回 ~~{"version": "2.0", "url": "https://…/x.graft"}~~：
+
+    "update": { "url": "https://example.com/my-plugin/version.json" }
+
+它的**主机必须在 ~~hosts~~ 白名单里** —— 更新不给插件多开一个网络出口。
+插件面板上的「检查更新」读它、比版本号；有新版才提示，并且**照旧走一遍安装确认**。
+
+**升级时的权限差异**会逐条列出来：新增的主机、新增的操作、**新增的 js 工具**、
+新增要填的密钥、新增的能力开关。理由很直白：用户上一次点的"安装"是针对**上一版**给的授权，
+这一版多要了东西就必须再讲一遍 —— 否则"升级"就成了绕过授权的通道。
+另外还会警告"版本号没变但内容变了"（哈希不同），那种包最可疑。
+
 ---
 
 ## 现状与还没做的
@@ -456,12 +569,11 @@ URL 会进日志、进 Trace、进你贴给别人的截图；请求头不会。
 **已有**：包格式与校验、两个入口（zip / 单文件）、主机白名单（两道）、字段与密钥、
 响应 `pick`、`emptyHint`、提示词按能力裁剪 + 指南按需读、安装确认、开关 / 升级 / 卸载。
 
-**还没有**（按大概的实施顺序）：
+**已经有了**：声明式端点、**js 工具（Worker 隔离）**、**自带界面**、
+**签名（Ed25519）与版本更新（含权限差异）**、密钥、pick、emptyHint、按能力裁剪、安装确认、开关 / 升级 / 卸载。
 
-1. **js 工具** —— 声明式表达不了的那 20%（签名、分页拼接、格式转换）。需要 Worker 隔离 +
-   每插件出口白名单 + 独立的授权话术；
+**还没有**：
+
 2. **按 Agent 启用** —— 现在只有全局开关，不能让"只给某个 Agent 用"；
 3. **插件自带界面** —— 随插件附一个组件/插槽（播放器、仪表盘这类）；
-4. **签名与版本更新** —— 现在装的时候会展示主机与操作，但没有来源校验，
-   也没有"这个包比上次多了权限"的提示；
 5. **场景依赖声明** —— `.seed` 里记下"这个场景用了哪些插件"，导入时提示缺哪一个。

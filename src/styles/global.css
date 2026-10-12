@@ -1249,6 +1249,7 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-plugin-name { font-size: 12px; color: var(--ygg-fg); }
 .ygg-plugin-ver { font-size: 10px; color: var(--ygg-fg-muted); margin-left: auto; }
 .ygg-plugin-id { font-size: 10px; color: var(--ygg-fg-muted); margin-top: 2px; }
+.ygg-plugin-sig { font-size: 10px; color: var(--ygg-accent-hi); margin-top: 3px; opacity: .85; }
 .ygg-plugin-meta { font-size: 10px; line-height: 1.6; color: var(--ygg-fg-muted); margin-top: 4px; }
 .ygg-plugin-toggle { display: inline-flex; align-items: center; cursor: pointer; }
 .ygg-plugin-toggle input { display: none; }

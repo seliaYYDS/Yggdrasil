@@ -1,0 +1,119 @@
+{
+  "format": "yggdrasil.plugin",
+  "manifest": {
+    "id": "status-board",
+    "name": "服务看板",
+    "version": "1.0",
+    "author": "Yggdrasil",
+    "minAppVersion": "0.1",
+    "description": "示例插件：一个声明式端点 + 一个 js 工具 + 一块自带界面（把三者凑在一起看它们怎么配合）。",
+    "hosts": [
+      "httpbin.org"
+    ],
+    "update": {
+      "url": "https://httpbin.org/json"
+    },
+    "fields": [
+      {
+        "key": "greeting",
+        "label": "看板标题",
+        "placeholder": "服务状态",
+        "default": "服务状态"
+      }
+    ],
+    "endpoints": [
+      {
+        "name": "ping",
+        "label": "探活",
+        "description": "GET httpbin.org/get with a free-form note. Returns the request as the server saw it (headers, args, origin) — useful to show what the browser actually sends.",
+        "method": "GET",
+        "url": "https://httpbin.org/get?note={note}",
+        "params": [
+          {
+            "name": "note",
+            "description": "any text, echoed back",
+            "default": "hello"
+          }
+        ],
+        "pick": [
+          "args.note",
+          "origin",
+          "headers.Host",
+          "headers.User-Agent"
+        ],
+        "maxChars": 4000,
+        "example": {
+          "kind": "status-board.ping",
+          "note": "hi"
+        }
+      }
+    ],
+    "tools": [
+      {
+        "name": "summarise",
+        "label": "统计并整理",
+        "description": "A **js tool**: takes a list of numbers (comma separated) and returns count / sum / min / max / average, plus a short human sentence. Runs in a sandboxed Worker with no network of its own, so it needs no host. Use it when you want arithmetic that you would rather not do in your head, or as the data step before rendering a board.",
+        "file": "tools/summarise.js",
+        "params": [
+          {
+            "name": "numbers",
+            "description": "comma separated numbers, e.g. \"3, 8, 12\"",
+            "required": true
+          }
+        ],
+        "cap": null,
+        "timeoutMs": 3000,
+        "example": {
+          "kind": "status-board.summarise",
+          "numbers": "3, 8, 12"
+        }
+      },
+      {
+        "name": "probe",
+        "label": "联网探活（经白名单）",
+        "description": "A **js tool that needs the network**: it calls ctx.fetch() to hit httpbin.org/delay/1, measures how long it took and returns {ms, status}. ctx.fetch is the only network path a js tool has, and the main thread checks it against the plugin host allow-list — try a host outside the list and you get a refusal instead of a request.",
+        "file": "tools/probe.js",
+        "params": [],
+        "cap": "net",
+        "timeoutMs": 8000,
+        "example": {
+          "kind": "status-board.probe"
+        }
+      }
+    ],
+    "ui": [
+      {
+        "name": "board",
+        "label": "状态看板",
+        "description": "A screen this plugin ships: renders a small board with the title from the plugin field and whatever data you pass. Put it on the desktop with plugin_ui(\"status-board\", \"board\", data).",
+        "file": "ui/board.tsx",
+        "dataDoc": "{ title?: string; rows?: { label: string; value: string }[] }",
+        "example": {
+          "kind": "plugin_ui",
+          "id": "status-board",
+          "ui": "board",
+          "data": {
+            "title": "今天的数字",
+            "rows": [
+              {
+                "label": "订单",
+                "value": "128"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "signature": {
+      "alg": "ed25519",
+      "publicKey": "u5iOLcNJGQlsuCp6SwPtVfOlnTsvs4OeGzJqMrohm4c=",
+      "value": "cX3ha05z4hmjQeS9cPMCUezzXb2F+ncPLxAoZHGU3sL8LXdmK8xppbC9jl9Hpd7YXGHVSa3HbYpIIa9efqUrCA=="
+    }
+  },
+  "guide": "# status-board\n\nA demo plugin that uses all three plugin capabilities at once, so you can see how they combine:\n\n| capability | what it is here |\n| --- | --- |\n| declarative endpoint | `status-board.ping` — a plain GET with one parameter |\n| **js tool** | `status-board.summarise` (pure calculation) and `status-board.probe` (does a network call through `ctx.fetch`) |\n| **shipped interface** | the `board` screen — a TSX module the plugin carries, put on screen with `plugin_ui` |\n\n## Workflow\n\n1. `status-board.summarise` with the numbers the user mentioned → you get count/sum/min/max/average.\n2. `plugin_ui` with `id: \"status-board\"`, `ui: \"board\"`, and `data`:\n\n       { \"title\": \"今天的数字\", \"rows\": [ { \"label\": \"合计\", \"value\": \"23\" } ] }\n\n3. Fill the rows from whatever you actually computed. **Do not invent values** — the board shows exactly what\n   you pass, so a wrong number is a wrong board.\n\n## About the js tools\n\n- `summarise` runs in a sandboxed Worker with **no network of its own**; it only sees the arguments and the\n  plugin fields. Use it for arithmetic instead of doing it in your head.\n- `probe` calls `ctx.fetch` — that is the plugin's only way out to the network, and the main thread checks the\n  host against the plugin allow-list. If you want to show what happens when it is refused, that is a plugin bug,\n  not something you can work around.\n- A js tool that throws or times out comes back as a failed operation with the error text; report that text.\n\n## The board is plugin code\n\n`plugin_ui` creates a **locked** window: patch_source on it will be refused. If the board needs a different\nlook, tell the user to unlock it in the Nodes panel, or use a normal component instead.\n",
+  "files": {
+    "tools/probe.js": "/** 联网探活：唯一出口是 ctx.fetch（主线程按白名单校验）。 */\nasync (args, ctx) => {\n  const started = Date.now();\n  const res = await ctx.fetch('https://httpbin.org/delay/1');\n  const ms = Date.now() - started;\n  ctx.log('HTTP ' + res.status + ' in ' + ms + 'ms');\n  return { ms, status: res.status, bytes: String(res.text || '').length };\n}\n",
+    "tools/summarise.js": "/**\n * 统计数据。**这是插件里的 js 工具**：一个函数表达式，在 Worker 里执行。\n *\n * 能拿到的东西：\n *   args   模型给的参数（按清单里的 params 校验过）\n *   ctx.fields  用户在插件面板填的值（这里是 greeting）\n *   ctx.log()   写一行日志，会跟结果一起回给模型\n *   ctx.fetch() 唯一的网络出口，主机由主线程按白名单把关（这个工具不需要网络）\n */\nasync (args, ctx) => {\n  // 注意：Number('') 是 0，所以必须先滤掉空串，否则 \"3, 8, 12, x\" 会多算一个 0。\n  const nums = String(args.numbers || '')\n    .split(/[^0-9.\\-]+/)\n    .map((x) => x.trim())\n    .filter((x) => x !== '')\n    .map((x) => Number(x))\n    .filter((x) => Number.isFinite(x));\n  if (nums.length === 0) throw new Error('没解析出任何数字');\n  const sum = nums.reduce((a, b) => a + b, 0);\n  const min = Math.min.apply(null, nums);\n  const max = Math.max.apply(null, nums);\n  ctx.log('解析出 ' + nums.length + ' 个数字');\n  return {\n    count: nums.length,\n    sum: Math.round(sum * 100) / 100,\n    min,\n    max,\n    average: Math.round((sum / nums.length) * 100) / 100,\n    sentence: '共 ' + nums.length + ' 个数，合计 ' + Math.round(sum * 100) / 100 + '，平均 ' + Math.round((sum / nums.length) * 100) / 100 + '。',\n    title: ctx.fields.greeting || '',\n  };\n}\n",
+    "ui/board.tsx": "import * as React from \"react\";\n\n/**\n * 插件自带的界面。\n *\n * 组件**没有 props**（主页面就是 <C />），所以数据由 Agent 调 plugin_ui 时传进来，\n * 被注入成模块顶层的常量 data。没有传就是 null。\n */\nexport default function Board() {\n  const d = (typeof data === \"object\" && data) || {};\n  const rows = Array.isArray(d.rows) ? d.rows : [];\n  return (\n    <div style={{ width: \"100%\", height: \"100%\", padding: 12, background: \"var(--ygg-surface)\", color: \"var(--ygg-fg)\", overflow: \"auto\" }}>\n      <div style={{ fontSize: 13, color: \"var(--ygg-accent-hi)\", marginBottom: 8 }}>\n        {d.title || \"状态看板\"}\n      </div>\n      {rows.length === 0 ? (\n        <div style={{ fontSize: 11, color: \"var(--ygg-fg-muted)\" }}>没有数据 —— 让 Agent 用 plugin_ui 传 data 进来。</div>\n      ) : (\n        rows.map((r, i) => (\n          <div key={i} style={{ display: \"flex\", justifyContent: \"space-between\", fontSize: 12, padding: \"3px 0\", borderBottom: \"1px solid var(--ygg-accent-dim)\" }}>\n            <span style={{ color: \"var(--ygg-fg-muted)\" }}>{String(r.label)}</span>\n            <span>{String(r.value)}</span>\n          </div>\n        ))\n      )}\n    </div>\n  );\n}\n"
+  }
+}

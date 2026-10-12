@@ -1,0 +1,110 @@
+{
+  "id": "status-board",
+  "name": "服务看板",
+  "version": "1.0",
+  "author": "Yggdrasil",
+  "minAppVersion": "0.1",
+  "description": "示例插件：一个声明式端点 + 一个 js 工具 + 一块自带界面（把三者凑在一起看它们怎么配合）。",
+  "hosts": [
+    "httpbin.org"
+  ],
+  "update": {
+    "url": "https://httpbin.org/json"
+  },
+  "fields": [
+    {
+      "key": "greeting",
+      "label": "看板标题",
+      "placeholder": "服务状态",
+      "default": "服务状态"
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "ping",
+      "label": "探活",
+      "description": "GET httpbin.org/get with a free-form note. Returns the request as the server saw it (headers, args, origin) — useful to show what the browser actually sends.",
+      "method": "GET",
+      "url": "https://httpbin.org/get?note={note}",
+      "params": [
+        {
+          "name": "note",
+          "description": "any text, echoed back",
+          "default": "hello"
+        }
+      ],
+      "pick": [
+        "args.note",
+        "origin",
+        "headers.Host",
+        "headers.User-Agent"
+      ],
+      "maxChars": 4000,
+      "example": {
+        "kind": "status-board.ping",
+        "note": "hi"
+      }
+    }
+  ],
+  "tools": [
+    {
+      "name": "summarise",
+      "label": "统计并整理",
+      "description": "A **js tool**: takes a list of numbers (comma separated) and returns count / sum / min / max / average, plus a short human sentence. Runs in a sandboxed Worker with no network of its own, so it needs no host. Use it when you want arithmetic that you would rather not do in your head, or as the data step before rendering a board.",
+      "file": "tools/summarise.js",
+      "params": [
+        {
+          "name": "numbers",
+          "description": "comma separated numbers, e.g. \"3, 8, 12\"",
+          "required": true
+        }
+      ],
+      "cap": null,
+      "timeoutMs": 3000,
+      "example": {
+        "kind": "status-board.summarise",
+        "numbers": "3, 8, 12"
+      }
+    },
+    {
+      "name": "probe",
+      "label": "联网探活（经白名单）",
+      "description": "A **js tool that needs the network**: it calls ctx.fetch() to hit httpbin.org/delay/1, measures how long it took and returns {ms, status}. ctx.fetch is the only network path a js tool has, and the main thread checks it against the plugin host allow-list — try a host outside the list and you get a refusal instead of a request.",
+      "file": "tools/probe.js",
+      "params": [],
+      "cap": "net",
+      "timeoutMs": 8000,
+      "example": {
+        "kind": "status-board.probe"
+      }
+    }
+  ],
+  "ui": [
+    {
+      "name": "board",
+      "label": "状态看板",
+      "description": "A screen this plugin ships: renders a small board with the title from the plugin field and whatever data you pass. Put it on the desktop with plugin_ui(\"status-board\", \"board\", data).",
+      "file": "ui/board.tsx",
+      "dataDoc": "{ title?: string; rows?: { label: string; value: string }[] }",
+      "example": {
+        "kind": "plugin_ui",
+        "id": "status-board",
+        "ui": "board",
+        "data": {
+          "title": "今天的数字",
+          "rows": [
+            {
+              "label": "订单",
+              "value": "128"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "signature": {
+    "alg": "ed25519",
+    "publicKey": "u5iOLcNJGQlsuCp6SwPtVfOlnTsvs4OeGzJqMrohm4c=",
+    "value": "cX3ha05z4hmjQeS9cPMCUezzXb2F+ncPLxAoZHGU3sL8LXdmK8xppbC9jl9Hpd7YXGHVSa3HbYpIIa9efqUrCA=="
+  }
+}

@@ -14,7 +14,26 @@
  * 这里只做粗检，避免把一个明显缺字段的包发出去。
  */
 import { readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
+
+/** 与 src/kernel/plugin/types.ts 的白名单保持一致。 */
+const ALLOWED = [
+  /^manifest\.json$/,
+  /^guide\.md$/,
+  /^README\.md$/,
+  /^tools\/[a-z][a-z0-9_-]{0,30}\.js$/,
+  /^ui\/[a-z][a-z0-9_-]{0,30}\.tsx$/,
+];
+
+/** 递归收集插件目录里允许的文件（tools/*.js 与 ui/*.tsx 要一起打进包）。 */
+function collectFiles(dir, base = dir, out = []) {
+  for (const name of readdirSync(dir)) {
+    const p = join(dir, name);
+    if (statSync(p).isDirectory()) collectFiles(p, base, out);
+    else out.push(relative(base, p).split(sep).join('/'));
+  }
+  return out;
+}
 
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -108,20 +127,33 @@ for (const dir of dirs) {
   let guide = '';
   try { guide = readFileSync(guidePath, 'utf8'); } catch { console.warn('[' + dir + '] 没有 guide.md'); }
 
-  const files = [{ name: 'manifest.json', text: manifestRaw }];
-  if (guide) files.push({ name: 'guide.md', text: guide });
+  const files = [];
+  for (const rel of collectFiles(at).sort()) {
+    if (rel === 'manifest.json') { files.push({ name: rel, text: manifestRaw }); continue; }
+    if (!ALLOWED.some((re) => re.test(rel))) {
+      console.warn('[' + dir + '] 跳过不允许的文件 ' + rel);
+      continue;
+    }
+    files.push({ name: rel, text: readFileSync(join(at, rel.split('/').join(sep)), 'utf8') });
+  }
   const zip = zipStore(files);
+  const extra = {};
 
   const outDir = 'public/plugins';
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, manifest.id + '.graft'), zip);
+  for (const f of files) if (f.name !== 'manifest.json' && f.name !== 'guide.md') extra[f.name] = f.text;
   writeFileSync(
     join(outDir, manifest.id + '.json'),
-    JSON.stringify({ format: 'yggdrasil.plugin', manifest, guide }, null, 2) + '\n',
+    JSON.stringify(
+      { format: 'yggdrasil.plugin', manifest, guide, ...(Object.keys(extra).length ? { files: extra } : {}) },
+      null,
+      2,
+    ) + '\n',
   );
   console.log(
     '[' + manifest.id + '] -> ' + outDir + '/' + manifest.id + '.graft (' + zip.length + ' B)' +
-      ' + .json (' + files.reduce((n, f) => n + f.text.length, 0) + ' 字符)',
+      ' + .json (' + files.reduce((n, f) => n + f.text.length, 0) + ' 字符, ' + files.length + ' 个文件)',
   );
 }
 process.exit(failed ? 1 : 0);

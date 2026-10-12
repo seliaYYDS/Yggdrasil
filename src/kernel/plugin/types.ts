@@ -87,6 +87,58 @@ export interface PluginEndpoint {
   example?: Record<string, unknown>;
 }
 
+/**
+ * 插件自带的 **js 工具**。
+ *
+ * 它不在主页面里跑，而是在一个 Worker 里跑 —— 那个 Worker **没有网络**：
+ * 全局的 fetch / XMLHttpRequest / WebSocket / importScripts 在进入工具前被抹掉，
+ * 唯一的出口是 ~~ctx.fetch()~~，由父窗口校验主机白名单之后代为执行。
+ * 所以"插件能访问哪些主机"这条墙对 js 工具同样成立，而不是只对声明式端点成立。
+ */
+export interface PluginTool {
+  /** 工具名（插件内唯一），op kind 是 <插件id>.<名字>。 */
+  name: string;
+  label: string;
+  description: string;
+  /** 包内路径，必须形如 tools/xxx.js。 */
+  file: string;
+  params?: PluginParam[];
+  cap?: ActCap | null;
+  /** 执行上限，默认 8000ms，最多 30000ms（超时就终止 Worker）。 */
+  timeoutMs?: number;
+  mutates?: boolean;
+  example?: Record<string, unknown>;
+}
+
+/**
+ * 插件自带的**界面**：一个 TSX 模块，和普通组件源码同一种契约
+ * （export default 一个函数组件，可以 import react 与 "yggdrasil"）。
+ *
+ * 它没有 props —— 渲染时是 ~~<C />~~。需要数据的话，Agent 调 plugin_ui 时传的 data
+ * 会被注入成模块顶层的常量 ~~data~~，组件直接读它即可。
+ */
+export interface PluginUi {
+  name: string;
+  label: string;
+  description: string;
+  /** 包内路径，必须形如 ui/xxx.tsx。 */
+  file: string;
+  /** data 里能放什么（写给模型看）。 */
+  dataDoc?: string;
+  example?: Record<string, unknown>;
+}
+
+/** 签名块：对"包内容哈希"的签名（算法目前只支持 ed25519）。 */
+export interface PluginSignature {
+  alg: 'ed25519';
+  /** 原始 32 字节公钥的 base64。 */
+  publicKey: string;
+  /** 对 packageHash 的 64 字节签名，base64。 */
+  value: string;
+  /** 签名者自称的名字，只用于显示，不参与验证。 */
+  signer?: string;
+}
+
 export interface PluginManifest {
   /** 全小写字母数字与连字符，作为 op kind 的前缀。 */
   id: string;
@@ -108,6 +160,15 @@ export interface PluginManifest {
   /** 用户可以填的字段（密钥或配置）。 */
   fields?: PluginField[];
   endpoints: PluginEndpoint[];
+  tools?: PluginTool[];
+  ui?: PluginUi[];
+  /** 有签名时装机前会验一遍；验不过直接拒绝安装。 */
+  signature?: PluginSignature;
+  /**
+   * 版本更新：一个返回 ~~{"version": "2.0", "url": "https://…/x.graft"}~~ 的地址。
+   * **它的主机必须在 hosts 白名单里** —— 不给插件新开一个网络出口。
+   */
+  update?: { url: string };
   /** guide.md 的内容，装载时填进来。 */
   guide?: string;
 }
@@ -117,6 +178,12 @@ export interface PluginPackage {
   manifest: PluginManifest;
   /** 包内文件（相对路径 -> 文本内容）。 */
   files: Record<string, string>;
+  /** 包内容哈希（十六进制），用于"装的是哪一份"与更新检测。 */
+  hash: string;
+  /** 签名状态（bad 的包在解析时就被拒了）。 */
+  signature: 'none' | 'ok' | 'unsupported';
+  /** 签名者公钥指纹（前 16 位十六进制）。 */
+  fingerprint?: string;
 }
 
 /** 已安装的插件：清单 + 用户填的值 + 开关状态。 */
@@ -129,11 +196,23 @@ export interface InstalledPlugin {
   hosts: string[];
   fields: PluginField[];
   endpoints: PluginEndpoint[];
+  tools: PluginTool[];
+  ui: PluginUi[];
   guide: string;
+  /** 包内文件（tools/*.js、ui/*.tsx 的源码）。 */
+  files: Record<string, string>;
+  /** 安装时算出来的包内容哈希（十六进制）。 */
+  hash: string;
+  /** 签名状态：none 没有签名 / ok 验过 / unsupported 环境验不了 / bad 验不过（不会装进来）。 */
+  signature: 'none' | 'ok' | 'unsupported';
+  /** 签名者公钥指纹（前 16 位十六进制），只用于显示。 */
+  fingerprint?: string;
   enabled: boolean;
   installedAt: string;
   /** 从哪来的（文件名或 URL），只用于界面展示。 */
   source: string;
+  /** 版本更新地址（清单里的 update.url，装的时候记下来）。 */
+  update?: { url: string };
   /** 用户填的值（含密钥）。**不进 .seed、不进提示词。** */
   values: Record<string, string>;
 }
@@ -143,5 +222,12 @@ export const PLUGIN_FORMAT = 'yggdrasil.plugin';
 export const PLUGIN_EXT = '.graft';
 /** 单文件形态（agent 自己产出的包走这个，便于粘贴与 diff）。 */
 export const PLUGIN_JSON_EXT = '.json';
-/** 包内允许出现的文件（这一版没有代码，所以白名单只有两个 + 说明文件）。 */
+/** 包内允许出现的固定文件名。 */
 export const PLUGIN_ALLOWED_FILES = ['manifest.json', 'guide.md', 'README.md'];
+/** 允许的目录型文件：tools/*.js 与 ui/*.tsx。**除这些之外的文件一律拒绝。** */
+export const PLUGIN_FILE_PATTERNS = [/^tools\/[a-z][a-z0-9_-]{0,30}\.js$/, /^ui\/[a-z][a-z0-9_-]{0,30}\.tsx$/];
+
+/** 一个包内路径是否允许。 */
+export function pluginFileAllowed(name: string): boolean {
+  return PLUGIN_ALLOWED_FILES.includes(name) || PLUGIN_FILE_PATTERNS.some((re) => re.test(name));
+}

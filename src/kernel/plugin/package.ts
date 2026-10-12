@@ -2,10 +2,15 @@ import type { ActCap } from '../types';
 import {
   PLUGIN_ALLOWED_FILES,
   PLUGIN_FORMAT,
+  pluginFileAllowed,
   type PluginEndpoint,
   type PluginField,
   type PluginManifest,
   type PluginPackage,
+  type PluginParam,
+  type PluginSignature,
+  type PluginTool,
+  type PluginUi,
 } from './types';
 import { readZip, safeEntryName, writeZip, ZipError } from './zip';
 
@@ -20,6 +25,76 @@ import { readZip, safeEntryName, writeZip, ZipError } from './zip';
  * 两个入口：.graft（zip，作者用真实文件写）与 .json（单文件，便于粘贴与 diff）。
  * 两者在内存里落到同一个形状（manifest + files），所以校验器只有一个。
  */
+
+/**
+ * 包内容哈希。
+ *
+ * 规则：把包内所有文件按名字排序，逐个拼成 ~~名字 + \n + 内容~~ 再哈希；
+ * **manifest.json 里的 signature 块不参与**（否则签名把自己算进去了，永远验不过）。
+ * 签名者与验证者用同一个函数，所以只要文件内容一致，哈希就一致。
+ */
+export async function packageHash(manifest: PluginManifest, files: Record<string, string>): Promise<string> {
+  const parts: string[] = [];
+  for (const name of Object.keys(files).sort()) {
+    if (name === 'manifest.json') {
+      const { signature: _drop, ...rest } = manifest as PluginManifest & { signature?: PluginSignature };
+      parts.push(name + '\n' + JSON.stringify(rest));
+      continue;
+    }
+    parts.push(name + '\n' + files[name]);
+  }
+  const bytes = new TextEncoder().encode(parts.join('\n\0\n'));
+  const digest = await crypto.subtle.digest('SHA-256', buf(bytes));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** 拷成独立 ArrayBuffer：TS 5.9 的 Uint8Array 泛型不直接满足 BufferSource。 */
+function buf(u8: Uint8Array): ArrayBuffer {
+  const copy = new Uint8Array(u8.length);
+  copy.set(u8);
+  return copy.buffer as ArrayBuffer;
+}
+
+function b64ToBytes(s: string): Uint8Array {
+  const bin = atob(s.trim());
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+export type SignatureState = 'none' | 'ok' | 'unsupported' | 'bad';
+
+/**
+ * 验签：Ed25519，签的是**哈希的十六进制字符串**的字节。
+ *
+ * 环境不支持 Ed25519（老浏览器）时返回 unsupported —— 不假装验过，也不因此拒绝安装；
+ * 界面会如实显示"环境验不了"。验**不过**（bad）则由调用方拒绝安装。
+ */
+export async function verifySignature(
+  hash: string,
+  sig: PluginSignature,
+): Promise<{ state: SignatureState; fingerprint?: string }> {
+  if (sig.alg !== 'ed25519') return { state: 'bad' };
+  let pub: Uint8Array;
+  let value: Uint8Array;
+  try {
+    pub = b64ToBytes(sig.publicKey);
+    value = b64ToBytes(sig.value);
+  } catch {
+    return { state: 'bad' };
+  }
+  const fingerprint = [...pub.slice(0, 8)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) return { state: 'unsupported', fingerprint };
+  try {
+    const key = await subtle.importKey('raw', buf(pub), { name: 'Ed25519' }, false, ['verify']);
+    const ok = await subtle.verify({ name: 'Ed25519' }, key, buf(value), new TextEncoder().encode(hash));
+    return { state: ok ? 'ok' : 'bad', fingerprint };
+  } catch {
+    // 浏览器不支持 Ed25519 时 importKey 会抛错 —— 这是"验不了"，不是"签名是假的"。
+    return { state: 'unsupported', fingerprint };
+  }
+}
 
 /** 应用版本：minAppVersion 比它大就拒绝。与 package.json 保持一致。 */
 export const APP_VERSION = '0.1.0';
@@ -42,7 +117,8 @@ const CAPS: (ActCap | null)[] = ['desktop', 'style', 'global', 'net', 'browser',
  */
 export const MAX_ENDPOINTS = 60;
 
-function versionAtLeast(a: string, b: string): boolean {
+/** a >= b。 */
+export function versionAtLeast(a: string, b: string): boolean {
   const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
   const pb = b.split('.').map((n) => parseInt(n, 10) || 0);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
@@ -68,7 +144,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
   const m = raw as Record<string, unknown>;
   const bad = (msg: string) => ({ ok: false as const, error: 'manifest 有问题：' + msg });
 
-  const known = ['id', 'name', 'version', 'minAppVersion', 'author', 'description', 'hosts', 'fields', 'endpoints'];
+  const known = ['id', 'name', 'version', 'minAppVersion', 'author', 'description', 'hosts', 'fields', 'endpoints', 'tools', 'ui', 'signature', 'update'];
   const unknown = Object.keys(m).filter((k) => !known.includes(k));
   if (unknown.length) return bad('不认识的字段 ' + unknown.join(', ') + '（这一版只认 ' + known.join(', ') + '）。');
 
@@ -139,8 +215,93 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     if (f.type !== 'url') return bad('字段 ' + ref[1] + ' 被 hosts 引用了，它必须是 type: "url"。');
   }
 
-  const epsRaw = Array.isArray(m.endpoints) ? m.endpoints : [];
-  if (epsRaw.length === 0) return bad('至少要有一个 endpoint，否则装它没有意义。');
+  const epsRawForNames = Array.isArray(m.endpoints) ? m.endpoints : [];
+
+  // ---- js 工具 ----
+  const toolsRaw = Array.isArray(m.tools) ? m.tools : [];
+  const tools: PluginTool[] = [];
+  for (const t of toolsRaw) {
+    if (!t || typeof t !== 'object') return bad('tools 里有一项不是对象。');
+    const o = t as Record<string, unknown>;
+    const tn = typeof o.name === 'string' ? o.name : '';
+    if (!NAME_RE.test(tn)) return bad('tools[].name 不合法：' + tn);
+    if (tools.some((x) => x.name === tn) || epsRawForNames.some((e) => (e as Record<string, unknown>).name === tn)) {
+      return bad('tools 与 endpoints 里名字重复：' + tn);
+    }
+    const label = typeof o.label === 'string' && o.label.trim() ? o.label.trim() : '';
+    if (!label) return bad('tool ' + tn + ' 缺少 label。');
+    const desc = typeof o.description === 'string' && o.description.trim() ? o.description.trim() : '';
+    if (!desc) return bad('tool ' + tn + ' 缺少 description（模型靠它决定怎么用）。');
+    const file = typeof o.file === 'string' ? o.file.trim() : '';
+    if (!/^tools\/[a-z][a-z0-9_-]{0,30}\.js$/.test(file)) {
+      return bad('tool ' + tn + ' 的 file 要形如 tools/xxx.js（现在是 "' + file + '"）。');
+    }
+    const timeoutMs = typeof o.timeoutMs === 'number' ? Math.floor(o.timeoutMs) : 8000;
+    if (timeoutMs < 200 || timeoutMs > 30000) return bad('tool ' + tn + ' 的 timeoutMs 要在 200 到 30000 之间。');
+    const cap = o.cap === undefined ? 'net' : (o.cap as ActCap | null);
+    if (!CAPS.includes(cap)) return bad('tool ' + tn + ' 的 cap 不认识：' + String(o.cap));
+    tools.push({
+      name: tn,
+      label,
+      description: desc,
+      file,
+      params: Array.isArray(o.params) ? (o.params as PluginParam[]) : [],
+      cap,
+      timeoutMs,
+      mutates: o.mutates === true,
+      example: o.example && typeof o.example === 'object' ? (o.example as Record<string, unknown>) : undefined,
+    });
+  }
+
+  // ---- 自带界面 ----
+  const uiRaw = Array.isArray(m.ui) ? m.ui : [];
+  const ui: PluginUi[] = [];
+  for (const u of uiRaw) {
+    if (!u || typeof u !== 'object') return bad('ui 里有一项不是对象。');
+    const o = u as Record<string, unknown>;
+    const un = typeof o.name === 'string' ? o.name : '';
+    if (!NAME_RE.test(un)) return bad('ui[].name 不合法：' + un);
+    if (ui.some((x) => x.name === un)) return bad('ui 名字重复：' + un);
+    const label = typeof o.label === 'string' && o.label.trim() ? o.label.trim() : '';
+    if (!label) return bad('ui ' + un + ' 缺少 label。');
+    const desc = typeof o.description === 'string' && o.description.trim() ? o.description.trim() : '';
+    if (!desc) return bad('ui ' + un + ' 缺少 description（模型靠它决定什么时候摆出来）。');
+    const file = typeof o.file === 'string' ? o.file.trim() : '';
+    if (!/^ui\/[a-z][a-z0-9_-]{0,30}\.tsx$/.test(file)) {
+      return bad('ui ' + un + ' 的 file 要形如 ui/xxx.tsx（现在是 "' + file + '"）。');
+    }
+    ui.push({
+      name: un,
+      label,
+      description: desc,
+      file,
+      dataDoc: typeof o.dataDoc === 'string' ? o.dataDoc : undefined,
+      example: o.example && typeof o.example === 'object' ? (o.example as Record<string, unknown>) : undefined,
+    });
+  }
+
+  // ---- 版本更新地址 ----
+  let update: { url: string } | undefined;
+  if (m.update && typeof m.update === 'object') {
+    const uUrl = (m.update as Record<string, unknown>).url;
+    if (typeof uUrl !== 'string' || !/^https?:\/\//i.test(uUrl)) return bad('update.url 要是 http(s) 绝对地址。');
+    let uHost = '';
+    try {
+      uHost = new URL(uUrl.replace(/\{[^}]+\}/g, 'x')).hostname;
+    } catch {
+      return bad('update.url 解析不了。');
+    }
+    // 更新的出口也不额外开：必须已经在这个插件的主机白名单里。
+    if (!hostAllowed(uHost, hosts) && !hosts.some((h) => h.startsWith('{config:'))) {
+      return bad('update.url 的主机 ' + uHost + ' 不在 hosts 白名单里（更新也不能多开一个出口）。');
+    }
+    update = { url: uUrl };
+  }
+
+  const epsRaw = epsRawForNames;
+  if (epsRaw.length === 0 && tools.length === 0) {
+    return bad('至少要有一个 endpoint 或 tools，否则装它没有意义。');
+  }
   if (epsRaw.length > MAX_ENDPOINTS) return bad('endpoint 太多（' + epsRaw.length + ' 个，上限 ' + MAX_ENDPOINTS + '）。拆成两个插件，或只保留常用的。');
   const endpoints: PluginEndpoint[] = [];
   for (const e of epsRaw) {
@@ -258,12 +419,16 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
       hosts,
       fields,
       endpoints,
+      tools,
+      ui,
+      update,
+      signature: (m.signature && typeof m.signature === 'object' ? (m.signature as PluginSignature) : undefined),
     },
   };
 }
 
 /** 单文件形态：{ format, manifest, guide } 或 { format, manifest, files }。 */
-function parseJsonPackage(text: string): PluginPackage {
+async function parseJsonPackage(text: string): Promise<PluginPackage> {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -283,18 +448,51 @@ function parseJsonPackage(text: string): PluginPackage {
     }
   }
   if (typeof o.guide === 'string' && !files['guide.md']) files['guide.md'] = o.guide;
-  return finish(checked.manifest, files);
+  return await finish(checked.manifest, files, o.manifest);
 }
 
 /** 只允许白名单里的文件：这一版包里不该有代码，多出来的东西直接拒绝而不是忽略。 */
-function finish(manifest: PluginManifest, files: Record<string, string>): PluginPackage {
+async function finish(
+  manifest: PluginManifest,
+  files: Record<string, string>,
+  /*
+   * **算哈希必须用作者写的原始清单，不能用手上这份校验后的对象。**
+   *
+   * 校验会把字段补齐/裁剪/重排（tools 只留认识的键、hosts 转小写…），
+   * 用它算出来的哈希与作者签名时算的不是一回事 —— 于是"签名永远验不过"，
+   * 而且报错还说"内容被改过"，极难查。这个坑真踩过一次。
+   */
+  rawManifest: unknown = manifest,
+): Promise<PluginPackage> {
   for (const name of Object.keys(files)) {
-    if (!PLUGIN_ALLOWED_FILES.includes(name)) {
-      throw new Error('包里不允许有 ' + name + '（这一版只支持 ' + PLUGIN_ALLOWED_FILES.join(' / ') + '）。');
+    if (!pluginFileAllowed(name)) {
+      throw new Error(
+        '包里不允许有 ' + name + '（只支持 ' + PLUGIN_ALLOWED_FILES.join(' / ') + ' 以及 tools/*.js、ui/*.tsx）。',
+      );
     }
   }
+  // 清单里声明的 tools / ui 文件必须真的在包里 —— 否则装完才发现调用时找不到文件。
+  for (const t of manifest.tools ?? []) {
+    if (!(t.file in files)) throw new Error('清单声明了 ' + t.file + '，但包里没有这个文件。');
+  }
+  for (const u of manifest.ui ?? []) {
+    if (!(u.file in files)) throw new Error('清单声明了 ' + u.file + '，但包里没有这个文件。');
+  }
   const guide = (files['guide.md'] ?? '').trim();
-  return { manifest: { ...manifest, guide }, files };
+  const withGuide = { ...manifest, guide };
+  const hash = await packageHash(rawManifest as PluginManifest, files);
+  const sig = manifest.signature;
+  let signatureState: SignatureState = 'none';
+  let fingerprint: string | undefined;
+  if (sig) {
+    const checked = await verifySignature(hash, sig);
+    fingerprint = checked.fingerprint;
+    if (checked.state === 'bad') {
+      throw new Error('签名验证失败：这个包的内容与签名不符（被改过，或者签名不对）。已拒绝安装。');
+    }
+    signatureState = checked.state;
+  }
+  return { manifest: withGuide, files, hash, signature: signatureState, fingerprint };
 }
 
 /** 读 .graft（zip）。 */
@@ -317,7 +515,7 @@ export async function parseGraft(bytes: Uint8Array): Promise<PluginPackage> {
   }
   const checked = checkManifest(raw);
   if (!checked.ok) throw new Error(checked.error);
-  return finish(checked.manifest, files);
+  return await finish(checked.manifest, files, raw);
 }
 
 /**
@@ -335,7 +533,7 @@ export async function parsePluginPackage(
   if (/\.graft$/i.test(fileName) && !text.trim().startsWith('{')) {
     throw new Error('这个 .graft 不是 zip 包（也不是 JSON 单文件）：开头既不是 PK 也不是 {。');
   }
-  return parseJsonPackage(text);
+  return await parseJsonPackage(text);
 }
 
 /** 把清单 + guide 打成一个 stored zip（确定性）。测试与将来的"导出插件"都用它。 */

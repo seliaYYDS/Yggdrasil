@@ -498,6 +498,19 @@ export function registerCoreInterfaces(): void {
             .join('、');
           return fail('Component ' + id + ' does not exist. Current windows: ' + (list || '(no windows)'));
         }
+        /*
+         * 锁定的组件不允许改源码。
+         *
+         * 插件的自带界面就是**锁定**进来的：它是插件作者的代码，
+         * 让 agent 悄悄改掉它，等于绕过了"插件代码只读"这条约定。
+         * 用户仍然可以在 Nodes 面板里解锁（那时他就是有意的）。
+         */
+        if (node.locked === true) {
+          return fail(
+            '"' + node.name + '" is **locked**, so its source cannot be rewritten. Locked components are protected' +
+              ' (plugin-shipped interfaces arrive locked). Ask the user to unlock it in the Nodes panel if the change is intended.',
+          );
+        }
         if (!node.source.trim()) return fail('Component "' + node.name + '" has no source, so there is nothing to replace.');
         current = node.source;
         label = 'component "' + node.name + '"';

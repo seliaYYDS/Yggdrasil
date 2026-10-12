@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
 import { PanelWindow } from './PanelWindow';
 import { describeManifest, parsePluginPackage } from '../kernel/plugin/package';
+import { checkPluginUpdate, pluginDiff } from '../kernel/plugin/runtime';
 import { PLUGIN_EXT, type PluginPackage } from '../kernel/plugin/types';
 
 /**
@@ -26,6 +27,9 @@ export function PluginsPanel() {
   const [pendingSource, setPendingSource] = useState('');
   const [error, setError] = useState('');
   const [guideOf, setGuideOf] = useState('');
+  /** 每个插件一条"检查更新"的结果（按 id 存）。 */
+  const [updateNote, setUpdateNote] = useState<Record<string, string>>({});
+  const [checking, setChecking] = useState('');
 
   if (!open) return null;
 
@@ -65,6 +69,73 @@ export function PluginsPanel() {
     setPending(null);
   };
 
+  /** 待装包与"同 id 的已装版本"之间的权限差异（首次安装为空）。 */
+  const pendingDiff = (() => {
+    if (!pending) return [] as string[];
+    const prev = plugins.find((x) => x.id === pending.manifest.id);
+    if (!prev) return [] as string[];
+    const m = pending.manifest;
+    const next: typeof prev = {
+      id: m.id,
+      name: m.name,
+      version: m.version,
+      author: m.author,
+      description: m.description,
+      hosts: m.hosts,
+      fields: m.fields ?? [],
+      endpoints: m.endpoints,
+      tools: m.tools ?? [],
+      ui: m.ui ?? [],
+      update: m.update,
+      guide: m.guide ?? '',
+      files: pending.files,
+      hash: pending.hash,
+      signature: pending.signature,
+      fingerprint: pending.fingerprint,
+      enabled: prev.enabled,
+      installedAt: prev.installedAt,
+      source: pendingSource,
+      values: prev.values,
+    };
+    return pluginDiff(prev, next);
+  })();
+
+  /**
+   * 检查更新：读清单里的 update.url。
+   * 有新版就**把它取回来走正常的安装确认**（含权限差异），而不是偷偷替换。
+   */
+  const checkUpdate = async (id: string) => {
+    const plugin = plugins.find((p) => p.id === id);
+    if (!plugin) return;
+    setChecking(id);
+    setUpdateNote((m) => ({ ...m, [id]: '' }));
+    try {
+      const info = await checkPluginUpdate(plugin);
+      if (!info.ok) {
+        setUpdateNote((m) => ({ ...m, [id]: info.error ?? '检查失败' }));
+        return;
+      }
+      if (!info.newer) {
+        setUpdateNote((m) => ({ ...m, [id]: '已是最新（' + plugin.version + '）' }));
+        return;
+      }
+      setUpdateNote((m) => ({ ...m, [id]: '发现新版本 ' + info.latest + '，正在取回…' }));
+      if (!info.url) {
+        setUpdateNote((m) => ({ ...m, [id]: '新版本 ' + info.latest + '，但更新信息里没给下载地址。' }));
+        return;
+      }
+      const res = await fetch(info.url);
+      if (!res.ok) throw new Error('下载新版本失败：HTTP ' + res.status);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      await read(info.url.split('/').pop() || plugin.id + PLUGIN_EXT, bytes);
+      setUpdateNote((m) => ({ ...m, [id]: '新版本 ' + info.latest + ' 已取回，请在下面确认安装。' }));
+    } catch (e) {
+      setUpdateNote((m) => ({ ...m, [id]: (e as Error).message }));
+    } finally {
+      setChecking('');
+    }
+  };
+
   return (
     <PanelWindow panel="plugins" title="插件" minW={340} minH={300} onClose={() => setOpen(false)}>
       <div className="ygg-panel-body">
@@ -94,6 +165,16 @@ export function PluginsPanel() {
                 <li key={i}>{l}</li>
               ))}
             </ul>
+            {pendingDiff.length > 0 ? (
+              <div className="ygg-plugin-error" style={{ color: 'var(--ygg-accent-hi)' }}>
+                <strong>这是一次升级，和上一版比它多要了这些：</strong>
+                <ul className="ygg-plugin-lines" style={{ marginTop: 4 }}>
+                  {pendingDiff.map((l, i) => (
+                    <li key={i}>{l}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div className="ygg-hint">
               装上之后，上面这些操作会变成 Agent 可以调的接口；它只能访问白名单里的主机。
               关闭开关可以随时让 Agent 看不到它。
@@ -130,6 +211,28 @@ export function PluginsPanel() {
               主机：{p.hosts.join('、')}
               <br />
               操作：{p.endpoints.map((e) => e.name).join('、')}
+              {p.tools.length ? (
+                <>
+                  <br />
+                  js 工具：{p.tools.map((t) => t.name).join('、')}（在 Worker 里隔离执行）
+                </>
+              ) : null}
+              {p.ui.length ? (
+                <>
+                  <br />
+                  自带界面：{p.ui.map((u) => u.name).join('、')}
+                </>
+              ) : null}
+              <br />
+              来源：{p.source || '本地文件'}
+            </div>
+            <div className="ygg-plugin-sig">
+              {p.signature === 'ok'
+                ? '签名有效 · ' + (p.fingerprint ?? '')
+                : p.signature === 'unsupported'
+                  ? '有签名，但这个环境验不了'
+                  : '未签名'}
+              {p.hash ? ' · 哈希 ' + p.hash.slice(0, 10) : ''}
             </div>
 
             {p.fields.length > 0 ? (
@@ -151,7 +254,15 @@ export function PluginsPanel() {
               </div>
             ) : null}
 
+            {updateNote[p.id] ? <div className="ygg-hint" style={{ marginTop: 4 }}>{updateNote[p.id]}</div> : null}
             <div className="ygg-row-gap" style={{ marginTop: 6 }}>
+              <button
+                className="ygg-btn tiny ghost"
+                disabled={checking === p.id}
+                onClick={() => void checkUpdate(p.id)}
+              >
+                {checking === p.id ? '检查中…' : '检查更新'}
+              </button>
               <button
                 className="ygg-btn tiny ghost"
                 onClick={() => setGuideOf(guideOf === p.id ? '' : p.id)}

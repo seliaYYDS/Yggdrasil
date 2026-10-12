@@ -10,6 +10,7 @@ import {
   type PanelKey,
 } from '../../store/desktopStore';
 import { unregisterTool } from '../registry/toolRegistry';
+import { enabledPlugins } from '../plugin/runtime';
 import { sanitizeTokens } from '../../theme/engine';
 import type { ActCap, ComponentNode, DerivationOp, YggNode } from '../types';
 import { newNodeId } from '../ids';
@@ -375,6 +376,48 @@ export function registerNodeInterfaces(): void {
     mutates: true,
     cap: 'desktop',
     handler: (op, ctx) => createComponentNode(op, ctx),
+  });
+
+  registerInterface({
+    kind: 'plugin_ui',
+    label: '插件界面',
+    description:
+      '**Put an interface a plugin ships on the desktop.** Give the plugin id and the ui name (both are listed in the prompt and in plugin_docs), plus optional data (JSON) — the component reads it as the top-level constant data. It becomes a normal window you can move and resize. The window is created locked, and it is plugin code: to change it, unlock in the Nodes panel or ask the plugin author, do not patch it silently.',
+    example: { kind: 'plugin_ui', id: 'github', ui: 'repo_card', data: { owner: 'facebook', repo: 'react' } },
+    mutates: true,
+    cap: 'desktop',
+    handler: (op, ctx) => {
+      const id = strOr(op.id, '');
+      const name = strOr(op.ui, '');
+      const plugin = enabledPlugins().find((p) => p.id === id);
+      if (!plugin) {
+        return fail(
+          'No enabled plugin with id "' + id + '". Enabled: ' + (enabledPlugins().map((p) => p.id).join(', ') || '(none)'),
+        );
+      }
+      const ui = plugin.ui.find((u) => u.name === name);
+      if (!ui) {
+        return fail(
+          'Plugin "' + id + '" has no interface "' + name + '". Available: ' + (plugin.ui.map((u) => u.name).join(', ') || '(none)'),
+        );
+      }
+      const file = plugin.files[ui.file];
+      if (!file) return fail('插件包里找不到 ' + ui.file + '。');
+      /*
+       * 数据注入：组件渲染时没有 props（主页面就是 <C />），所以把 data 作为**模块顶层常量**注入。
+       * 不用解析/改写插件源码 —— 直接把那一行放在文件前面，插件里读 data 就能拿到。
+       */
+      const data = op.data === undefined ? null : op.data;
+      const source = 'const data = ' + JSON.stringify(data) + ';\n' + file + '\n';
+      const result = createComponentNode(
+        { ...op, kind: 'create_component', name: plugin.name + ' · ' + ui.label, source } as DerivationOp,
+        ctx,
+      );
+      if (!result.ok || !result.createdId) return result;
+      // 锁定：插件代码不该被 agent 悄悄改掉（用户仍可在 Nodes 面板解锁）。
+      useDesktopStore.getState().updateNode(result.createdId, { locked: true });
+      return ok(result.message + '（插件界面，已锁定）', { createdId: result.createdId });
+    },
   });
 
   registerInterface({

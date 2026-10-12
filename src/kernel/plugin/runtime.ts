@@ -1,8 +1,9 @@
 import type { DerivationOp } from '../types';
 import { fail, ok, str, strOr, type OpContext, type OpResult } from '../bus/opContext';
-import { registerInterface, unregisterInterface } from '../registry/interfaceRegistry';
-import { hostAllowed } from './package';
-import type { InstalledPlugin, PluginEndpoint } from './types';
+import { listInterfaces, registerInterface, unregisterInterface } from '../registry/interfaceRegistry';
+import { hostAllowed, versionAtLeast } from './package';
+import { runTool, toolSandboxKind } from './sandbox';
+import type { InstalledPlugin, PluginEndpoint, PluginTool } from './types';
 
 /**
  * 插件的运行时：把插件的端点变成**普通接口**，并执行它们的 HTTP 调用。
@@ -27,7 +28,10 @@ export function syncPluginRuntime(plugins: InstalledPlugin[]): void {
   const ids = new Set([...current, ...plugins].map((p) => p.id));
   for (const id of ids) unregisterPluginInterfaces(id);
   current = plugins.filter((p) => p.enabled);
-  for (const p of current) for (const e of p.endpoints) registerEndpoint(p, e);
+  for (const p of current) {
+    for (const e of p.endpoints) registerEndpoint(p, e);
+    for (const t of p.tools ?? []) registerToolInterface(p, t);
+  }
 }
 
 export function enabledPlugins(): InstalledPlugin[] {
@@ -38,12 +42,16 @@ export function allKnownPlugins(): InstalledPlugin[] {
   return current;
 }
 
+/**
+ * 撤掉一个插件登记过的所有接口。
+ *
+ * 直接扫注册表按 pluginId 匹配，而不是从 current 里反推名字 ——
+ * 之前只撤端点、忘了 js 工具，结果"卸载了但工具还能调"。按来源扫就不会漏。
+ */
 function unregisterPluginInterfaces(pluginId: string): void {
-  for (const e of endpointsOf(pluginId)) unregisterInterface(pluginKind(pluginId, e.name));
-}
-
-function endpointsOf(pluginId: string): PluginEndpoint[] {
-  return current.find((p) => p.id === pluginId)?.endpoints ?? [];
+  for (const def of listInterfaces()) {
+    if (def.pluginId === pluginId) unregisterInterface(def.kind);
+  }
 }
 
 /**
@@ -324,6 +332,56 @@ function registerEndpoint(plugin: InstalledPlugin, e: PluginEndpoint): void {
 }
 
 /** 插件没给 example 时自己造一个：**kind 必须是真 kind**，否则等于教模型写错。 */
+/**
+ * 把一个 js 工具登记成接口。
+ *
+ * 与声明式端点唯一的区别是"怎么算出来"：端点是拼地址发请求，工具是丢进 Worker 里跑。
+ * 校验、能力开关、账本、回读、截断这些全都一样 —— 模型不需要知道某个 op 背后是哪种。
+ */
+function registerToolInterface(plugin: InstalledPlugin, tool: PluginTool): void {
+  const kind = pluginKind(plugin.id, tool.name);
+  registerInterface({
+    kind,
+    label: tool.label,
+    description: '[' + plugin.name + ' · js 工具] ' + tool.description,
+    example: tool.example ?? defaultToolExample(kind, tool),
+    mutates: tool.mutates === true,
+    cap: tool.cap === null ? undefined : tool.cap ?? 'net',
+    pluginId: plugin.id,
+    handler: async (op: DerivationOp): Promise<OpResult> => {
+      const source = plugin.files[tool.file];
+      if (!source) return fail('插件包里找不到 ' + tool.file + '（装的时候没带进来？）。');
+      const collected = collectParams({ params: tool.params ?? [] } as PluginEndpoint, op);
+      if (!collected.ok) return fail(collected.error);
+      const res = await runTool({
+        source,
+        args: collected.params,
+        fields: plugin.values,
+        plugin: { id: plugin.id, name: plugin.name, version: plugin.version },
+        timeoutMs: tool.timeoutMs ?? 8000,
+        allowHosts: effectiveHosts(plugin),
+      });
+      const head = plugin.name + ' · ' + tool.label;
+      if (!res.ok) {
+        return fail(head + ' 执行失败：' + (res.error ?? '未知错误') + (res.logs.length ? '\n日志：' + res.logs.join(' / ') : ''));
+      }
+      const text = typeof res.value === 'string' ? res.value : JSON.stringify(res.value, null, 1);
+      const clipped = clip(text ?? 'null', 12000);
+      return ok(head + ' · ok', {
+        observation:
+          clipped.text + clipped.note +
+          (res.logs.length ? '\n(log: ' + res.logs.join(' / ') + ')' : ''),
+      });
+    },
+  });
+}
+
+function defaultToolExample(kind: string, tool: PluginTool): Record<string, unknown> {
+  const out: Record<string, unknown> = { kind };
+  for (const p of tool.params ?? []) out[p.name] = p.default ?? (p.required ? '<' + p.name + '>' : '');
+  return out;
+}
+
 function defaultExample(kind: string, e: PluginEndpoint): Record<string, unknown> {
   const out: Record<string, unknown> = { kind };
   for (const p of e.params ?? []) out[p.name] = p.default ?? (p.required ? '<' + p.name + '>' : '');
@@ -371,6 +429,21 @@ export function registerPluginDocsInterface(): void {
           return '- ' + pluginKind(plugin.id, e.name) + ': ' + e.description + (ps ? '\n    params: ' + ps : '');
         })
         .join('\n');
+      const tools = (plugin.tools ?? [])
+        .map((t) => {
+          const ps = (t.params ?? [])
+            .map((p) => p.name + (p.required ? ' (required)' : '') + ' — ' + p.description)
+            .join('; ');
+          return '- ' + pluginKind(plugin.id, t.name) + ' (js tool): ' + t.description + (ps ? '\n    params: ' + ps : '');
+        })
+        .join('\n');
+      const uis = (plugin.ui ?? [])
+        .map((u) => '- ' + u.name + ': ' + u.description + (u.dataDoc ? '\n    data: ' + u.dataDoc : ''))
+        .join('\n');
+      const sandboxNote =
+        (plugin.tools ?? []).length > 0 && toolSandboxKind() === 'unavailable'
+          ? '\n\n⚠ 这个环境不支持隔离执行（没有 Worker），所以上面的 js 工具被停用了。'
+          : '';
       const guide = str(plugin.guide).trim();
       return ok('Guide of ' + plugin.name, {
         observation:
@@ -378,10 +451,93 @@ export function registerPluginDocsInterface(): void {
           plugin.description + '\n\n' +
           '## Operations\n' +
           ops +
+          (tools ? '\n\n## JS tools\n' + tools : '') +
+          (uis ? '\n\n## Interfaces this plugin can put on screen\n' + uis : '') +
+          sandboxNote +
           (guide ? '\n\n## Guide\n' + guide : '\n\n(no guide.md in this plugin)'),
       });
     },
   });
+}
+
+/**
+ * 升级前后的权限差异。
+ *
+ * 为什么必须有：插件是"软件"，升级等于换一份别人写的代码。
+ * 用户点"安装"时的授权是针对**上一版**给的；这一版多要了一个主机、多了一个端点，
+ * 必须再讲一遍 —— 否则"升级"就成了绕过授权的通道。
+ */
+export function pluginDiff(prev: InstalledPlugin | undefined, next: InstalledPlugin): string[] {
+  if (!prev) return [];
+  const lines: string[] = [];
+  const add = (list: string[], what: string, isNew: (x: string) => boolean) => {
+    const newly = list.filter(isNew);
+    if (newly.length) lines.push('新增' + what + '：' + newly.join('、'));
+  };
+  const gone = (list: string[], what: string, isGone: (x: string) => boolean) => {
+    const removed = list.filter(isGone);
+    if (removed.length) lines.push('移除' + what + '：' + removed.join('、'));
+  };
+  add(next.hosts, '可访问的主机', (h) => !prev.hosts.includes(h));
+  gone(prev.hosts, '可访问的主机', (h) => !next.hosts.includes(h));
+  add(next.endpoints.map((e) => e.name), '操作', (n) => !prev.endpoints.some((e) => e.name === n));
+  gone(prev.endpoints.map((e) => e.name), '操作', (n) => !next.endpoints.some((e) => e.name === n));
+  add((next.tools ?? []).map((t) => t.name), 'js 工具', (n) => !(prev.tools ?? []).some((t) => t.name === n));
+  gone((prev.tools ?? []).map((t) => t.name), 'js 工具', (n) => !(next.tools ?? []).some((t) => t.name === n));
+  add((next.ui ?? []).map((u) => u.name), '自带界面', (n) => !(prev.ui ?? []).some((u) => u.name === n));
+  add((next.fields ?? []).filter((f) => f.secret).map((f) => f.label), '要填的密钥', (l) => !(prev.fields ?? []).some((f) => f.secret && f.label === l));
+  // 能力开关变了也要说：从 net 变成 global 是完全不同的事。
+  const capOf = (p: InstalledPlugin) => {
+    const set = new Set<string>();
+    for (const e of p.endpoints) if (e.cap) set.add(e.cap);
+    for (const t of p.tools ?? []) if (t.cap) set.add(t.cap);
+    return set;
+  };
+  const before = capOf(prev);
+  const after = capOf(next);
+  for (const c of after) if (!before.has(c)) lines.push('新增能力开关：' + c);
+  if (next.signature !== 'ok' && prev.signature === 'ok') lines.push('⚠ 这一版**没有有效签名**了（上一版有）');
+  if (prev.hash && next.hash && prev.hash !== next.hash && prev.version === next.version) {
+    lines.push('⚠ **版本号没变但内容变了**（' + prev.hash.slice(0, 8) + ' → ' + next.hash.slice(0, 8) + '）');
+  }
+  return lines;
+}
+
+/**
+ * 检查更新：读清单里声明的 update.url，拿回 ~~{version, url}~~ 比一比。
+ *
+ * 更新也**不多开网络出口**：地址的主机必须在插件自己的白名单里。
+ */
+export async function checkPluginUpdate(
+  plugin: InstalledPlugin,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: boolean; error?: string; latest?: string; url?: string; newer?: boolean }> {
+  const at = plugin.update?.url;
+  if (!at) return { ok: false, error: '这个插件没有声明更新地址（manifest.update.url）。' };
+  let url: URL;
+  try {
+    url = new URL(at);
+  } catch {
+    return { ok: false, error: '更新地址不是合法地址。' };
+  }
+  if (!hostAllowed(url.hostname, effectiveHosts(plugin))) {
+    return { ok: false, error: '更新地址的主机 ' + url.hostname + ' 不在这个插件的主机白名单里。' };
+  }
+  try {
+    const res = await fetchImpl(url.href, { headers: { accept: 'application/json, text/plain, */*' } });
+    const body = await res.text();
+    if (!res.ok) return { ok: false, error: '更新地址返回 HTTP ' + res.status };
+    const info = JSON.parse(body) as { version?: string; url?: string };
+    if (!info.version) return { ok: false, error: '更新信息里没有 version 字段。' };
+    return {
+      ok: true,
+      latest: info.version,
+      url: info.url,
+      newer: versionAtLeast(info.version, plugin.version) && info.version !== plugin.version,
+    };
+  } catch (e) {
+    return { ok: false, error: '拿更新信息失败：' + (e as Error).message };
+  }
 }
 
 /** 提示词里的插件段：每个插件一行，**不塞指南**。 */
@@ -390,8 +546,12 @@ export function pluginsText(): string {
   return current
     .map((p) => {
       const kinds = p.endpoints.map((e) => pluginKind(p.id, e.name)).join(', ');
+      const tools = (p.tools ?? []).map((t) => pluginKind(p.id, t.name)).join(', ');
+      const uis = (p.ui ?? []).map((u) => u.name).join(', ');
       return '- ' + p.name + ' (id "' + p.id + '" v' + p.version + '): ' + p.description +
         '\n  operations: ' + kinds +
+        (tools ? '\n  js tools: ' + tools : '') +
+        (uis ? '\n  screens it can put up (use plugin_ui with this id): ' + uis : '') +
         '\n  read its guide with plugin_docs("' + p.id + '") before using it.';
     })
     .join('\n');
