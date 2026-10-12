@@ -26,6 +26,8 @@ import {
 } from '../theme/engine';
 import { exportSurfaceStates, importSurfaceStates } from '../kernel/registry/surfaceRegistry';
 import { buildSeed, seedStorageEntries, type SeedFile, type SeedPart } from './seed';
+import { syncPluginRuntime } from '../kernel/plugin/runtime';
+import type { InstalledPlugin, PluginPackage } from '../kernel/plugin/types';
 
 /**
  * 一个会话的用量统计。**不进持久化** —— 刷新后重新开始计，避免把历史数字当成这次的开销。
@@ -212,6 +214,7 @@ interface PersistedRoot {
   zCounter: number;
   panelZ: Record<string, number>;
   surfaces: Record<string, string>;
+  plugins?: InstalledPlugin[];
 }
 
 const K_NODES = 'nodes';
@@ -222,50 +225,56 @@ const K_LOGS = 'logs';
 const K_PANELS = 'panels';
 const K_SURFACES = 'surfaces';
 const K_SESSIONS = 'sessions';
+const K_PLUGINS = 'plugins';
 
 /** 除 API 设置外，这些键在重置时全部清除。 */
 const RESETTABLE_KEYS = [K_NODES, K_ROOT, K_THEME, K_LOGS, K_PANELS, K_SESSIONS, 'z', 'panelZ', K_SURFACES];
 
 /** 常驻 UI 面板（输入框是会话，不在这里）。它们不是派生节点，不进派生树。 */
-export type PanelKey = 'inspector' | 'settings' | 'trace';
+export type PanelKey = 'inspector' | 'settings' | 'trace' | 'plugins';
 
 interface PanelRects {
   inspector: PanelRect;
   settings: PanelRect;
   trace: PanelRect;
+  plugins: PanelRect;
 }
 
 export const DEFAULT_PANELS: PanelRects = {
   inspector: { x: 24, y: 0, w: 340, h: 420 },
   settings: { x: 0, y: 0, w: 380, h: 388 },
   trace: { x: 0, y: 0, w: 360, h: 400 },
+  plugins: { x: 0, y: 0, w: 420, h: 460 },
 };
 
 /** 输入会话的默认尺寸：单行输入 + 一行状态，默认就该矮。 */
 export const DEFAULT_INPUT_RECT: PanelRect = { x: 24, y: 0, w: 560, h: 88 };
 
-export const ALL_PANELS: PanelKey[] = ['inspector', 'settings', 'trace'];
+export const ALL_PANELS: PanelKey[] = ['inspector', 'settings', 'trace', 'plugins'];
 
 export const DEFAULT_PANEL_Z: Record<PanelKey, number> = {
   inspector: 1,
   settings: 1,
   trace: 1,
+  plugins: 1,
 };
 
 export const PANEL_TITLES: Record<PanelKey, string> = {
   inspector: 'Nodes',
   settings: 'LLM',
   trace: 'Trace',
+  plugins: '插件',
 };
 
 /** 面板键到矩形字段的映射。 */
 export const PANEL_RECT_KEY: Record<
   PanelKey,
-  'inspectorRect' | 'settingsRect' | 'traceRect'
+  'inspectorRect' | 'settingsRect' | 'traceRect' | 'pluginsRect'
 > = {
   inspector: 'inspectorRect',
   settings: 'settingsRect',
   trace: 'traceRect',
+  plugins: 'pluginsRect',
 };
 
 /** 视口缩小时派生的窗口最少缩到这个尺寸（再小就没法用了）。 */
@@ -275,6 +284,7 @@ export const FOLLOW_MIN_H = 90;
 /** 面板显示用的名字（给 Agent 看的清单用它）。 */
 export const PANEL_LABELS: Record<PanelKey, string> = {
   inspector: 'Nodes',
+  plugins: '插件',
   settings: '设置',
   trace: 'Trace',
 };
@@ -284,6 +294,7 @@ export const PANEL_MIN: Record<PanelKey, { w: number; h: number }> = {
   inspector: { w: 280, h: 220 },
   settings: { w: 300, h: 280 },
   trace: { w: 320, h: 240 },
+  plugins: { w: 340, h: 300 },
 };
 
 /** 输入会话的尺寸下限。 */
@@ -335,6 +346,11 @@ export function resolvePanels(viewW: number, viewH: number): PanelRects {
     trace: place('trace', {
       ...DEFAULT_PANELS.trace,
       x: Math.max(24, viewW - DEFAULT_PANELS.trace.w - 24),
+      y: 72,
+    }),
+    plugins: place('plugins', {
+      ...DEFAULT_PANELS.plugins,
+      x: Math.max(24, viewW - DEFAULT_PANELS.plugins.w - 24),
       y: 72,
     }),
   };
@@ -470,6 +486,39 @@ function layoutFor(index: number): { x: number; y: number } {
  * 现在 Agent 是组件的 facet，所以要把旧节点折叠成"带 facet 的组件"，
  * 否则老用户存储里的 Agent 会渲染不出来。
  */
+/**
+ * 清洗存下来的插件列表。
+ *
+ * 存储是外部输入（可能被手改过、可能来自旧版本），所以逐条校验形状：
+ * 认不出来的条目直接丢掉，而不是让它在下游某处炸掉。
+ */
+function safePlugins(raw: unknown): InstalledPlugin[] {
+  if (!Array.isArray(raw)) return [];
+  const out: InstalledPlugin[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const p = item as Partial<InstalledPlugin>;
+    if (typeof p.id !== 'string' || !p.id) continue;
+    if (!Array.isArray(p.endpoints) || p.endpoints.length === 0) continue;
+    out.push({
+      id: p.id,
+      name: typeof p.name === 'string' ? p.name : p.id,
+      version: typeof p.version === 'string' ? p.version : '0',
+      author: typeof p.author === 'string' ? p.author : undefined,
+      description: typeof p.description === 'string' ? p.description : '',
+      hosts: Array.isArray(p.hosts) ? p.hosts.filter((h): h is string => typeof h === 'string') : [],
+      fields: Array.isArray(p.fields) ? p.fields : [],
+      endpoints: p.endpoints,
+      guide: typeof p.guide === 'string' ? p.guide : '',
+      enabled: p.enabled !== false,
+      installedAt: typeof p.installedAt === 'string' ? p.installedAt : '',
+      source: typeof p.source === 'string' ? p.source : '',
+      values: p.values && typeof p.values === 'object' ? (p.values as Record<string, string>) : {},
+    });
+  }
+  return out;
+}
+
 function migrateNodes(raw: Record<string, unknown> | undefined): Record<NodeId, YggNode> {
   if (!raw || typeof raw !== 'object') return { root: createRootAgent() };
   const out: Record<NodeId, YggNode> = {};
@@ -584,6 +633,10 @@ interface DesktopState {
   agentRuns: Record<NodeId, RunSlice>;
   feedback: RunFeedback | null;
   traceOpen: boolean;
+  /** 插件面板开着没。 */
+  pluginsOpen: boolean;
+  /** 已安装的插件（含用户填的值）。 */
+  plugins: InstalledPlugin[];
   settings: LlmSettings;
   settingsOpen: boolean;
   treeOpen: boolean;
@@ -591,6 +644,7 @@ interface DesktopState {
   inspectorRect: PanelRect;
   settingsRect: PanelRect;
   traceRect: PanelRect;
+  pluginsRect: PanelRect;
   minimizedPanels: Record<string, boolean>;
   panelZ: Record<PanelKey, number>;
   /** 桌面视口的像素尺寸。窗口的 pos / size 都在这个坐标系里。不进持久化。 */
@@ -688,6 +742,14 @@ interface DesktopState {
 
   setSettings: (patch: Partial<LlmSettings>) => void;
   setSettingsOpen: (open: boolean) => void;
+  setPluginsOpen: (open: boolean) => void;
+  /** 装一个已解析并通过校验的插件包。 */
+  installPlugin: (pkg: PluginPackage, source: string) => InstalledPlugin;
+  setPluginEnabled: (id: string, enabled: boolean) => void;
+  /** 卸载：撤掉接口、清掉状态。**不动用户已填的值之外的东西。** */
+  uninstallPlugin: (id: string) => void;
+  /** 用户填一个字段（密钥或配置）。 */
+  setPluginValue: (id: string, key: string, value: string) => void;
   setTreeOpen: (open: boolean) => void;
   setTraceOpen: (open: boolean) => void;
   setResetOpen: (open: boolean) => void;
@@ -884,6 +946,7 @@ export function defaultWindows(s: DesktopState): DefaultWindow[] {
     inspector: s.treeOpen,
     settings: s.settingsOpen,
     trace: s.traceOpen,
+    plugins: s.pluginsOpen,
   };
   const out: DefaultWindow[] = ALL_PANELS.map((key) => {
     const id = 'panel-' + key;
@@ -948,6 +1011,7 @@ export function snapshot(): PersistedRoot {
       inspector: s.inspectorRect,
       settings: s.settingsRect,
       trace: s.traceRect,
+      plugins: s.pluginsRect,
     },
     // 会话存几何、可见性，以及**它自己的对话记忆**；
     // 运行状态与排队项是瞬态，不落盘。
@@ -962,7 +1026,22 @@ export function snapshot(): PersistedRoot {
     panelZ: s.panelZ,
     zCounter: s.zCounter,
     surfaces: exportSurfaceStates(),
+    // 插件：清单 + 开关 + 用户填的值。**值里可能有密钥**，所以它只落本地存储，
+    // 不进 .seed（场景文件会被转发，密钥不该跟着走）。
+    plugins: s.plugins,
   };
+}
+
+/**
+ * 插件列表变了之后唯一要做的事：写状态 → 同步运行时（登记/撤掉接口）→ 落盘。
+ *
+ * 集中成一个函数是有意的：以前每个动作各写一遍这三步，漏一步就会出现
+ * "界面显示已禁用、但模型还能调它"这种最难查的不一致。
+ */
+function applyPlugins(next: InstalledPlugin[]): void {
+  useDesktopStore.setState({ plugins: next });
+  syncPluginRuntime(next);
+  schedulePersist();
 }
 
 function schedulePersist(): void {
@@ -983,6 +1062,7 @@ async function saveNow(): Promise<void> {
     await adapter.set(K_THEME, { tokens: snap.tokens });
     await adapter.set(K_SETTINGS, snap.settings);
     await adapter.set(K_LOGS, snap.logs);
+    await adapter.set(K_PLUGINS, snap.plugins);
     await adapter.set(K_PANELS, snap.panels);
     await adapter.set(K_SESSIONS, snap.sessions);
     await adapter.set('z', snap.zCounter);
@@ -1007,6 +1087,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   agentRuns: {},
   feedback: null,
   traceOpen: false,
+  pluginsOpen: false,
+  plugins: [],
   settings: { ...DEFAULT_SETTINGS },
   settingsOpen: false,
   treeOpen: false,
@@ -1014,6 +1096,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   inspectorRect: resolvePanels(window.innerWidth, window.innerHeight).inspector,
   settingsRect: resolvePanels(window.innerWidth, window.innerHeight).settings,
   traceRect: resolvePanels(window.innerWidth, window.innerHeight).trace,
+  pluginsRect: resolvePanels(window.innerWidth, window.innerHeight).plugins,
   minimizedPanels: {},
   panelZ: { ...DEFAULT_PANEL_Z },
   viewW: typeof window === 'undefined' ? 1280 : window.innerWidth,
@@ -1040,6 +1123,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     let theme: { tokens: ThemeTokens } | undefined;
     let settings: LlmSettings | undefined;
     let logs: LogEntry[] | undefined;
+    let plugins: InstalledPlugin[] | undefined;
     let panels: Partial<PanelRects> & { input?: PanelRect } | undefined;
     let sessions: PersistedSession[] | undefined;
     let z: number | undefined;
@@ -1053,6 +1137,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       settings = await adapter.get<LlmSettings>(K_SETTINGS);
       logs = await adapter.get<LogEntry[]>(K_LOGS);
       panels = await adapter.get<Partial<PanelRects> & { input?: PanelRect }>(K_PANELS);
+      plugins = await adapter.get<InstalledPlugin[]>(K_PLUGINS);
       sessions = await adapter.get<PersistedSession[]>(K_SESSIONS);
       z = await adapter.get<number>('z');
       panelZ = await adapter.get<Record<string, number>>('panelZ');
@@ -1062,6 +1147,13 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       void e;
     }
 
+    /*
+     * 存储里**没有**插件键时，保留内存里现有的那份。
+     * 两个原因：① 首次加载时内存本来就是空的，这个分支等价；
+     * ② 落盘是防抖的（400ms），刚装完插件就 hydrate（例如导入场景）时存储可能还是旧的一份 ——
+     * 那时以内存为准才对，否则"导入一个场景"会把刚装的插件弄丢。
+     */
+    const safePluginList = plugins === undefined ? get().plugins : safePlugins(plugins);
     const safeNodes = migrateNodes(rawNodes);
     if (!safeNodes.root) safeNodes.root = createRootAgent();
     const safeRoot = rootId && safeNodes[rootId] ? rootId : 'root';
@@ -1146,6 +1238,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
     applyTheme(tokens);
     importSurfaceStates(surfaces);
+    // 已安装且已启用的插件要重新登记接口：接口表是内存里的，刷新页面就没了。
+    syncPluginRuntime(safePluginList);
     set({
       loaded: true,
       storageKind: adapter.kind,
@@ -1161,6 +1255,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       inspectorRect: panels?.inspector ?? fallback.inspector,
       settingsRect: panels?.settings ?? fallback.settings,
       traceRect: panels?.trace ?? fallback.trace,
+      pluginsRect: panels?.plugins ?? fallback.plugins,
+      plugins: safePluginList,
       zCounter: z ?? 10 + Object.keys(safeNodes).length,
       panelZ: {
         ...DEFAULT_PANEL_Z,
@@ -1420,6 +1516,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   },
 
   setSettingsOpen: (open) => set({ settingsOpen: open }),
+  setPluginsOpen: (open) => set({ pluginsOpen: open }),
   setTreeOpen: (open) => set({ treeOpen: open }),
   setTraceOpen: (open) => set({ traceOpen: open }),
   setResetOpen: (open) => set({ resetOpen: open }),
@@ -1427,6 +1524,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   setPanelOpen: (panel, open) => {
     if (panel === 'inspector') get().setTreeOpen(open);
     else if (panel === 'trace') get().setTraceOpen(open);
+    else if (panel === 'plugins') get().setPluginsOpen(open);
     else get().setSettingsOpen(open);
   },
 
@@ -1457,6 +1555,58 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   setSeedDialog: (mode) => set({ seedDialog: mode }),
 
+  installPlugin: (pkg, source) => {
+    const manifest = pkg.manifest;
+    /*
+     * 装：清单 + guide + 用户字段的默认值。
+     * 同 id 视为**升级**：保留用户已填的值（填一次密码不该因为升级就丢），
+     * 但开关状态也保留 —— 升级不该把一个禁用中的插件悄悄打开。
+     */
+    const prev = get().plugins.find((p) => p.id === manifest.id);
+    const values: Record<string, string> = {};
+    for (const f of manifest.fields ?? []) {
+      values[f.key] = prev?.values[f.key] ?? f.default ?? '';
+    }
+    const installed: InstalledPlugin = {
+      id: manifest.id,
+      name: manifest.name,
+      version: manifest.version,
+      author: manifest.author,
+      description: manifest.description,
+      hosts: manifest.hosts,
+      fields: manifest.fields ?? [],
+      endpoints: manifest.endpoints,
+      guide: manifest.guide ?? '',
+      enabled: prev ? prev.enabled : true,
+      installedAt: new Date().toISOString(),
+      source,
+      values,
+    };
+    const next = [...get().plugins.filter((p) => p.id !== manifest.id), installed];
+    applyPlugins(next);
+    get().log('op', (prev ? 'plugin upgrade ' : 'plugin install ') + manifest.id + ' v' + manifest.version);
+    return installed;
+  },
+
+  setPluginEnabled: (id, enabled) => {
+    const next = get().plugins.map((p) => (p.id === id ? { ...p, enabled } : p));
+    applyPlugins(next);
+    get().log('op', 'plugin ' + (enabled ? 'on ' : 'off ') + id);
+  },
+
+  uninstallPlugin: (id) => {
+    const next = get().plugins.filter((p) => p.id !== id);
+    applyPlugins(next);
+    get().log('op', 'plugin remove ' + id);
+  },
+
+  setPluginValue: (id, key, value) => {
+    const next = get().plugins.map((p) =>
+      p.id === id ? { ...p, values: { ...p.values, [key]: value } } : p,
+    );
+    applyPlugins(next);
+  },
+
   exportSeed: (parts, includeApiKey) => buildSeed(snapshot(), parts, includeApiKey),
 
   importSeed: async (seed) => {
@@ -1484,8 +1634,12 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       }
       await adapter.set(key, value);
     }
+    // 导入场景**不动已装的插件**：插件是"软件"，场景是"内容"。
+    // 这里显式记住再恢复，是因为存储里那份可能是防抖尚未落盘的旧值。
+    const pluginsBefore = get().plugins;
     // 交给 hydrate：它负责迁移、去重、夹取，并把 loaded / 视口等一起复位。
     await get().hydrate();
+    applyPlugins(pluginsBefore);
     get().log('op', 'seed import · ' + seed.parts.join('+'));
     schedulePersist();
   },
@@ -1531,6 +1685,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         if (key === 'inspector') st.setTreeOpen(false);
         else if (key === 'trace') st.setTraceOpen(false);
         else if (key === 'settings') st.setSettingsOpen(false);
+        else if (key === 'plugins') st.setPluginsOpen(false);
       } else {
         st.removeSession(windowId);
       }

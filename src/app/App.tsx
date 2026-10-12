@@ -5,6 +5,7 @@ import { Feedback } from '../ui/Feedback';
 import { TopBar } from '../ui/TopBar';
 import { ResetDialog } from '../ui/ResetDialog';
 import { ConsoleErrorPrompt } from '../ui/ConsoleErrorPrompt';
+import { PluginsPanel } from '../ui/PluginsPanel';
 import { SeedDialog } from '../ui/SeedDialog';
 import { installConsoleErrorHooks, subscribeConsoleErrors } from '../host/consoleErrors';
 import { useDesktopStore } from '../store/desktopStore';
@@ -69,6 +70,7 @@ export function App() {
       <ResetDialog />
       <ConsoleErrorPrompt />
       <SeedDialog />
+      <PluginsPanel />
       <Feedback />
     </>
   );

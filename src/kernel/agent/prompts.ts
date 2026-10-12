@@ -3,6 +3,7 @@ import { isAgentNode } from '../types';
 import { capsAllow, CAP_HINTS, CAP_LABELS } from './caps';
 import { interfaceCatalog } from '../registry/interfaceRegistry';
 import { surfacesText } from '../registry/surfaceRegistry';
+import { pluginsText } from '../plugin/runtime';
 
 /** 发给模型的历史条数上限。 */
 export const MAX_HISTORY_MESSAGES = 14;
@@ -332,6 +333,15 @@ export function buildSnapshotPrompt(input: SystemPromptInput): string {
     '',
     on('tools') ? '## Available tools' : '',
     on('tools') ? toolCatalogText(input.tools) : '',
+    '',
+    /*
+     * 已启用的插件：**每个只占一行**（名字 + 它提供的操作）。
+     * 用法在插件的 guide.md 里，靠 plugin_docs 按需取 —— 把指南全铺在这里，
+     * 装三个插件就等于每轮多几千字，而且这些字会进缓存前缀，一动全失效。
+     */
+    pluginsText() ? '## Plugins (installed and enabled)' : '',
+    pluginsText(),
+    pluginsText() ? 'Read a plugin guide with plugin_docs("<id>") before using its operations.' : '',
   ]
     .filter((l) => l !== '')
     .join('\n');

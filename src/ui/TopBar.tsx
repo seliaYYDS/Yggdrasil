@@ -1,5 +1,5 @@
 import { useDesktopStore, MAX_SESSIONS } from '../store/desktopStore';
-import { ExportIcon, ImportIcon, NewInputIcon, NodesIcon, ResetIcon, SettingsIcon, TraceIcon } from './icons';
+import { ExportIcon, ImportIcon, NewInputIcon, NodesIcon, PluginIcon, ResetIcon, SettingsIcon, TraceIcon } from './icons';
 
 /**
  * 固定在页面上方两组按钮。
@@ -33,6 +33,7 @@ export function TopBar() {
 /** 右上角那组：输入框 / 轨迹 / 节点树 / 设置 / 重置。 */
 function TopRight() {
   const setSettingsOpen = useDesktopStore((s) => s.setSettingsOpen);
+  const setPluginsOpen = useDesktopStore((s) => s.setPluginsOpen);
   const setTreeOpen = useDesktopStore((s) => s.setTreeOpen);
   const setTraceOpen = useDesktopStore((s) => s.setTraceOpen);
   const setResetOpen = useDesktopStore((s) => s.setResetOpen);
@@ -64,6 +65,9 @@ function TopRight() {
       </button>
       <button className="ygg-topbtn" title="节点树" onClick={() => setTreeOpen(true)}>
         <NodesIcon />
+      </button>
+      <button className="ygg-topbtn" title="插件" onClick={() => setPluginsOpen(true)}>
+        <PluginIcon />
       </button>
       <button className="ygg-topbtn" title="设置" onClick={() => setSettingsOpen(true)}>
         <SettingsIcon />

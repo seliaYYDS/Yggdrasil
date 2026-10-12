@@ -240,6 +240,17 @@ export function StopIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** 插件：一块拼图（接上去就能用）。 */
+export function PluginIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M6 2.6h4v2.1a1.4 1.4 0 1 0 0 2.6v2.1H2.6V6a1.4 1.4 0 1 1 0-2.6V2.6h3.4z" />
+      <path d="M11.4 13.4H6v-2.2h5.4z" />
+      <path d="M11.4 5.6v4h2a1.4 1.4 0 1 0 0-4h-2z" />
+    </Svg>
+  );
+}
+
 /** 导出：从托盘里向上出去的箭头。 */
 export function ExportIcon(props: SVGProps<SVGSVGElement>) {
   return (

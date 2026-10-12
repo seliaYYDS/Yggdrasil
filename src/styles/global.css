@@ -1235,3 +1235,42 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-seed-warn { margin: 0 0 11px; font-size: 11px; line-height: 1.6; color: var(--ygg-danger); }
 
 .ygg-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* 插件面板：一行一个插件卡片，权限与操作如实摊开 */
+.ygg-row-gap { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ygg-plugin-card {
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  background: color-mix(in srgb, var(--ygg-surface-2) 60%, transparent);
+  padding: 8px;
+  margin-top: 8px;
+}
+.ygg-plugin-head { display: flex; align-items: center; gap: 7px; }
+.ygg-plugin-name { font-size: 12px; color: var(--ygg-fg); }
+.ygg-plugin-ver { font-size: 10px; color: var(--ygg-fg-muted); margin-left: auto; }
+.ygg-plugin-id { font-size: 10px; color: var(--ygg-fg-muted); margin-top: 2px; }
+.ygg-plugin-meta { font-size: 10px; line-height: 1.6; color: var(--ygg-fg-muted); margin-top: 4px; }
+.ygg-plugin-toggle { display: inline-flex; align-items: center; cursor: pointer; }
+.ygg-plugin-toggle input { display: none; }
+.ygg-plugin-review {
+  border: 1px solid var(--ygg-accent);
+  border-radius: var(--ygg-radius);
+  padding: 8px;
+  margin-top: 8px;
+}
+.ygg-plugin-review-title { font-size: 12px; color: var(--ygg-accent-hi); margin-bottom: 5px; }
+.ygg-plugin-lines { margin: 0; padding-left: 16px; font-size: 11px; line-height: 1.6; color: var(--ygg-fg); }
+.ygg-plugin-error { margin-top: 8px; font-size: 11px; line-height: 1.6; color: var(--ygg-danger); }
+.ygg-plugin-guide {
+  margin: 7px 0 0;
+  padding: 7px;
+  max-height: 190px;
+  overflow: auto;
+  font-size: 10px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  color: var(--ygg-fg-muted);
+  background: var(--ygg-bg);
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+}

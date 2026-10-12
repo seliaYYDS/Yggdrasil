@@ -25,6 +25,8 @@ export interface AgentInterface {
    * 执行时按它拒绝。三处读同一份声明，不会各写一份而走偏。
    */
   cap?: ActCap;
+  /** 由插件登记的接口会带上插件 id（用于禁用/卸载时整体撤掉）。 */
+  pluginId?: string;
   handler: (op: DerivationOp, ctx: OpContext) => Promise<OpResult> | OpResult;
 }
 
@@ -32,6 +34,11 @@ const registry = new Map<string, AgentInterface>();
 
 export function registerInterface(def: AgentInterface): void {
   registry.set(def.kind, def);
+}
+
+/** 撤掉一个接口（插件禁用/卸载时用）。 */
+export function unregisterInterface(kind: string): void {
+  registry.delete(kind);
 }
 
 export function getInterface(kind: string): AgentInterface | undefined {
@@ -82,7 +89,11 @@ export function interfaceCatalog(caps?: ActCap[]): { lines: string[]; examples: 
   const examples: string[] = [];
   interfacesFor(caps).forEach((def, i) => {
     lines.push(`${i + 1}. ${def.kind} —— ${def.description}`);
-    if (EXAMPLE_KINDS.has(def.kind)) examples.push(`  ${JSON.stringify(def.example)}`);
+    /*
+     * 插件端点的示例一律带上：模型从没见过这个 kind，光有文字描述不如给它一个能照抄的形状。
+     * 上限由插件清单控制（每个插件最多几十个端点），不会失控。
+     */
+    if (EXAMPLE_KINDS.has(def.kind) || def.pluginId) examples.push(`  ${JSON.stringify(def.example)}`);
   });
   return { lines, examples: `[\n${examples.join(',\n')}\n]` };
 }

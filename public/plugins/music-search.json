@@ -1,0 +1,93 @@
+{
+  "format": "yggdrasil.plugin",
+  "manifest": {
+    "id": "music-search",
+    "name": "音乐搜索",
+    "version": "1.0",
+    "author": "Yggdrasil",
+    "minAppVersion": "0.1",
+    "description": "用 iTunes Search API 搜歌与专辑，拿到可直接播放的 30 秒试听直链与封面图。",
+    "hosts": [
+      "itunes.apple.com"
+    ],
+    "fields": [
+      {
+        "key": "market",
+        "label": "市场（国家/地区代码）",
+        "hint": "两位国家代码，例如 CN / US / JP / HK。不同市场的曲库不一样。",
+        "placeholder": "CN",
+        "default": "CN"
+      }
+    ],
+    "endpoints": [
+      {
+        "name": "search",
+        "label": "搜索歌曲",
+        "description": "Search the iTunes catalogue for songs. Give term (song, artist or album name). Returns, for each hit: trackName, artistName, collectionName, previewUrl (a directly playable 30-second audio URL — put it in an <audio> element), artworkUrl100 (cover art), trackViewUrl, trackTimeMillis, artistId. If previewUrl is missing for a hit, that track has no playable preview — say so instead of inventing a URL.",
+        "method": "GET",
+        "url": "https://itunes.apple.com/search?term={term}&media=music&entity=song&limit={limit}&country={config:market}",
+        "params": [
+          {
+            "name": "term",
+            "description": "what to search for (song title, artist, or album)",
+            "required": true
+          },
+          {
+            "name": "limit",
+            "description": "how many hits to return (1-25)",
+            "default": "5"
+          }
+        ],
+        "pick": [
+          "results[].trackName",
+          "results[].artistName",
+          "results[].collectionName",
+          "results[].previewUrl",
+          "results[].artworkUrl100",
+          "results[].trackViewUrl",
+          "results[].trackTimeMillis",
+          "results[].artistId"
+        ],
+        "maxChars": 14000,
+        "example": {
+          "kind": "music-search.search",
+          "term": "周杰伦 稻香",
+          "limit": "3"
+        }
+      },
+      {
+        "name": "artist_tracks",
+        "label": "按歌手取歌",
+        "description": "List songs by one artist, using the artistId returned by a previous search. Returns the same fields as search. Use it when the user asks for \"more songs by this artist\" or picks a song from a search result.",
+        "method": "GET",
+        "url": "https://itunes.apple.com/lookup?id={artistId}&entity=song&limit={limit}&country={config:market}",
+        "params": [
+          {
+            "name": "artistId",
+            "description": "artist id from a search result",
+            "required": true
+          },
+          {
+            "name": "limit",
+            "description": "how many songs to return (1-25)",
+            "default": "8"
+          }
+        ],
+        "pick": [
+          "results[].trackName",
+          "results[].collectionName",
+          "results[].previewUrl",
+          "results[].artworkUrl100",
+          "results[].trackTimeMillis"
+        ],
+        "maxChars": 14000,
+        "example": {
+          "kind": "music-search.artist_tracks",
+          "artistId": "1065989",
+          "limit": "5"
+        }
+      }
+    ]
+  },
+  "guide": "# music-search\n\nSearch the iTunes catalogue and get **30-second audio previews** that the browser can play.\n\n## Workflow: \"play <song>\"\n\n1. `music-search.search` with `term` = the song (plus artist if you know it).\n2. Pick the hit whose `trackName` / `artistName` matches. **If nothing matches well, say so** — do not guess a URL.\n3. Build a component with `create_component` that renders:\n   - the track title and artist,\n   - `<img src={artworkUrl100}>` for the cover (you may swap `100x100` in the URL for `300x300` to get a sharper image),\n   - `<audio controls src={previewUrl}>` for playback.\n\n## Rules that matter here\n\n- **Never autoplay.** Browsers block sound without a user gesture, so always render `controls` and let the user press play.\n- **Do not fetch the audio bytes** (`fetch_url` / `view_image` on `previewUrl`): reading cross-origin binary is blocked, and you do not need the bytes. The `<audio>` element streams the URL directly.\n- **You cannot hear the audio.** Your job is to find the right track and put a working player on screen; never claim you verified how it sounds.\n- Previews are **30 seconds** and some tracks have none (`previewUrl` missing or empty). When it is missing, show the track info and say the preview is unavailable.\n- `previewUrl` often ends in `.m4a`. That is expected; browsers play it fine.\n- Keep it to one player per request unless the user asks for a list.\n\n## \"More songs by this artist\"\n\nTake `artistId` from any search hit and call `music-search.artist_tracks`.\n\n## Market\n\nThe `market` field in the plugin panel is a two-letter country code (default `CN`). Different markets have different catalogues; if a search comes back empty for a regional artist, tell the user which market was used instead of retrying blindly.\n\n## Failure modes you should report instead of working around\n\n- Empty `results` → the term or the market did not match anything. Say that.\n- HTTP 403 / 429 / network error → the API refused or is rate-limiting. Report it; do not retry in a loop.\n"
+}
