@@ -57,8 +57,19 @@ function renderTemplate(
     let value: string;
     if (key.startsWith('config:')) {
       const field = key.slice(7);
-      const f = plugin.fields.find((x) => x.key === field);
-      value = plugin.values[field] ?? f?.default ?? '';
+      /*
+       * **同名参数优先于用户填的值。**
+       *
+       * 这次实测暴露的问题：搜索返回 0 条，而"市场"是个用户配置字段 —— 模型看得见、改不了，
+       * 于是只能瞎猜到放弃。允许参数覆盖配置之后，它就能自己换一个市场再试。
+       */
+      const explicit = params[field];
+      if (explicit !== undefined && explicit !== '') {
+        value = explicit;
+      } else {
+        const f = plugin.fields.find((x) => x.key === field);
+        value = plugin.values[field] ?? f?.default ?? '';
+      }
     } else {
       value = params[key] ?? '';
     }
@@ -185,6 +196,22 @@ export async function httpCall(
       shown = body;
     }
   }
+  /*
+   * 空结果要**明说**：只挑字段之后，"0 条"和"字段名挑错了"在回读里长得一模一样，
+   * 而模型最需要的信息恰恰是"这次真的什么都没搜到"。
+   */
+  let emptyNote = '';
+  if (e.emptyHint && shown.trim().startsWith('{')) {
+    try {
+      const obj = JSON.parse(shown) as Record<string, unknown>;
+      const values = Object.values(obj);
+      const zeroCount = typeof obj.resultCount === 'number' && obj.resultCount === 0;
+      const allEmpty = values.length > 0 && values.every((v) => Array.isArray(v) ? v.length === 0 : v === null);
+      if (zeroCount || allEmpty) emptyNote = '\n' + e.emptyHint;
+    } catch {
+      /* 挑出来的不是对象就跳过 */
+    }
+  }
   const clipped = clip(shown, e.maxChars ?? 8000);
   const head = plugin.name + ' · ' + (e.label || e.name) + ' · HTTP ' + res.status;
   if (!res.ok) {
@@ -192,7 +219,7 @@ export async function httpCall(
   }
   return ok(head, {
     observation:
-      'HTTP ' + res.status + ' from ' + url.hostname + '：\n' + clipped.text + clipped.note + pickedNote,
+      'HTTP ' + res.status + ' from ' + url.hostname + '：\n' + clipped.text + clipped.note + pickedNote + emptyNote,
   });
 }
 

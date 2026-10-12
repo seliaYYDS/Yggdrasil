@@ -12,9 +12,9 @@
     {
       "key": "market",
       "label": "市场（国家/地区代码）",
-      "hint": "两位国家代码，例如 CN / US / JP / HK。不同市场的曲库不一样。",
-      "placeholder": "CN",
-      "default": "CN"
+      "hint": "默认 TW。实测可用的有 TW / HK / US / JP / SG / GB —— 注意 CN 这个店面的音乐目录是空的（搜什么都返回 0 条）。",
+      "placeholder": "TW",
+      "default": "TW"
     }
   ],
   "endpoints": [
@@ -34,9 +34,14 @@
           "name": "limit",
           "description": "how many hits to return (1-25)",
           "default": "5"
+        },
+        {
+          "name": "market",
+          "description": "storefront country code; overrides the market set in the plugin panel for this call (use it when a search comes back empty)"
         }
       ],
       "pick": [
+        "resultCount",
         "results[].trackName",
         "results[].artistName",
         "results[].collectionName",
@@ -51,7 +56,8 @@
         "kind": "music-search.search",
         "term": "周杰伦 稻香",
         "limit": "3"
-      }
+      },
+      "emptyHint": "resultCount is 0: this term matched nothing in this storefront. Before giving up, retry once with a different market (pass market=\"US\", \"HK\", \"TW\", \"JP\", \"SG\" or \"GB\") — the catalogue differs per country. If it is still empty, say so plainly; do not keep retrying."
     },
     {
       "name": "artist_tracks",
@@ -69,9 +75,14 @@
           "name": "limit",
           "description": "how many songs to return (1-25)",
           "default": "8"
+        },
+        {
+          "name": "market",
+          "description": "storefront country code; overrides the market set in the plugin panel for this call (use it when a search comes back empty)"
         }
       ],
       "pick": [
+        "resultCount",
         "results[].trackName",
         "results[].collectionName",
         "results[].previewUrl",
@@ -83,7 +94,8 @@
         "kind": "music-search.artist_tracks",
         "artistId": "1065989",
         "limit": "5"
-      }
+      },
+      "emptyHint": "resultCount is 0: this term matched nothing in this storefront. Before giving up, retry once with a different market (pass market=\"US\", \"HK\", \"TW\", \"JP\", \"SG\" or \"GB\") — the catalogue differs per country. If it is still empty, say so plainly; do not keep retrying."
     }
   ]
 }

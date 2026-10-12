@@ -26,7 +26,17 @@ Take `artistId` from any search hit and call `music-search.artist_tracks`.
 
 ## Market
 
-The `market` field in the plugin panel is a two-letter country code (default `CN`). Different markets have different catalogues; if a search comes back empty for a regional artist, tell the user which market was used instead of retrying blindly.
+`market` is a two-letter storefront code. It comes from the plugin panel (default `TW`), and **you can override it per call** by passing `market` as a parameter.
+
+Different storefronts carry different catalogues, and **`CN` has no music catalogue at all** — every search there returns `resultCount: 0`. Measured working: `TW`, `HK`, `US`, `JP`, `SG`, `GB`. For Chinese-language songs `TW` and `HK` give the best matches; `US` romanises names (`稻香` shows up as "Rice Field").
+
+## When resultCount is 0
+
+An empty result is information, not a failure. Order of work:
+
+1. **Retry once with another market** — this is the most common cause (a regional artist on a foreign storefront, or `CN`).
+2. Simplify the term: drop the artist, keep the title (or vice versa). Try a `term` in the artist's own script — `周杰倫` often matches where `周杰伦` does not, and the romanised `Jay Chou` matches on `US`/`GB`.
+3. If it is still empty, **tell the user what you searched and on which market**, and stop. Two attempts is the budget; do not loop.
 
 ## Failure modes you should report instead of working around
 

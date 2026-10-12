@@ -14,9 +14,9 @@
       {
         "key": "market",
         "label": "市场（国家/地区代码）",
-        "hint": "两位国家代码，例如 CN / US / JP / HK。不同市场的曲库不一样。",
-        "placeholder": "CN",
-        "default": "CN"
+        "hint": "默认 TW。实测可用的有 TW / HK / US / JP / SG / GB —— 注意 CN 这个店面的音乐目录是空的（搜什么都返回 0 条）。",
+        "placeholder": "TW",
+        "default": "TW"
       }
     ],
     "endpoints": [
@@ -36,9 +36,14 @@
             "name": "limit",
             "description": "how many hits to return (1-25)",
             "default": "5"
+          },
+          {
+            "name": "market",
+            "description": "storefront country code; overrides the market set in the plugin panel for this call (use it when a search comes back empty)"
           }
         ],
         "pick": [
+          "resultCount",
           "results[].trackName",
           "results[].artistName",
           "results[].collectionName",
@@ -53,7 +58,8 @@
           "kind": "music-search.search",
           "term": "周杰伦 稻香",
           "limit": "3"
-        }
+        },
+        "emptyHint": "resultCount is 0: this term matched nothing in this storefront. Before giving up, retry once with a different market (pass market=\"US\", \"HK\", \"TW\", \"JP\", \"SG\" or \"GB\") — the catalogue differs per country. If it is still empty, say so plainly; do not keep retrying."
       },
       {
         "name": "artist_tracks",
@@ -71,9 +77,14 @@
             "name": "limit",
             "description": "how many songs to return (1-25)",
             "default": "8"
+          },
+          {
+            "name": "market",
+            "description": "storefront country code; overrides the market set in the plugin panel for this call (use it when a search comes back empty)"
           }
         ],
         "pick": [
+          "resultCount",
           "results[].trackName",
           "results[].collectionName",
           "results[].previewUrl",
@@ -85,9 +96,10 @@
           "kind": "music-search.artist_tracks",
           "artistId": "1065989",
           "limit": "5"
-        }
+        },
+        "emptyHint": "resultCount is 0: this term matched nothing in this storefront. Before giving up, retry once with a different market (pass market=\"US\", \"HK\", \"TW\", \"JP\", \"SG\" or \"GB\") — the catalogue differs per country. If it is still empty, say so plainly; do not keep retrying."
       }
     ]
   },
-  "guide": "# music-search\n\nSearch the iTunes catalogue and get **30-second audio previews** that the browser can play.\n\n## Workflow: \"play <song>\"\n\n1. `music-search.search` with `term` = the song (plus artist if you know it).\n2. Pick the hit whose `trackName` / `artistName` matches. **If nothing matches well, say so** — do not guess a URL.\n3. Build a component with `create_component` that renders:\n   - the track title and artist,\n   - `<img src={artworkUrl100}>` for the cover (you may swap `100x100` in the URL for `300x300` to get a sharper image),\n   - `<audio controls src={previewUrl}>` for playback.\n\n## Rules that matter here\n\n- **Never autoplay.** Browsers block sound without a user gesture, so always render `controls` and let the user press play.\n- **Do not fetch the audio bytes** (`fetch_url` / `view_image` on `previewUrl`): reading cross-origin binary is blocked, and you do not need the bytes. The `<audio>` element streams the URL directly.\n- **You cannot hear the audio.** Your job is to find the right track and put a working player on screen; never claim you verified how it sounds.\n- Previews are **30 seconds** and some tracks have none (`previewUrl` missing or empty). When it is missing, show the track info and say the preview is unavailable.\n- `previewUrl` often ends in `.m4a`. That is expected; browsers play it fine.\n- Keep it to one player per request unless the user asks for a list.\n\n## \"More songs by this artist\"\n\nTake `artistId` from any search hit and call `music-search.artist_tracks`.\n\n## Market\n\nThe `market` field in the plugin panel is a two-letter country code (default `CN`). Different markets have different catalogues; if a search comes back empty for a regional artist, tell the user which market was used instead of retrying blindly.\n\n## Failure modes you should report instead of working around\n\n- Empty `results` → the term or the market did not match anything. Say that.\n- HTTP 403 / 429 / network error → the API refused or is rate-limiting. Report it; do not retry in a loop.\n"
+  "guide": "# music-search\n\nSearch the iTunes catalogue and get **30-second audio previews** that the browser can play.\n\n## Workflow: \"play <song>\"\n\n1. `music-search.search` with `term` = the song (plus artist if you know it).\n2. Pick the hit whose `trackName` / `artistName` matches. **If nothing matches well, say so** — do not guess a URL.\n3. Build a component with `create_component` that renders:\n   - the track title and artist,\n   - `<img src={artworkUrl100}>` for the cover (you may swap `100x100` in the URL for `300x300` to get a sharper image),\n   - `<audio controls src={previewUrl}>` for playback.\n\n## Rules that matter here\n\n- **Never autoplay.** Browsers block sound without a user gesture, so always render `controls` and let the user press play.\n- **Do not fetch the audio bytes** (`fetch_url` / `view_image` on `previewUrl`): reading cross-origin binary is blocked, and you do not need the bytes. The `<audio>` element streams the URL directly.\n- **You cannot hear the audio.** Your job is to find the right track and put a working player on screen; never claim you verified how it sounds.\n- Previews are **30 seconds** and some tracks have none (`previewUrl` missing or empty). When it is missing, show the track info and say the preview is unavailable.\n- `previewUrl` often ends in `.m4a`. That is expected; browsers play it fine.\n- Keep it to one player per request unless the user asks for a list.\n\n## \"More songs by this artist\"\n\nTake `artistId` from any search hit and call `music-search.artist_tracks`.\n\n## Market\n\n`market` is a two-letter storefront code. It comes from the plugin panel (default `TW`), and **you can override it per call** by passing `market` as a parameter.\n\nDifferent storefronts carry different catalogues, and **`CN` has no music catalogue at all** — every search there returns `resultCount: 0`. Measured working: `TW`, `HK`, `US`, `JP`, `SG`, `GB`. For Chinese-language songs `TW` and `HK` give the best matches; `US` romanises names (`稻香` shows up as \"Rice Field\").\n\n## When resultCount is 0\n\nAn empty result is information, not a failure. Order of work:\n\n1. **Retry once with another market** — this is the most common cause (a regional artist on a foreign storefront, or `CN`).\n2. Simplify the term: drop the artist, keep the title (or vice versa). Try a `term` in the artist's own script — `周杰倫` often matches where `周杰伦` does not, and the romanised `Jay Chou` matches on `US`/`GB`.\n3. If it is still empty, **tell the user what you searched and on which market**, and stop. Two attempts is the budget; do not loop.\n\n## Failure modes you should report instead of working around\n\n- Empty `results` → the term or the market did not match anything. Say that.\n- HTTP 403 / 429 / network error → the API refused or is rate-limiting. Report it; do not retry in a loop.\n"
 }

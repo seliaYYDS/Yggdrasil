@@ -169,6 +169,9 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
       }
       if (!params.some((x) => x.name === u)) return bad('endpoint ' + en + ' 的 url 里用了 {' + u + '}，但 params 里没有它。');
     }
+    if (o.emptyHint !== undefined && typeof o.emptyHint !== 'string') {
+      return bad('endpoint ' + en + ' 的 emptyHint 必须是字符串。');
+    }
     endpoints.push({
       name: en,
       label,
@@ -179,6 +182,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
       headers: (o.headers && typeof o.headers === 'object' ? (o.headers as Record<string, string>) : undefined),
       cap,
       pick: pickRaw.length ? (pickRaw as string[]) : undefined,
+      emptyHint: typeof o.emptyHint === 'string' ? o.emptyHint : undefined,
       maxChars,
       mutates: o.mutates === true,
       example: (o.example && typeof o.example === 'object' ? (o.example as Record<string, unknown>) : undefined),

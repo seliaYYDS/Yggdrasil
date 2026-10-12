@@ -52,11 +52,19 @@ export interface PluginEndpoint {
    * 只挑出要看的字段，别把整个响应灌进上下文。
    *
    * 写法是点路径，数组段末尾加 []：'results[].previewUrl' 表示"results 数组里每一项的 previewUrl"。
+   * 建议把总数之类的字段也挑上（例如 resultCount），否则"0 条"与"字段没挑对"在回读里长得一样。
    * 有 pick 时返回的是挑出来的小对象；没有就返回原始正文（再按 maxChars 截断）。
    */
   pick?: string[];
   /** 返回文本超过这个长度就截断（默认 8000）。 */
   maxChars?: number;
+  /**
+   * 返回空结果时追加给模型的一句提示（例如"换个市场再试"）。
+   *
+   * 为什么需要它：这次实测暴露的问题——搜索返回 0 条，模型只能猜到"可能拼错了"然后瞎试。
+   * 插件最清楚"空了通常意味着什么"，所以让它自己写这句话。
+   */
+  emptyHint?: string;
   /** 会不会改到外部数据（只影响反馈措辞）。 */
   mutates?: boolean;
   example?: Record<string, unknown>;
