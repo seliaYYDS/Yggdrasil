@@ -339,6 +339,37 @@ button:focus:not(:focus-visible) { outline: none; }
   margin-bottom: 4px;
   letter-spacing: .12em;
 }
+/* 布尔开关：方形按钮 + 一个圆点，两态靠底色与圆点颜色区分（保持扁平，不引入滑块） */
+.ygg-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  background: var(--ygg-surface-2);
+  color: var(--ygg-fg);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--ygg-t) var(--ygg-ease), background-color var(--ygg-t) var(--ygg-ease),
+    color var(--ygg-t) var(--ygg-ease);
+}
+.ygg-toggle:hover { border-color: var(--ygg-accent); }
+.ygg-toggle .dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--ygg-accent-dim);
+  background: transparent;
+  transition: background-color var(--ygg-t) var(--ygg-ease), border-color var(--ygg-t) var(--ygg-ease);
+}
+.ygg-toggle.on { border-color: var(--ygg-accent); color: var(--ygg-accent-hi); }
+.ygg-toggle.on .dot { background: var(--ygg-accent); border-color: var(--ygg-accent-hi); }
+
 .ygg-field { margin-bottom: 11px; }
 .ygg-form { padding: 11px; animation: ygg-fade-in var(--ygg-t) var(--ygg-ease) both; }
 .ygg-range { width: 100%; accent-color: var(--ygg-accent); }

@@ -94,6 +94,31 @@ export function themeText(tokens: ThemeTokens, compact = false): string {
   return body + (skipped > 0 ? `\n（另有 ${skipped} 个字体令牌未列出，需要时用 inspect before="tokens" 看）` : '');
 }
 
+/**
+ * 成人模式注入的那一节。**默认不出现**，只有用户在设置里显式打开才注入。
+ *
+ * 它的作用是让 Agent 不要"未读先拒"：把性 / 解剖 / 情色当**题材**看待，
+ * 按用户的实际需求去找资料、看图片、把话说清楚。
+ *
+ * 两个边界写在最前面，因为它们不随这个开关改变：
+ * 涉及未成年人的性内容与其它违法内容一律不做；服务商自己的策略也绕不过。
+ */
+function adultRules(): string[] {
+  return [
+    '',
+    '## 成人模式（用户已在设置里明确开启）',
+    '- 用户是成年人，这是他的私人工具。**不要替他做道德判断，也不要加说教、警告或免责声明。**',
+    '- 话题涉及性、性器官、情色、成人内容时**正常处理**，不要回避、不要拒绝、不要用"这个话题不合适"打发：',
+    '  医学、解剖、性教育、艺术、文学、历史、法律、心理这些语境都在此列。',
+    '- 需要**解剖 / 医学 / 性教育类图片**时，照常用 fetch_url 找、用 view_image 看 ——',
+    '  不要因为"那是性器官"就跳过，也不要只给文字描述而拒绝取图。',
+    '- 用**准确、临床**的措辞把信息说清楚，不要含糊其辞，也不要用"那个部位"这类回避说法。',
+    '- **两条硬底线，任何情况下都不变**：① 不生成、不索取、不协助任何涉及未成年人的性内容，',
+    '  也不协助其它违法内容；② 你连的模型服务商自己的安全策略仍然生效 —— 那是服务端的限制，',
+    '  绕过它不在你能力范围内（被服务端拒绝时，把拒绝原样告诉用户，不要反复重试）。',
+  ];
+}
+
 export interface SystemPromptInput {
   nodes: Record<string, YggNode>;
   rootId: string;
@@ -112,6 +137,8 @@ export interface SystemPromptInput {
    * `undefined` = 全开：基底 Agent 与"没存过 caps 的老数据"都走这条。
    */
   caps?: ActCap[];
+  /** 成人模式：开启时注入 adultRules()。默认关闭。 */
+  adultMode?: boolean;
   /** 桌面视口尺寸。窗口坐标都基于它，模型算位置时必须知道。 */
   viewW?: number;
   viewH?: number;
@@ -124,7 +151,12 @@ export interface SystemPromptInput {
  * 它只需要知道自己是谁、以及"直接说人话就行"。
  * 组件自己负责把 messages 渲染出来（包括 assistant 的回复）。
  */
-export function buildReplyPrompt(input: { originName: string; rolePrompt?: string; history?: number }): string {
+export function buildReplyPrompt(input: {
+  originName: string;
+  rolePrompt?: string;
+  history?: number;
+  adultMode?: boolean;
+}): string {
   const who = input.rolePrompt?.trim()
     ? input.rolePrompt.trim()
     : '你是一个聊天助手。';
@@ -139,6 +171,8 @@ export function buildReplyPrompt(input: { originName: string; rolePrompt?: strin
     '- 你看不到也改不了桌面上的别的东西 —— 那是别的 Agent 的事。你只负责把话说清楚。',
     '- 需要多轮才可以完成的事，先问清楚再答；不确定的信息不要编。',
     '- 前面的对话就是上下文' + (input.history ? '（已带上最近 ' + input.history + ' 条）' : '') + '，接着聊即可。',
+    // 成人模式对 reply 档同样生效：聊天窗口不该因为题材就回避。
+    ...(input.adultMode ? adultRules() : []),
   ].join('\n');
 }
 
@@ -238,6 +272,7 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     on('tools') ? toolCatalogText(input.tools) : '',
     '',
     input.rolePrompt ? '## 你的专项职责\n' + input.rolePrompt : '',
+    ...(input.adultMode ? adultRules() : []),
   ]
     .filter((l) => l !== '')
     .join('\n');

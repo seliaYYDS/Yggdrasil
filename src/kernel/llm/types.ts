@@ -11,6 +11,16 @@ export interface LlmSettings {
    * 填了它就意味着你认可那个中转服务（它只负责把字节递过来，不做任何识别）。
    */
   imageRelay?: string;
+  /**
+   * 成人模式。**默认关闭。**
+   *
+   * 开启后会在 Agent 的系统提示里注入一节：不要因为话题涉及性 / 性器官 / 情色就回避、说教或拒绝，
+   * 把它当作正当题材处理（医学、解剖、性教育、艺术、文学、法律、心理），需要相关图片时正常抓取与查看。
+   *
+   * 两点边界：① 它只改变**本应用写给模型的提示词**，改变不了模型服务商自己的安全策略
+   * —— 服务端该拒还是会拒；② 涉及未成年人的性内容与其它违法内容始终不在此列。
+   */
+  adultMode?: boolean;
 }
 
 export const DEFAULT_SETTINGS: LlmSettings = {
@@ -20,6 +30,7 @@ export const DEFAULT_SETTINGS: LlmSettings = {
   temperature: 0.4,
   // 刻意留空：默认不经过任何第三方。
   imageRelay: '',
+  adultMode: false,
 };
 
 /** 多模态消息的内容块（OpenAI 兼容格式）。 */

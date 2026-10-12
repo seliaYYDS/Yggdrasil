@@ -295,7 +295,15 @@ async function runReply(
   store.setSessionStatus(sessionId, { running: true, phase: '模型回复中', detail: '', round: 0, runId });
 
   const messages: ChatMessage[] = [
-    { role: 'system', content: buildReplyPrompt({ originName: origin.name, rolePrompt: role, history: historyCount }) },
+    {
+      role: 'system',
+      content: buildReplyPrompt({
+        originName: origin.name,
+        rolePrompt: role,
+        history: historyCount,
+        adultMode: store.settings.adultMode === true,
+      }),
+    },
     ...historyMessages(originId, sessionId, input),
     // 不加【本次请求】标记 —— 那是给 act 档多轮执行用的；这里就是普通的对话上下文。
     { role: 'user', content: userContent(input, images) },
@@ -486,6 +494,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           scope: isAgentic(origin) ? origin.agent.scope : undefined,
           // 能力开关：没开的接口不会出现在接口目录里，提示词也少一大截。
           caps: isAgentic(origin) ? origin.agent.caps : undefined,
+          adultMode: store.settings.adultMode === true,
         });
 
         const messages: ChatMessage[] = [
