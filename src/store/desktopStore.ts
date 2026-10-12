@@ -998,6 +998,36 @@ function readRun(s: DesktopState, id: string): RunSlice {
   return ses ? { status: ses.status, trace: ses.trace, queue: ses.queue } : EMPTY_RUN;
 }
 
+export /**
+ * 打开一个面板时的统一动作：置开 + 取消最小化 + 抬到最前。
+ *
+ * 只 setOpen(true) 是不够的：面板最小化后由任务栏接管渲染（PanelWindow 直接返回 null），
+ * 这时再点顶栏那个按钮只是把已经为 true 的开关又设成 true —— 界面毫无变化，
+ * 用户看到的就是"有时打不开"。已经在最前面时也顺手聚焦，符合"点了就该出来"的预期。
+ */
+/**
+ * 面板"正在关闭"的世代号。
+ *
+ * 关面板是先标记 dying、DEATH_MS 之后才真正把开关设成 false（为了播淡出动画）。
+ * 如果用户在这 260ms 内又点了打开（"关掉再开"是很自然的动作），
+ * 那个还没到点的定时器会把刚打开的面板又关掉 —— 表现就是**点了没反应 / 闪一下又没了**。
+ * 世代号用来作废过期的那一次关闭。
+ */
+const panelCloseToken: Record<string, number> = {};
+
+function openPanel(key: PanelKey): void {
+  const st = useDesktopStore.getState();
+  // 作废进行中的关闭：清掉 dying 标记，并让定时器认出自己已经过期。
+  panelCloseToken[key] = (panelCloseToken[key] ?? 0) + 1;
+  if (st.dying['panel-' + key]) {
+    const dying = { ...st.dying };
+    delete dying['panel-' + key];
+    useDesktopStore.setState({ dying });
+  }
+  if (st.minimizedPanels[key]) st.setPanelMinimized(key, false);
+  st.bringToFront('panel-' + key);
+}
+
 export function snapshot(): PersistedRoot {
   const s = useDesktopStore.getState();
   return {
@@ -1515,10 +1545,22 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
-  setSettingsOpen: (open) => set({ settingsOpen: open }),
-  setPluginsOpen: (open) => set({ pluginsOpen: open }),
-  setTreeOpen: (open) => set({ treeOpen: open }),
-  setTraceOpen: (open) => set({ traceOpen: open }),
+  setSettingsOpen: (open) => {
+    set({ settingsOpen: open });
+    if (open) openPanel('settings');
+  },
+  setPluginsOpen: (open) => {
+    set({ pluginsOpen: open });
+    if (open) openPanel('plugins');
+  },
+  setTreeOpen: (open) => {
+    set({ treeOpen: open });
+    if (open) openPanel('inspector');
+  },
+  setTraceOpen: (open) => {
+    set({ traceOpen: open });
+    if (open) openPanel('trace');
+  },
   setResetOpen: (open) => set({ resetOpen: open }),
 
   setPanelOpen: (panel, open) => {
@@ -1673,8 +1715,24 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     if (isSession && s.sessions.length <= 1) return;
     if (s.dying[windowId]) return;
     set((cur) => ({ dying: { ...cur.dying, [windowId]: true } }));
+    // 面板：记下这一轮的世代号，过期的关闭不再生效（见 openPanel）。
+    const closeKey = isPanel ? (windowId.slice('panel-'.length) as PanelKey) : null;
+    const closeToken = closeKey ? (panelCloseToken[closeKey] = (panelCloseToken[closeKey] ?? 0) + 1) : 0;
     window.setTimeout(() => {
       const st = get();
+      /*
+       * 已经被重新打开了就别再关：清掉 dying 之后直接返回。
+       * 这一步是"关掉再开"能正常工作的关键。
+       */
+      if (closeKey && panelCloseToken[closeKey] !== closeToken) {
+        set((cur) => {
+          if (!cur.dying[windowId]) return {};
+          const dying = { ...cur.dying };
+          delete dying[windowId];
+          return { dying };
+        });
+        return;
+      }
       set((cur) => {
         const dying = { ...cur.dying };
         delete dying[windowId];

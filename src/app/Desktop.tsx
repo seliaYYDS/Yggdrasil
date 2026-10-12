@@ -11,6 +11,7 @@ import { InspectorPanel } from '../ui/InspectorPanel';
 import { FxLayer } from '../ui/FxLayer';
 import { TracePanel } from '../ui/TracePanel';
 import { SettingsPanel } from '../ui/SettingsPanel';
+import { PluginsPanel } from '../ui/PluginsPanel';
 import type { ComponentNode } from '../kernel/types';
 
 export function Desktop() {
@@ -31,6 +32,7 @@ export function Desktop() {
       else if (s.resetOpen) s.setResetOpen(false);
       else if (s.treeOpen) s.setTreeOpen(false);
       else if (s.traceOpen) s.setTraceOpen(false);
+      else if (s.pluginsOpen) s.setPluginsOpen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -123,6 +125,13 @@ export function Desktop() {
       <InspectorPanel />
       <TracePanel />
       <SettingsPanel />
+      {/*
+        ⚠ 插件面板**必须**渲染在这里，和别的面板待在一起。
+        .ygg-desktop 是 position: fixed，会自己形成一个层叠上下文；
+        渲染到它外面（例如 App 里）就会另起一个上下文 —— panelZ 里算出来的层级完全不起作用，
+        面板永远盖在所有窗口之上。这个坑踩过一次，别再把面板往外搬。
+      */}
+      <PluginsPanel />
 
       <Taskbar />
     </div>
