@@ -17,9 +17,7 @@ export function registerWindowInterfaces(): void {
     kind: 'arrange_windows',
     label: '排布窗口',
     description:
-      '把桌面上的窗口按统一规则重新排布，只改位置与尺寸，不新建也不删除。' +
-      'mode：grid 网格 / cascade 斜向层叠 / stack 全部居中叠放。' +
-      '只处理当前显示中的窗口，最小化或关闭的不动。坐标由服务端按视口算，比你手算每个窗口的坐标可靠。',
+      'Re-layout the desktop windows by one uniform rule; only positions and sizes change, nothing is created or deleted. mode: grid / cascade / stack (all centred and stacked). Only visible windows are handled — minimised or closed ones stay put. Coordinates are computed from the viewport, which is more reliable than working them out yourself.',
     example: { kind: 'arrange_windows', mode: 'grid' },
     mutates: true,
     cap: 'desktop',
@@ -29,13 +27,13 @@ export function registerWindowInterfaces(): void {
       const targets = Object.values(store.nodes).filter(
         (n): n is ComponentNode => n.kind === 'component' && !n.root && n.status === 'active',
       );
-      if (targets.length === 0) return fail('当前没有显示中的窗口，没什么可排布的。');
+      if (targets.length === 0) return fail('No windows are visible right now, so there is nothing to arrange.');
       if (!(ARRANGE_MODES as readonly string[]).includes(mode)) {
-        return fail('mode 只接受 ' + ARRANGE_MODES.join(' / ') + '。');
+        return fail('mode accepts ' + ARRANGE_MODES.join(' / ') + ' only.');
       }
 
       const rects = layoutFor(mode, targets.length, store.viewW, store.viewH);
-      if (!rects) return fail('mode 只接受 ' + ARRANGE_MODES.join(' / ') + '。');
+      if (!rects) return fail('mode accepts ' + ARRANGE_MODES.join(' / ') + ' only.');
 
       // 按层级从低到高摆，视觉顺序与层叠顺序一致。
       const ordered = [...targets].sort((a, b) => (a.z ?? 0) - (b.z ?? 0));

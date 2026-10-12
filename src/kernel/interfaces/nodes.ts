@@ -74,7 +74,7 @@ function updateDefaultWindow(op: DerivationOp, ref: string): OpResult {
   const win = defaultWindows(s).find((w) => w.id === ref);
   if (!win) {
     const list = defaultWindows(s).map((w) => w.id + '「' + w.title + '」').join('、');
-    return fail('没有这个默认窗口 ' + ref + '。现有的：' + list);
+    return fail('No such default window ' + ref + '. Existing: ' + list);
   }
   const viewW = s.viewW;
   const viewH = s.viewH;
@@ -111,7 +111,7 @@ function updateDefaultWindow(op: DerivationOp, ref: string): OpResult {
     s.bringToFront(win.id);
     touched.push('置顶');
   }
-  if (touched.length === 0) return fail('没有给出任何可改的字段（默认窗口只支持 pos/size/dx/dy/dw/dh/center/fill/align/focus）。');
+  if (touched.length === 0) return fail('No changeable field was given (default windows support pos/size/dx/dy/dw/dh/center/fill/align/focus only).');
 
   if (win.kind === 'panel') {
     const key = win.id.slice('panel-'.length) as PanelKey;
@@ -138,7 +138,7 @@ function setDefaultWindowState(ref: string, state: 'active' | 'minimized' | 'clo
   const win = defaultWindows(s).find((w) => w.id === ref);
   if (!win) {
     const list = defaultWindows(s).map((w) => w.id + '「' + w.title + '」').join('、');
-    return fail('没有这个默认窗口 ' + ref + '。现有的：' + list);
+    return fail('No such default window ' + ref + '. Existing: ' + list);
   }
   if (win.kind === 'panel') {
     const key = win.id.slice('panel-'.length) as PanelKey;
@@ -151,7 +151,7 @@ function setDefaultWindowState(ref: string, state: 'active' | 'minimized' | 'clo
       s.setPanelMinimized(key, false);
     }
   } else if (state === 'closed') {
-    if (s.sessions.length <= 1) return fail('只剩一个输入框，关掉就没有入口了。');
+    if (s.sessions.length <= 1) return fail('This is the last input box; closing it would leave no way in.');
     s.removeSession(win.id);
   } else {
     s.setSessionMinimized(win.id, state === 'minimized');
@@ -189,7 +189,7 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionI
     const compiled = compileComponent(id, source);
     if (!compiled.ok) {
       desktop().log('error', 'comp ' + name + ' \u2715 ' + compiled.error);
-      return fail('组件「' + name + '」编译失败：' + compiled.error);
+      return fail('Component "' + name + '" failed to compile: ' + compiled.error);
     }
   }
 
@@ -198,7 +198,7 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionI
   // 显式给了 hostId 就必须存在；静默回退会把东西建到没指定的地方。
   const explicitHost = typeof op.hostId === 'string' && op.hostId.trim() ? op.hostId.trim() : null;
   if (explicitHost && !store.nodes[explicitHost]) {
-    return fail('hostId "' + explicitHost + '" 不存在。可用的组件 id 见 inspect。');
+    return fail('hostId "' + explicitHost + '" does not exist. See inspect for the component ids you can use.');
   }
   const parentId = explicitHost ?? ctx.originId;
 
@@ -238,7 +238,7 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionI
     // 能力开关：给了用给的，没给就默认最小集（不是全开）。
     caps = mode === 'reply' ? undefined : parseCaps(givenCaps) ?? DEFAULT_ACT_CAPS;
     const conflict = mode === 'reply' ? null : capScopeConflict(caps, scope);
-    if (conflict) return fail('「' + name + '」的能力开关与作用域冲突：' + conflict);
+    if (conflict) return fail('The capability switches of "' + name + '" conflict with its scope: ' + conflict);
     node.agent = makeFacet({
       systemPrompt:
         agentRaw && typeof agentRaw.systemPrompt === 'string'
@@ -361,8 +361,7 @@ export function registerNodeInterfaces(): void {
     kind: 'create_component',
     label: '创建组件',
     description:
-      '**新建页面/窗口**（唯一的创建入口）：给一个 source 就产出一个普通组件。pos / size 可选，不给就落空位。' +
-      '挂件传 frame: "widget"。agent 字段可选（默认不写）：要不要接、怎么接、什么档位与能力开关见「agent 能力」一节。',
+      '**Create a page/window** (the only creation entry point): one source yields one plain component. pos / size optional — without them it lands in a free spot. Pass frame: "widget" for a widget. The agent field is optional (normally omitted): whether to attach, how, which tier and which capability switches are covered in the "Agent capability" section.',
     example: {
       kind: 'create_component',
       name: '计算器',
@@ -382,11 +381,7 @@ export function registerNodeInterfaces(): void {
     kind: 'update_component',
     label: '修改组件',
     description:
-      '修改已有组件（= 调整窗口），未给的字段不动：source 换源码；name 改标题；status 显隐；' +
-      'tokens 局部样式；z 或 focus=true 置顶；frame 换窗口/挂件；fixed / locked 开关。' +
-      '**几何**：绝对 `pos/size`、相对 `dx dy dw dh`、或视口算好的 `center` / `fill` / `align`。结果都会夹进视口。' +
-      '**默认窗口**（Nodes / 设置 / Trace / 输入框）不是组件，改用 `panel` 指它们（id 见「默认窗口」一节，' +
-      '如 panel-settings / input），只支持几何与 focus。',
+      'Change an existing component (= adjust its window); fields you omit stay as they are: source replaces the source; name renames; status shows/hides; tokens sets local style; z or focus=true raises it; frame switches window/widget; fixed / locked toggle. **Geometry**: absolute `pos/size`, relative `dx dy dw dh`, or `center` / `fill` / `align` computed from the viewport. Results are clamped into the viewport. **Default windows** (Nodes / Settings / Trace / input boxes) are not components — target them with `panel` instead (ids in the "Default windows" section, e.g. panel-settings / input); they support geometry and focus only.',
     example: { kind: 'update_component', id: 'n_xxx', dx: 120, dy: 0, focus: true },
     mutates: true,
     cap: 'desktop',
@@ -400,7 +395,7 @@ export function registerNodeInterfaces(): void {
 
       const id = strOr(op.id, '');
       const node = findComponent(id);
-      if (!node) return fail('组件 ' + id + ' 不存在。');
+      if (!node) return fail('Component ' + id + ' does not exist.');
       const patch: Partial<ComponentNode> = {};
       const touched: string[] = [];
 
@@ -408,7 +403,7 @@ export function registerNodeInterfaces(): void {
         const compiled = compileComponent(id, op.source);
         if (!compiled.ok) {
           desktop().log('error', 'comp ' + node.name + ' \u2715 ' + compiled.error);
-          return fail('改动后的源码编译失败，已放弃本次修改：' + compiled.error);
+          return fail('The changed source failed to compile, so this edit was dropped: ' + compiled.error);
         }
         patch.source = op.source;
         touched.push('源码');
@@ -503,7 +498,7 @@ export function registerNodeInterfaces(): void {
         touched.push('局部样式');
       }
       if (op.tokens && Object.keys(tokenPatch).length === 0 && Object.keys(tokensOf(op.tokens)).length > 0) {
-        return fail('tokens 里没有合法的 --ygg- 变量。');
+        return fail('No valid --ygg- variable in tokens.');
       }
       if (op.focus === true) touched.push('置顶');
       if (touched.length === 0) {
@@ -530,8 +525,7 @@ export function registerNodeInterfaces(): void {
     kind: 'attach_agent',
     label: '接入 agent 能力',
     description:
-      '给已存在的组件**接入 agent 能力**（界面不变，还是它自己的 source）。' +
-      '必须给 systemPrompt 或 tools，否则被拒；**默认不要用** —— 判据与档位 / 能力开关见「agent 能力」一节。',
+      '**Attach agent capability** to an existing component (the interface does not change; it keeps its own source). You must give systemPrompt or tools, otherwise it is rejected; **do not use this by default** — see the "Agent capability" section for the criteria, tiers and capability switches.',
     example: {
       kind: 'attach_agent',
       id: 'n_xxx',
@@ -544,10 +538,10 @@ export function registerNodeInterfaces(): void {
       const id = strOr(op.id, '');
       const node = desktop().nodes[id];
       if (!node || node.kind !== 'component' || node.root) {
-        return fail('找不到可接入能力的组件 ' + id + '（基底不可再接入）。');
+        return fail('No component ' + id + ' to attach capability to (the base agent cannot take another).');
       }
       if (node.agent) {
-        return fail('组件「' + node.name + '」已经具备 agent 能力了。改它的职责用 set_agent_config。');
+        return fail('Component "' + node.name + '" already has agent capability. Use set_agent_config to change its role.');
       }
       // 没有职责也没有工具的空壳接入会让这个组件变成"没有用途的 Agent"，
       // 这正是"对派生 agent 太敏感"的另一种表现，直接拒绝并把默认做法说清楚。
@@ -565,7 +559,7 @@ export function registerNodeInterfaces(): void {
       const attachCaps =
         attachMode === 'reply' ? undefined : parseCaps(op.caps) ?? DEFAULT_ACT_CAPS;
       const attachConflict = attachMode === 'reply' ? null : capScopeConflict(attachCaps, attachScope);
-      if (attachConflict) return fail('能力开关与作用域冲突：' + attachConflict);
+      if (attachConflict) return fail('Capability switches conflict with the scope: ' + attachConflict);
       useDesktopStore.getState().setFacet(id, makeFacet({
         systemPrompt: typeof op.systemPrompt === 'string' ? op.systemPrompt : '',
         toolIds: pickToolIds(op.tools),
@@ -593,7 +587,7 @@ export function registerNodeInterfaces(): void {
     kind: 'detach_agent',
     label: '移除 agent 能力',
     description:
-      '移除一个组件的 agent 能力，它会退回成普通组件（界面不变，上下文与作用域信息丢弃）。',
+      'Remove an agent capability from a component; it goes back to being a plain component (the interface does not change, the context and scope information is discarded).',
     example: { kind: 'detach_agent', id: 'n_xxx' },
     mutates: true,
     cap: 'agents',
@@ -601,9 +595,9 @@ export function registerNodeInterfaces(): void {
       const id = strOr(op.id, '');
       const node = desktop().nodes[id];
       if (!node || node.kind !== 'component' || !node.agent) {
-        return fail('组件 ' + id + ' 没有 agent 能力，无需移除。');
+        return fail('Component ' + id + ' has no agent capability; nothing to remove.');
       }
-      if (node.root) return fail('基底不可移除 agent 能力。');
+      if (node.root) return fail('The base agent capability cannot be removed.');
       useDesktopStore.getState().updateNode(id, { agent: undefined } as Partial<YggNode>);
       desktop().log('op', 'detach agent ' + node.name, id);
       return ok('已移除「' + node.name + '」的 agent 能力，它现在是普通组件');
@@ -613,13 +607,13 @@ export function registerNodeInterfaces(): void {
   registerInterface({
     kind: 'remove_node',
     label: '删除节点',
-    description: '删除某个节点，会级联删除其全部子节点与派生工具。',
+    description: 'Delete a node, cascading to all of its children and derived tools.',
     example: { kind: 'remove_node', id: 'n_xxx' },
     mutates: true,
     cap: 'desktop',
     handler: (op) => {
       const id = strOr(op.id, '');
-      if (RESERVED.has(id) || !desktop().nodes[id]) return fail('节点 ' + id + ' 不存在或不可删除。');
+      if (RESERVED.has(id) || !desktop().nodes[id]) return fail('Node ' + id + ' does not exist or cannot be deleted.');
       const cascaded = desktop().cascadeIds(id);
       // 锁定 = 用户明确要保住这些东西。删除被拒，并说清怎么解。
       const lockedNames = cascaded
@@ -646,16 +640,14 @@ export function registerNodeInterfaces(): void {
     kind: 'set_window_state',
     label: '窗口显隐',
     description:
-      '设置窗口状态：active 显示 / minimized 最小化 / closed 关闭（保留节点，可从桌面左下任务栏恢复）。按名字或 id 指定。' +
-      '**默认窗口**（Nodes / 设置 / Trace / 输入框）用 `panel` 指定（见「默认窗口」一节）：' +
-      'closed 是关掉面板、minimized 是收进任务栏、active 是重新打开。',
+      'Set a window state: active shows / minimized minimises / closed closes it (the node is kept and can be restored from the taskbar at the bottom left). Identified by name or id. **Default windows** (Nodes / Settings / Trace / input boxes) are targeted with `panel` (see the "Default windows" section): closed shuts the panel, minimized sends it to the taskbar, active reopens it.',
     example: { kind: 'set_window_state', name: '计算器', state: 'minimized' },
     mutates: true,
     cap: 'desktop',
     handler: (op) => {
       const state = strOr(op.state, '');
       if (!['active', 'minimized', 'closed'].includes(state)) {
-        return fail('state 只接受 active / minimized / closed。');
+        return fail('state accepts active / minimized / closed only.');
       }
       const panelRef = strOr(op.panel, '');
       if (panelRef) return setDefaultWindowState(panelRef, state as 'active' | 'minimized' | 'closed');
@@ -676,8 +668,8 @@ export function registerNodeInterfaces(): void {
         }
       }
       if (!node) {
-        if (id || name) return fail('找不到窗口 ' + (id || name) + '。当前组件：' + listText);
-        return fail('set_window_state 需要 id 或 name。当前组件：' + listText);
+        if (id || name) return fail('No such window ' + (id || name) + '. Current components: ' + listText);
+        return fail('set_window_state needs id or name. Current components: ' + listText);
       }
       useDesktopStore.getState().updateNode(node.id, { status: state as ComponentNode['status'] } as Partial<YggNode>);
       const label = state === 'active' ? '显示' : state === 'minimized' ? '最小化' : '关闭';
@@ -690,16 +682,16 @@ export function registerNodeInterfaces(): void {
     kind: 'set_node_tokens',
     label: '覆写局部样式',
     description:
-      '只改写某一个节点的局部样式变量，影响该窗口及其内部元素，不动全局。适合"把那个计算器变红"这类要求。',
+      'Override the local style variables of one node only, affecting that window and its contents, never the global theme. Good for requests like "make that calculator red".',
     example: { kind: 'set_node_tokens', id: 'n_xxx', tokens: { '--ygg-accent': '#FF3D7F' } },
     mutates: true,
     cap: 'style',
     handler: (op) => {
       const id = strOr(op.id, '');
       const node = desktop().nodes[id];
-      if (!node) return fail('节点 ' + id + ' 不存在。');
+      if (!node) return fail('Node ' + id + ' does not exist.');
       const tokens = sanitizeTokens(tokensOf(op.tokens));
-      if (Object.keys(tokens).length === 0) return fail('没有合法的 --ygg- 变量。');
+      if (Object.keys(tokens).length === 0) return fail('No valid --ygg- variable.');
       const merged = { ...(node.tokens ?? {}), ...tokens };
       useDesktopStore.getState().updateNode(id, { tokens: merged } as Partial<YggNode>);
       desktop().log('op', 'scope ' + id + ' \u00d7' + Object.keys(tokens).length, id);
@@ -713,8 +705,8 @@ export function registerNodeInterfaces(): void {
     kind: 'list_nodes',
     label: '列出节点',
     description:
-      '按名字或类型查找节点，返回 id、类型、位置、状态、是否挂了 Agent。比 inspect 更轻，适合只是想知道"那个窗口叫什么 id"。',
-    example: { kind: 'list_nodes', query: '计算器' },
+      'Find nodes by name or type and return id, type, position, status and whether an agent is attached. Lighter than inspect — good when you just need to know "what is that window id called".',
+    example: { kind: 'list_nodes', query: 'calculator' },
     cap: 'desktop',
     handler: (op) => {
       const query = strOr(op.query, '').toLowerCase();

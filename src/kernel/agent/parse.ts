@@ -41,15 +41,15 @@ function extractJson(text: string): string | null {
 export function parsePlan(text: string): ParseResult {
   const raw = text.trim();
   const json = extractJson(raw);
-  if (!json) return { ok: false, error: '模型回复里没有找到 JSON 对象。', raw };
+  if (!json) return { ok: false, error: 'No JSON object found in the model reply.', raw };
 
   let data: unknown;
   try {
     data = JSON.parse(json);
   } catch (e) {
-    return { ok: false, error: 'JSON 解析失败：' + (e as Error).message, raw };
+    return { ok: false, error: 'JSON parse failed: ' + (e as Error).message, raw };
   }
-  if (!data || typeof data !== 'object') return { ok: false, error: 'JSON 顶层不是对象。', raw };
+  if (!data || typeof data !== 'object') return { ok: false, error: 'The top level of the JSON is not an object.', raw };
 
   const obj = data as Record<string, unknown>;
   const opsRaw = Array.isArray(obj.ops) ? obj.ops : [];
@@ -64,7 +64,7 @@ export function parsePlan(text: string): ParseResult {
   if (ops.length === 0 && opsRaw.length > 0) {
     return {
       ok: false,
-      error: 'ops 里没有一条带 kind 的指令。可用 kind：' + knownKinds().join(', ') + '。',
+      error: 'No op in "ops" carries a kind. Available kinds: ' + knownKinds().join(', ') + '.',
       raw,
     };
   }

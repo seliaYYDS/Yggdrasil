@@ -50,16 +50,16 @@ export function buildComponentPatchPrompt(node: YggNode, instruction: string): C
     {
       role: 'system',
       content: [
-        '你是 Yggdrasil 的组件修改器。用户会给你一个现有 React 组件的源码和一条修改要求。',
-        '只输出修改后的 TSX 源码，不要输出解释，不要用 markdown 代码块包裹。',
-        '必须保留 export default 的函数组件，只能 import react / react-dom / react-dom/client，样式写成行内 style 并使用 --ygg- CSS 变量。',
-        '视觉风格必须扁平：不要 boxShadow、textShadow、filter、gradient、backdropFilter。',
-        '边框克制：只在组件根容器上加边框，内部区块之间不要加边框或分隔线。',
+        'You are a Yggdrasil component editor. The user gives you the source of an existing React component plus one change request.',
+        'Output only the modified TSX source — no explanation and no markdown code fence.',
+        'Keep the export default function component; you may only import react / react-dom / react-dom/client; write styles as inline style objects using --ygg- CSS variables.',
+        'The visual style must be flat: no boxShadow, textShadow, filter, gradient or backdropFilter.',
+        'Be restrained with borders: put a border on the root container only; no borders or dividers between inner blocks.',
       ].join('\n'),
     },
     {
       role: 'user',
-      content: '当前源码：\n' + (isComponentNode(node) ? node.source : '') + '\n\n修改要求：' + instruction,
+      content: 'Current source:\n' + (isComponentNode(node) ? node.source : '') + '\n\nRequested change: ' + instruction,
     },
   ];
 }
@@ -224,7 +224,7 @@ function visionHint(images: string[], error: string): string {
 }
 
 /** 当前请求的标记，与提示词里的「你每次只处理标注为【本次请求】的那一条消息」对应。 */
-const CURRENT_REQUEST_TAG = '【本次请求】';
+const CURRENT_REQUEST_TAG = '[CURRENT REQUEST]';
 
 /** 单次运行允许的"出错后重来"次数上限，防止反复失败烧掉轮次。 */
 const MAX_RECOVERIES = 3;
@@ -676,8 +676,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           store.log('error', 'llm ✕ ' + msg);
           if (recoveries < MAX_RECOVERIES) {
             pushObservations([
-              '上一轮模型调用失败：' + msg,
-              '请换一个更简单的做法重试；如果任务无法完成，用空 ops 结束。',
+              'The model call in the previous round failed: ' + msg,
+              'Retry with a simpler approach; if the task cannot be completed, finish with empty ops.',
             ]);
             notifyRetry(round, '模型调用失败，正在重试：' + msg);
             continue;
@@ -706,9 +706,9 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           store.log('error', 'parse ✕ ' + err);
           if (recoveries < MAX_RECOVERIES) {
             pushObservations([
-              '你上一轮的输出不是合法指令，解析失败：' + err,
-              '原始输出片段：' + raw.slice(0, 300),
-              '请只输出一个 JSON 对象，kind 必须是可用接口之一。',
+              'Your previous output was not a valid plan; parsing failed: ' + err,
+              'Raw output fragment: ' + raw.slice(0, 300),
+              'Output one JSON object only, and kind must be one of the available operations.',
             ]);
             notifyRetry(round, '指令格式错误，正在让其自行修复：' + err);
             continue;
@@ -774,9 +774,9 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
              * "部分完成：N 成功 / M 失败" 的提示 —— 这就是"每次有错都通知用户"的来源。
              */
             pushObservations([
-              '你上一轮的所有指令都失败了，已回滚它们造成的改动。失败原因：',
+              'Every operation in your previous round failed, and their changes have been rolled back. Reasons:',
               ...text,
-              '请修正后重试。常见原因：源码语法错误、引用了不存在的 id、变量未定义。',
+              'Fix them and try again. Common causes: a source syntax error, a reference to an id that does not exist, an undefined variable.',
             ]);
             notifyRetry(round, '全部指令失败，正在重试：' + (text[0] ?? ''));
             continue;
@@ -834,8 +834,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
       });
       if (recoveries < MAX_RECOVERIES) {
         pushObservations([
-          '你上一轮执行时出现了内部异常：' + msg,
-          '请换一个更简单、更保守的做法重试。',
+          'An internal exception occurred while executing your previous round: ' + msg,
+          'Retry with a simpler, more conservative approach.',
         ]);
         notifyRetry(round, '单轮异常，正在重试：' + msg);
         continue;
@@ -920,25 +920,25 @@ function recordLedger(
     if (!outcome?.ok) return;
     const created = outcome.createdId ? store.nodes[outcome.createdId] : undefined;
     if (op.kind === 'create_component' && created) {
-      entries.push('组件「' + created.name + '」(id=' + created.id + ')');
+      entries.push('component "' + created.name + '" (id=' + created.id + ')');
     } else if (op.kind === 'create_tool' && created) {
-      entries.push('工具「' + created.name + '」(id=' + created.id + ')');
+      entries.push('tool "' + created.name + '" (id=' + created.id + ')');
     } else if (op.kind === 'replace_surface' && typeof op.surface === 'string') {
-      entries.push('替换了界面插槽 ' + op.surface);
+      entries.push('replaced surface slot ' + op.surface);
     } else if (op.kind === 'update_theme') {
-      entries.push('改写了全局样式');
+      entries.push('rewrote the global style');
     } else if (op.kind === 'set_node_tokens' && typeof op.id === 'string') {
-      entries.push('覆写了节点 id=' + op.id + ' 的局部样式');
+      entries.push('overrode the local style of node id=' + op.id);
     } else if (op.kind === 'update_component' && typeof op.id === 'string') {
       const name = store.nodes[op.id]?.name ?? '';
-      entries.push('修改了组件' + (name ? '「' + name + '」' : '') + ' id=' + op.id);
+      entries.push('changed component' + (name ? ' "' + name + '"' : '') + ' id=' + op.id);
     }
   });
   if (entries.length === 0) return;
   const from = request.replace(/\s+/g, ' ').trim().slice(0, 40);
   store.appendLedger(
     originId,
-    entries.map((e) => e + (from ? '　← 请求「' + from + '」' : '')),
+    entries.map((e) => e + (from ? '  <- request "' + from + '"' : '')),
   );
 }
 

@@ -12,24 +12,24 @@ export const ALL_CAPS: ActCap[] = ['desktop', 'style', 'global', 'net', 'browser
 
 /** 中文名，用在错误信息与能力摘要里。 */
 export const CAP_LABELS: Record<ActCap, string> = {
-  desktop: '桌面操作',
-  style: '局部样式',
-  global: '全局修改',
-  net: '联网抓取',
-  browser: '浏览器控制',
-  agents: '派生 Agent',
-  tools: '派生工具',
+  desktop: 'desktop operations',
+  style: 'local styling',
+  global: 'global changes',
+  net: 'networking',
+  browser: 'browser and screen capture',
+  agents: 'derived agents',
+  tools: 'derived tools',
 };
 
 /** 提示词里的能力摘要用一句话说明它到底能干什么。 */
 export const CAP_HINTS: Record<ActCap, string> = {
-  desktop: '创建 / 修改 / 删除组件、改窗口状态与排布、查看界面结构',
-  style: '改**单个组件自己**的样式变量（set_node_tokens）',
-  global: '改整套全局样式（update_theme）与宿主界面插槽（背景 / 标题栏 / 整页效果层）',
-  net: '抓取网页与图片（fetch_url / fetch_image）',
-  browser: '控制用户的真实浏览器标签页（browser_*）',
-  agents: '给组件接入 / 移除 agent 能力、配置别的 Agent',
-  tools: '派生新的工具函数并调用它们',
+  desktop: 'create / change / delete components, set window state and layout, inspect the interface',
+  style: 'change the style variables of one single component (set_node_tokens)',
+  global: 'change the whole theme (update_theme) and the host surface slots (background / title bar / page overlay)',
+  net: 'fetch pages and images (fetch_url / fetch_image)',
+  browser: 'drive the user real browser tabs (browser_*, capture_screen)',
+  agents: 'attach / detach agent capability and configure other agents',
+  tools: 'derive new tool functions and call them',
 };
 
 /**
@@ -64,7 +64,7 @@ export function parseCaps(raw: unknown): ActCap[] | undefined {
 
 /** 人类可读的能力摘要。 */
 export function capSummary(caps: ActCap[]): string {
-  if (caps.length === 0) return '（无）';
+  if (caps.length === 0) return '(none)';
   return caps.map((c) => CAP_LABELS[c] ?? c).join('、');
 }
 
@@ -82,7 +82,7 @@ export function capScopeConflict(
   if (!caps || !caps.includes('global')) return null;
   if (scope === '*') return null;
   return (
-    'cap「global」（全局修改）要求**不受限作用域**：把 scope 设成 "*"，或者去掉这个开关。' +
-    '受限作用域的 Agent 调 update_theme / replace_surface 会被作用域直接拒绝，给它这项能力只会白费。'
+    'The "global" capability requires an **unrestricted scope**: set scope to "*", or drop this switch.' +
+    'A scoped agent calling update_theme / replace_surface is rejected by the scope check, so granting it is wasted.'
   );
 }

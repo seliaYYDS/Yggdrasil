@@ -84,7 +84,7 @@ function scopeViolation(op: DerivationOp, originId: NodeId): string | null {
   if (field) {
     const target = typeof op[field] === 'string' ? (op[field] as string) : '';
     if (target && !inScope(originId, target, scope)) {
-      return '节点 ' + target + ' 在你的作用域之外（作用域：' + scope.join(', ') + '），已拒绝。';
+      return 'Node ' + target + ' is outside your scope (scope: ' + scope.join(', ') + '), so this was rejected.';
     }
     if (!target && op.kind === 'update_component') {
       return null; // 交给 handler 报"缺少 id"
@@ -93,12 +93,12 @@ function scopeViolation(op: DerivationOp, originId: NodeId): string | null {
 
   // 全局样式：只有不受限的 Agent 才能改。
   if (op.kind === 'update_theme') {
-    return 'update_theme 会改动整个页面，超出你的作用域。若只想改自己，用 set_node_tokens。';
+    return 'update_theme changes the whole page, which is outside your scope. To change only yourself, use set_node_tokens.';
   }
 
   // 界面插槽是全局的。
   if (op.kind === 'replace_surface') {
-    return 'replace_surface 影响全局界面，超出你的作用域。';
+    return 'replace_surface affects the global interface, which is outside your scope.';
   }
 
   return null;
@@ -125,9 +125,9 @@ function capViolation(op: DerivationOp, originId: NodeId): string | null {
   if (!need) return null;
   if (caps.includes(need)) return null;
   return (
-    '你**没有「' + (CAP_LABELS[need] ?? need) + '」能力**，因此 ' + op.kind + ' 被拒绝。' +
-    '需要的话让创建你的 Agent 用 set_agent_config 给你加上 caps: ["' + need + '"]；' +
-    '你现在能做的是：' + (caps.length ? caps.map((c) => CAP_LABELS[c] ?? c).join('、') : '（无）') + '。'
+    'You do **not have the "' + (CAP_LABELS[need] ?? need) + '" capability**, so ' + op.kind + ' was rejected.' +
+    'If you need it, ask the agent that created you to add caps: ["' + need + '"] via set_agent_config;' +
+    'What you can do now: ' + (caps.length ? caps.map((c) => CAP_LABELS[c] ?? c).join(', ') : '(nothing)') + '.'
   );
 }
 
@@ -177,7 +177,7 @@ export async function executeOps(
     if (!def) {
       // 只列出**它自己能用**的 kind：列全套会诱导它去调没能力的接口。
       result = fail(
-        '未知接口「' + op.kind + '」。你这个 Agent 可用的 kind：' +
+        'Unknown operation "' + op.kind + '". The kinds available to you:' +
           interfacesFor(capsOf(origin)).map((d) => d.kind).join(', ') + '。',
       );
     } else if (violation) {
@@ -187,7 +187,7 @@ export async function executeOps(
       desktop().log('warn', 'cap \u2715 ' + op.kind + ' ' + originId);
       result = fail(capMiss);
     } else if (def.mutates && nodeCount() >= MAX_NODES) {
-      result = fail('节点总数已达上限 ' + MAX_NODES + '，本指令被跳过。');
+      result = fail('The node limit of ' + MAX_NODES + ' has been reached, so this operation was skipped.');
     } else {
       const ctx: OpContext = {
         originId: origin,
@@ -202,7 +202,7 @@ export async function executeOps(
       try {
         result = await def.handler(op, ctx);
       } catch (e) {
-        result = fail('接口「' + label + '」抛错：' + (e as Error).message);
+        result = fail('Operation "' + label + '" threw: ' + (e as Error).message);
       }
     }
 
@@ -273,7 +273,7 @@ export function formatOutcomes(outcomes: OpOutcome[]): string[] {
     const clipped =
       body.length > MAX_OBSERVATION_CHARS
         ? body.slice(0, MAX_OBSERVATION_CHARS) +
-          '\n…（这一条结果过长，已截断；原始长度 ' + body.length + ' 字符）'
+          '\n... (this result was too long and has been truncated; original length ' + body.length + ' characters)'
         : body;
     return head + '\n' + clipped;
   });

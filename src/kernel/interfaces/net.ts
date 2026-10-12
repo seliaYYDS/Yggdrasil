@@ -14,18 +14,17 @@ export function registerNetInterfaces(): void {
     kind: 'fetch_url',
     label: '抓取网页',
     description:
-      '抓取网址：返回正文（HTML 剥标签）+ 标题 + **图片直链** + 可跟进链接。看图片直接看返回里那一节，不用再抓。' +
-      '直连被 CORS 拦会自动走渲染代理。maxChars 默认 12000 / 上限 60000，只裁正文（链接与图片不受影响）。',
+      'Fetch a URL: body (HTML stripped) + title + **direct image links** + followable links. To see images, read that section of the response — no need to fetch again. A direct request blocked by CORS automatically goes through the render proxy. maxChars defaults to 12000 / max 60000 and trims only the body (links and images are unaffected).',
     example: { kind: 'fetch_url', url: 'https://example.com', maxChars: 4000 },
     cap: 'net',
     handler: async (op) => {
       const url = strOr(op.url, '');
-      if (!url) return fail('fetch_url 需要 url。');
+      if (!url) return fail('fetch_url needs a url.');
       const maxChars = typeof op.maxChars === 'number' ? op.maxChars : undefined;
       try {
         const r = await fetchWebSmart(url, { maxChars });
         if (r.status < 200 || r.status >= 400) {
-          return fail('抓取 ' + url + ' 返回 ' + r.status + '。');
+          return fail('Fetching ' + url + ' returned ' + r.status + '.');
         }
         const head = [
           'url: ' + r.finalUrl,
@@ -49,7 +48,7 @@ export function registerNetInterfaces(): void {
           observation: head + '\n\n' + r.text + images + links,
         });
       } catch (e) {
-        return fail('抓取 ' + url + ' 失败：' + (e as Error).message);
+        return fail('Fetching ' + url + ' failed: ' + (e as Error).message);
       }
     },
   });
@@ -58,16 +57,15 @@ export function registerNetInterfaces(): void {
     kind: 'fetch_image',
     label: '探测图片',
     description:
-      '检查一个图片网址是否可达（先 HEAD，不下载正文），返回状态、content-type 与字节数。' +
-      '配合 fetch_url 返回的「图片直链」使用：先确认能用，再写进组件。',
+      'Check whether an image URL is reachable (HEAD first, no body download) and return status, content-type and byte size. Use it with the direct image links returned by fetch_url: confirm it works, then write it into a component.',
     example: { kind: 'fetch_image', url: 'https://example.com/a.png' },
     cap: 'net',
     handler: async (op) => {
       const url = strOr(op.url, '');
-      if (!url) return fail('fetch_image 需要 url。');
+      if (!url) return fail('fetch_image needs a url.');
       try {
         const r = await probeImage(url);
-        if (r.status < 200 || r.status >= 400) return fail('图片 ' + url + ' 返回 ' + r.status + '。');
+        if (r.status < 200 || r.status >= 400) return fail('Image ' + url + ' returned ' + r.status + '.');
         // 网页或 JSON 说明这不是直链（常见于图床的中间页 / 防盗链拦截页）。
         if (/^(text\/|application\/(json|xml))/i.test(r.contentType)) {
           return fail(
@@ -79,7 +77,7 @@ export function registerNetInterfaces(): void {
           observation: JSON.stringify(r),
         });
       } catch (e) {
-        return fail('探测图片失败：' + (e as Error).message);
+        return fail('Probing the image failed: ' + (e as Error).message);
       }
     },
   });
@@ -88,20 +86,17 @@ export function registerNetInterfaces(): void {
     kind: 'view_image',
     label: '看图',
     description:
-      '**把一张图片读进你的上下文**（抓字节 → base64 → 交给**你自己的视觉能力**，没有第三方识别）。' +
-      '用法：fetch_url 拿到图片直链 → view_image → 下一轮你就能看到它 → 再决定怎么写组件。' +
-      '需要模型支持视觉（纯文本模型这一轮会整条失败）；字节直连读取，图床不允许跨域时会报错。' +
-      '一张图 = 上下文里一条消息（会占空间，别一次看太多）。',
+      '**Read an image into your context** (fetch bytes → base64 → **your own vision**; no third-party recognition). Usage: get a direct image link with fetch_url → view_image → you can see it next round → then decide how to write the component. Requires a vision-capable model (a text-only model fails the whole round); bytes are read directly and an image host that disallows cross-origin reads reports an error. One image = one message in the context (it takes space, so do not look at many at once).',
     example: { kind: 'view_image', url: 'https://example.com/a.png', note: '首页主视觉' },
     mutates: false,
     cap: 'net',
     handler: async (op, ctx) => {
       const url = strOr(op.url, '');
-      if (!url) return fail('view_image 需要 url。');
+      if (!url) return fail('view_image needs a url.');
       const note = strOr(op.note, '');
       const origin = useDesktopStore.getState().nodes[ctx.originId];
       if (!origin || origin.kind !== 'component' || !origin.agent) {
-        return fail('view_image 需要一个带 agent 能力的发起者（图片只能进 Agent 自己的上下文）。');
+        return fail('view_image needs a caller with agent capability (an image can only enter an agent own context).');
       }
       try {
         // 中转地址来自设置（默认空 = 不中转）。识图本身始终是"base64 交给当前模型"。
@@ -123,7 +118,7 @@ export function registerNetInterfaces(): void {
         } else {
           const fresh = store.nodes[ctx.originId];
           if (!fresh || fresh.kind !== 'component' || !fresh.agent) {
-            return fail('发起者的 agent 能力在抓图期间消失了，图片没有进入上下文。');
+            return fail('The caller agent capability disappeared while fetching, so the image did not enter the context.');
           }
           const next = [...fresh.agent.messages, { role: 'user' as const, content: caption, images: [dataUrl] }];
           store.updateFacet(ctx.originId, {
@@ -136,7 +131,7 @@ export function registerNetInterfaces(): void {
             '直到它被历史裁剪掉）。现在可以描述它、判断它是否适合放进界面，或者据此写组件。',
         });
       } catch (e) {
-        return fail('看图失败：' + (e as Error).message);
+        return fail('Looking at the image failed: ' + (e as Error).message);
       }
     },
   });

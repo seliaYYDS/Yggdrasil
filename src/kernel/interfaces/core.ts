@@ -242,7 +242,7 @@ export function registerCoreInterfaces(): void {
     kind: 'create_tool',
     label: '派生工具',
     description:
-      '生成一个可被调用的工具函数。工具里不能发起网络请求（用 fetch_url 接口），但可以做纯计算与数据转换。',
+      'Create a callable tool function. A tool cannot perform network requests (use fetch_url for that), but it can do pure computation and data transformation.',
     example: {
       kind: 'create_tool',
       name: 'sum',
@@ -260,7 +260,7 @@ export function registerCoreInterfaces(): void {
       const compiled = compileTool(id, source);
       if (!compiled.ok) {
         desktop().log('error', 'tool ' + name + ' \u2715 ' + compiled.error);
-        return fail('工具「' + name + '」编译失败：' + compiled.error);
+        return fail('Tool "' + name + '" failed to compile: ' + compiled.error);
       }
       const paramsSchema = asSchema(op.paramsSchema);
       registerTool({ id, name, description, paramsSchema, source, builtin: false, run: compiled.run });
@@ -288,7 +288,7 @@ export function registerCoreInterfaces(): void {
   registerInterface({
     kind: 'call_tool',
     label: '调用工具',
-    description: '调用一个已有工具。用 id，或者用 name 按名字找。',
+    description: 'Call an existing tool, by id or by name.', 
     example: { kind: 'call_tool', name: 'sum', args: { a: 1, b: 2 } },
     cap: 'tools',
     handler: async (op) => {
@@ -298,7 +298,7 @@ export function registerCoreInterfaces(): void {
       if (!tool && name) tool = toolCatalog().some((t) => t.name === name) ? getTool(toolCatalog().find((t) => t.name === name)?.id ?? '') : undefined;
       if (!tool) {
         const list = toolCatalog().map((t) => t.name + '(' + t.id + ')').join('、') || '（没有工具）';
-        return fail('找不到工具 ' + (id || name) + '。当前工具：' + list);
+        return fail('No such tool ' + (id || name) + '. Current tools: ' + list);
       }
       try {
         const value = await tool.run(op.args);
@@ -307,7 +307,7 @@ export function registerCoreInterfaces(): void {
         return ok('工具「' + tool.name + '」返回：' + text.slice(0, 400), { observation: text.slice(0, 2000) });
       } catch (e) {
         desktop().log('error', 'tool ' + tool.name + ' \u2715 ' + (e as Error).message);
-        return fail('工具「' + tool.name + '」执行失败：' + (e as Error).message);
+        return fail('Tool "' + tool.name + '" failed while running: ' + (e as Error).message);
       }
     },
   });
@@ -316,14 +316,14 @@ export function registerCoreInterfaces(): void {
     kind: 'update_theme',
     label: '改写样式',
     description:
-      '改写全局 CSS 变量。这是唯一的全局样式接口：不产生节点、不出现在任何界面上，随时可再次调用覆盖。',
+      'Rewrite the global CSS variables. This is the only global styling operation: it creates no node and shows up nowhere in the interface, and it can be called again at any time to overwrite.',
     example: { kind: 'update_theme', tokens: { '--ygg-bg': '#07071A', '--ygg-accent': '#00E5FF' } },
     mutates: true,
     cap: 'global',
     handler: (op) => {
       const tokens = sanitizeTokens(tokensOf(op.tokens));
       const keys = Object.keys(tokens);
-      if (keys.length === 0) return fail('样式指令里没有合法的 --ygg- 变量。');
+      if (keys.length === 0) return fail('The style operation contains no valid --ygg- variable.');
       useDesktopStore.getState().applyTokens({ ...desktop().tokens, ...tokens });
       desktop().log('op', 'tokens \u00d7' + keys.length);
       return ok('已改写 ' + keys.length + ' 个样式变量', { observation: '已生效变量：' + keys.join(', ') });
@@ -334,9 +334,7 @@ export function registerCoreInterfaces(): void {
     kind: 'inspect',
     label: '查看界面结构',
     description:
-      '查看界面结构。before：windows（视口+全部窗口）/ component id=（某页面的完整现状**与源码**）/' +
-      'tool id=（工具源码）/ surface=（插槽现状、当前源码与内置实现）/ agent id=（职责全文、账本、最近消息）/' +
-      'logs（**运行时报错在这里**）/ agents / tree / tokens / surfaces / tools / all。',
+      'Inspect the interface. before: windows (viewport + every window) / component id= (one page full state **and source**) / tool id= (tool source) / surface = (slot state, current source and built-in implementation) / agent id= (role text, ledger, recent messages) / logs (**runtime errors are recorded here**) / agents / tree / tokens / surfaces / tools / all.',
     example: { kind: 'inspect', before: 'component', id: 'n_xxx' },
     cap: 'desktop',
     handler: (op) => {
@@ -364,7 +362,7 @@ export function registerCoreInterfaces(): void {
             .filter(isAgentNode)
             .map((n) => n.name + '(' + n.id + ')')
             .join('、');
-          return fail('inspect before="agent" 需要 id，且该节点要具备 agent 能力。当前 Agent：' + (list || '（没有）'));
+          return fail('inspect before="agent" needs an id whose node has agent capability. Current agents: ' + (list || '(none)'));
         }
         chunks.push('## Agent ' + a.name + '\n' + agentDetailText(aid));
       }
@@ -391,7 +389,7 @@ export function registerCoreInterfaces(): void {
           const list = toolCatalog()
             .map((t) => t.name + '(' + t.id + ')')
             .join('、');
-          return fail('inspect before="tool" 需要 id，且该 id 必须是已注册的工具。当前工具：' + (list || '（没有工具）'));
+          return fail('inspect before="tool" needs the id of a registered tool. Current tools: ' + (list || '(no tools)'));
         }
         chunks.push('## 工具 ' + tool.name + '\n' + toolDetailText(tid));
       }
@@ -403,7 +401,7 @@ export function registerCoreInterfaces(): void {
             .filter((n) => n.kind === 'component' && !n.root)
             .map((n) => n.name + '(' + n.id + ')')
             .join('、');
-          return fail('inspect before="component" 需要 id。当前窗口：' + (list || '（没有窗口）'));
+          return fail('inspect before="component" needs an id. Current windows: ' + (list || '(no windows)'));
         }
         chunks.push(viewport);
         chunks.push('## 页面 ' + target.name + '\n' + nodeText(target));
@@ -438,9 +436,7 @@ export function registerCoreInterfaces(): void {
     kind: 'patch_source',
     label: '局部修改源码',
     description:
-      '在**已有源码**里做定点替换（修 bug / 加功能）。目标二选一：`id` 改组件、`surface` 改插槽。' +
-      'edits = [{ find, replace, all? }]：find **原样**来自当前源码且**唯一命中**（不唯一就把锚点写长，或传 all:true）。' +
-      '**先在内存里全部替换完再编译，编译通过才写入** —— 失败整体放弃、源码一个字不变。',
+      'Make a targeted replacement inside **existing source** (fix a bug / add a feature). Choose one target: `id` edits a component, `surface` edits a slot. edits = [{ find, replace, all? }]: find is copied **verbatim** from the current source and must match **exactly once** (otherwise lengthen the anchor, or pass all:true). **All replacements are done in memory and compiled before anything is written** — on failure the whole edit is dropped and the source is unchanged.',
     example: {
       kind: 'patch_source',
       id: 'n_xxx',
@@ -451,21 +447,21 @@ export function registerCoreInterfaces(): void {
     handler: (op) => {
       const id = strOr(op.id, '');
       const surface = strOr(op.surface, '');
-      if (!id && !surface) return fail('patch_source 需要 id（改组件）或 surface（改插槽）其中之一。');
-      if (id && surface) return fail('id 与 surface 只能给一个：不确定改哪个就先 inspect。');
+      if (!id && !surface) return fail('patch_source needs either id (edit a component) or surface (edit a slot).');
+      if (id && surface) return fail('Give only one of id and surface; inspect first if you are unsure which to edit.');
 
       const rawEdits = op.edits;
       if (!Array.isArray(rawEdits) || rawEdits.length === 0) {
-        return fail('edits 必须是非空数组，每项形如 { find, replace, all? }。');
+        return fail('edits must be a non-empty array of { find, replace, all? }.');
       }
       const edits: { find: string; replace: string; all: boolean }[] = [];
       for (const [i, item] of rawEdits.entries()) {
         const e = (item ?? {}) as Record<string, unknown>;
         if (typeof e.find !== 'string' || e.find === '') {
-          return fail('edits[' + i + '].find 必须是非空字符串。');
+          return fail('edits[' + i + '].find must be a non-empty string.');
         }
         if (typeof e.replace !== 'string') {
-          return fail('edits[' + i + '].replace 必须是字符串（删掉就传空串）。');
+          return fail('edits[' + i + '].replace must be a string (pass an empty string to delete).');
         }
         edits.push({ find: e.find, replace: e.replace, all: e.all === true });
       }
@@ -479,7 +475,7 @@ export function registerCoreInterfaces(): void {
         const def = getSurfaceDef(surface);
         if (!def) {
           const ids = listSurfaces().map((s) => s.id).join(', ');
-          return fail('插槽 ' + surface + ' 不存在。可用插槽：' + (ids || '（无）'));
+          return fail('Slot ' + surface + ' does not exist. Available slots: ' + (ids || '(none)'));
         }
         const cur = getSurfaceState(surface)?.source;
         if (!cur) {
@@ -500,9 +496,9 @@ export function registerCoreInterfaces(): void {
             .filter((n) => n.kind === 'component' && !n.root)
             .map((n) => n.name + '(' + n.id + ')')
             .join('、');
-          return fail('组件 ' + id + ' 不存在。当前窗口：' + (list || '（没有窗口）'));
+          return fail('Component ' + id + ' does not exist. Current windows: ' + (list || '(no windows)'));
         }
-        if (!node.source.trim()) return fail('组件「' + node.name + '」目前没有源码，没有可替换的内容。');
+        if (!node.source.trim()) return fail('Component "' + node.name + '" has no source, so there is nothing to replace.');
         current = node.source;
         label = '组件「' + node.name + '」';
         key = id;
@@ -533,7 +529,7 @@ export function registerCoreInterfaces(): void {
         notes.push('第 ' + (i + 1) + ' 处 ×' + hits);
       }
       if (next === current) {
-        return fail('替换之后源码没有任何变化：find 与 replace 是不是写成一样了？');
+        return fail('The source is unchanged after the replacement — did you write find and replace identically?');
       }
 
       // ---- 先编译，通过才写入（原子） ----
@@ -564,7 +560,7 @@ export function registerCoreInterfaces(): void {
   registerInterface({
     kind: 'list_surfaces',
     label: '查看界面插槽',
-    description: '列出界面上所有可被替换的插槽、它们当前是否已被覆写，以及各自的可用 props。',
+    description: 'List every replaceable slot on the interface, whether it is currently overridden, and the props each one accepts.',
     example: { kind: 'list_surfaces' },
     cap: 'global',
     handler: () => ok('共 ' + listSurfaces().length + ' 个插槽', { observation: surfacesText() }),
@@ -574,8 +570,7 @@ export function registerCoreInterfaces(): void {
     kind: 'replace_surface',
     label: '替换界面元素',
     description:
-      '用一段 TSX 覆写界面上指定的插槽，替换该元素的外观与行为。source 为 null 或空字符串时还原成内置实现。' +
-      '**关键插槽（承载窗口拖拽等基础能力）会被拒绝，除非显式传 allowCritical=true。**',
+      'Overwrite a named interface slot with a piece of TSX, replacing that element look and behaviour. source null or empty restores the built-in implementation. **A critical slot (one carrying basic window abilities such as dragging) is rejected unless allowCritical=true is passed explicitly.**',
     example: {
       kind: 'replace_surface',
       surface: 'window.titlebar',
@@ -588,7 +583,7 @@ export function registerCoreInterfaces(): void {
       const def = listSurfaces().find((s) => s.id === surface);
       if (!def) {
         const ids = listSurfaces().map((s) => s.id).join(', ');
-        return fail('插槽 ' + surface + ' 不存在。可用插槽：' + (ids || '（无）'));
+        return fail('Slot ' + surface + ' does not exist. Available slots: ' + (ids || '(none)'));
       }
       const raw = op.source;
       if (raw === null || raw === undefined || (typeof raw === 'string' && !raw.trim())) {
@@ -596,7 +591,7 @@ export function registerCoreInterfaces(): void {
         desktop().log('op', 'surface reset ' + surface);
         return ok('已还原插槽「' + def.label + '」为内置实现');
       }
-      if (typeof raw !== 'string') return fail('source 必须是字符串或 null。');
+      if (typeof raw !== 'string') return fail('source must be a string or null.');
 
       // 关键插槽承载窗口基础能力（拖拽 / 最小化 / 删除）。
       // 替换它会把所有窗口的操作拆掉 —— 需要显式确认才放行。
@@ -612,7 +607,7 @@ export function registerCoreInterfaces(): void {
       const compiled = compileComponent('surface_' + surface, raw);
       if (!compiled.ok) {
         desktop().log('error', 'surface ' + surface + ' \u2715 ' + compiled.error);
-        return fail('插槽「' + def.label + '」的替换源码编译失败，已放弃：' + compiled.error);
+        return fail('The replacement source for slot "' + def.label + '" failed to compile, so it was dropped: ' + compiled.error);
       }
       // 记下长度变化：用户能从日志看出这次是"整段重写"还是"定点修改"。
       const prevLen = getSurfaceState(surface)?.source?.length ?? 0;
@@ -633,9 +628,8 @@ export function registerCoreInterfaces(): void {
     kind: 'set_agent_config',
     label: '配置 Agent',
     description:
-      '修改某个 Agent 的名字、职责、作用域、工具子集，或它的进度显不显示（progress: "trace" / "none"）。' +
-      '用 id 指定（Agent 就是带 agent 能力的组件）。这不会清空它的对话历史。',
-    example: { kind: 'set_agent_config', id: 'n_xxx', systemPrompt: '你专注于数据分析' },
+      'Change an agent name, role, scope, tool subset, or whether its progress is shown (progress: "trace" / "none"). Identified by id (an agent is a component with agent capability). This does not clear its conversation history.',
+    example: { kind: 'set_agent_config', id: 'n_xxx', systemPrompt: 'You focus on data analysis' },
     cap: 'agents',
     handler: (op) => {
       const id = strOr(op.id, '');
@@ -643,7 +637,7 @@ export function registerCoreInterfaces(): void {
       const agent = id ? all.find((n) => isAgentNode(n) && n.id === id) : undefined;
       if (!agent) {
         const list = all.filter(isAgentNode).map((n) => n.name + '(' + n.id + ')').join('、');
-        return fail('找不到 Agent ' + (id || '') + '。当前 Agent：' + (list || '（无）'));
+        return fail('No such agent ' + (id || '') + '. Current agents: ' + (list || '(none)'));
       }
       const touched: string[] = [];
       const nodePatch: Record<string, unknown> = {};
@@ -680,12 +674,12 @@ export function registerCoreInterfaces(): void {
           ? op.scope.filter((x): x is string => typeof x === 'string')
           : curFacet?.scope;
         const conflict = capScopeConflict(next, nextScope);
-        if (conflict) return fail('能力开关与作用域冲突：' + conflict);
+        if (conflict) return fail('Capability switches conflict with the scope: ' + conflict);
         facetPatch.caps = next;
         touched.push('能力开关=' + capSummary(next));
       }
       if (touched.length === 0) {
-        return fail('set_agent_config 需要 name / systemPrompt / scope / tools / progress / mode / caps 之一。');
+        return fail('set_agent_config needs one of name / systemPrompt / scope / tools / progress / mode / caps.');
       }
       const store = useDesktopStore.getState();
       if (Object.keys(nodePatch).length) store.updateNode(agent.id, nodePatch as Partial<YggNode>);
@@ -699,8 +693,7 @@ export function registerCoreInterfaces(): void {
     kind: 'clear_agent_context',
     label: '清空 Agent 上下文',
     description:
-      '清空某个 Agent 的对话历史**与共享账本**（账本不清的话它还会记得做过的组件）。用 id 指定。' +
-      '**基底的对话按输入框分开**：id 给 root 时只清**当前这个输入框**的历史，别的输入框不受影响。',
+      'Clear an agent conversation history **and the shared ledger** (without clearing the ledger it still remembers the components it made). Identified by id. **The base agent conversation is per input box**: with id=root only **the current input box** history is cleared, other input boxes are untouched.',
     example: { kind: 'clear_agent_context', id: 'n_xxx' },
     cap: 'agents',
     handler: (op, ctx) => {
@@ -708,7 +701,7 @@ export function registerCoreInterfaces(): void {
       const all = Object.values(desktop().nodes);
       const found = id ? all.find((n) => n.id === id) : undefined;
       if (!found || found.kind !== 'component' || !found.agent) {
-        return fail('找不到 Agent ' + (id || '') + '。');
+        return fail('No such agent ' + (id || '') + '.');
       }
       const facet = found.agent;
       const l = facet.ledger.length;

@@ -66,7 +66,7 @@ export async function chatStream(
   // 用高精度时钟：一次很短的流用 Date.now() 量出来会是 0ms，tok/s 就没法算了。
   const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
   if (!settings.apiKey.trim()) {
-    throw new LlmError('尚未配置 API Key，请在 Yggdrasil 输入框的「设置」页填入。');
+    throw new LlmError('No API key configured — fill one in on the Settings page of the Yggdrasil input box.');
   }
   const res = await fetch(endpoint(settings.baseUrl), {
     method: 'POST',
@@ -96,7 +96,7 @@ export async function chatStream(
   }
 
   if (!res.body) {
-    throw new LlmError('LLM 响应没有可读流，请确认端点支持 stream。');
+    throw new LlmError('The LLM response has no readable stream; make sure the endpoint supports stream.');
   }
 
   const reader = res.body.getReader();
@@ -145,7 +145,7 @@ export async function chatStream(
     }
   }
 
-  if (!full.trim()) throw new LlmError('LLM 返回了空内容。');
+  if (!full.trim()) throw new LlmError('The LLM returned empty content.');
   const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
   return { text: full, usage, ms: Math.max(1, Math.round(endedAt - startedAt)) };
 }

@@ -30,9 +30,7 @@ export function registerBrowserInterfaces(): void {
     kind: 'browser_info',
     label: '读取浏览器窗口',
     description:
-      '读取**真实浏览器窗口**的环境信息：可视区（innerW/H）、浏览器窗口（outerW/H）、屏幕分辨率、' +
-      '像素比、是否全屏、标签页是否可见，以及当前地址与标题。' +
-      '注意这是浏览器窗口，不是应用内部桌面 —— 内部桌面尺寸见系统提示词的「桌面视口」一节。',
+      'Read the **real browser window** environment: viewport (innerW/H), browser window (outerW/H), screen resolution, pixel ratio, fullscreen, tab visibility, plus the current URL and title. Note this is the browser window, not the in-app desktop — see the "Desktop viewport" section for the latter.',
     example: { kind: 'browser_info' },
     cap: 'browser',
     handler: () => {
@@ -48,11 +46,7 @@ export function registerBrowserInterfaces(): void {
     kind: 'browser_resize',
     label: '调整浏览器窗口',
     description:
-      '调整真实浏览器窗口的大小 / 位置。target 省略或传 self 表示当前页面，' +
-      '也可以传 browser_pages 里的页面 id。' +
-      '**浏览器安全限制：网页不能改变用户主窗口的尺寸**，对当前页面调用会被忽略 —— ' +
-      '这时返回里会明确说明。能改的是我们自己打开过的窗口。' +
-      'fullscreen 可申请/退出全屏（需要用户手势，失败会说明原因）。',
+      'Resize / reposition a real browser window. Omitting target or passing self means the current page; you may also pass a page id from browser_pages. **Browser security limit: a page cannot resize the user main window**, so calling it on the current page is ignored — the response says so explicitly. Windows this app opened itself can be changed. fullscreen requests or leaves fullscreen (needs a user gesture; failures explain why).',
     example: { kind: 'browser_resize', target: 'self', fullscreen: true },
     mutates: true,
     cap: 'browser',
@@ -83,13 +77,13 @@ export function registerBrowserInterfaces(): void {
         opt.width === undefined && opt.height === undefined &&
         opt.left === undefined && opt.top === undefined
       ) {
-        return fail('browser_resize 需要 width / height / left / top 之一，或 fullscreen。');
+        return fail('browser_resize needs one of width / height / left / top, or fullscreen.');
       }
 
       const r = resizePage(target, opt);
       const where = r.handledBy || '当前页面';
       if (r.reason && r.reason.startsWith('write blocked')) {
-        return fail('调整「' + where + '」失败：' + r.reason + '（跨域窗口不允许改尺寸）');
+        return fail('Failed to resize "' + where + '": ' + r.reason + ' (cross-origin windows cannot be resized)');
       }
       const sizeText = r.size ? r.size.w + 'x' + r.size.h : '（读不到）';
       return ok('已请求调整「' + where + '」，现在 ' + sizeText, {
@@ -105,16 +99,13 @@ export function registerBrowserInterfaces(): void {
     kind: 'browser_open',
     label: '新建浏览器页面',
     description:
-      '用真实浏览器打开一个新页面（新标签页；给了 width/height 就是新窗口）。会记下句柄，' +
-      '之后可以用 browser_pages 查看、browser_close 关闭、browser_resize 调整。' +
-      '**浏览器的弹窗拦截**：网页只能在用户手势里开新窗口，模型异步执行时经常被拦。' +
-      '被拦时不会失败 —— 会把地址放进输入框里的「打开」按钮，等用户点一下即可。',
+      'Open a new page in the real browser (a new tab; with width/height it becomes a new window). The handle is recorded, so you can later list it with browser_pages, close it with browser_close and resize it with browser_resize. **Popup blocking**: a page may only open windows inside a user gesture, and an asynchronously running model is often blocked. Being blocked is not a failure — the URL is attached to the "open" button of the input box for the user to click.',
     example: { kind: 'browser_open', url: 'https://example.com', width: 1100, height: 800 },
     mutates: true,
     cap: 'browser',
     handler: (op) => {
       const url = strOr(op.url, '');
-      if (!url) return fail('browser_open 需要 url。');
+      if (!url) return fail('browser_open needs a url.');
       const r = openPage(url, {
         name: typeof op.name === 'string' ? op.name : undefined,
         width: typeof op.width === 'number' ? op.width : undefined,
@@ -145,7 +136,7 @@ export function registerBrowserInterfaces(): void {
         });
       }
 
-      return fail('打开 ' + url + ' 失败：' + r.reason);
+      return fail('Failed to open ' + url + ': ' + r.reason);
     },
   });
 
@@ -153,8 +144,7 @@ export function registerBrowserInterfaces(): void {
     kind: 'browser_pages',
     label: '获取打开的页面',
     description:
-      '列出由本应用打开的浏览器页面（id / 名字 / 地址 / 尺寸），以及当前页面自身的地址与可视区。' +
-      '注意：浏览器不允许网页枚举用户自己打开的标签页，所以这里只能看到**本应用开出去的**那些。',
+      'List the browser pages this app opened (id / name / url / size), plus the current page own url and viewport. Note: the browser does not let a page enumerate the tabs the user opened, so only pages **opened by this app** appear here.',
     example: { kind: 'browser_pages' },
     cap: 'browser',
     handler: () => {
@@ -176,17 +166,16 @@ export function registerBrowserInterfaces(): void {
     kind: 'browser_close',
     label: '关闭浏览器页面',
     description:
-      '关闭由本应用打开的浏览器页面。target 传页面 id 或名字，传 all（或 *）关掉全部。' +
-      '只能关自己打开的窗口 —— 用户自己开的标签页关不掉。',
+      'Close browser pages this app opened. Pass a page id or name as target, or all (or *) to close every one. Only windows you opened can be closed — tabs the user opened cannot.',
     example: { kind: 'browser_close', target: 'all' },
     mutates: true,
     cap: 'browser',
     handler: (op) => {
       const target = strOr(op.target, '');
-      if (!target) return fail('browser_close 需要 target（页面 id、名字，或 all）。');
+      if (!target) return fail('browser_close needs a target (page id, name, or all).');
       const r = closePage(target);
       if (r.missing.length > 0) {
-        return fail('找不到页面 ' + r.missing.join('、') + '。当前打开着：\n' + pagesText());
+        return fail('No such page ' + r.missing.join(', ') + '. Currently open:\n' + pagesText());
       }
       desktop().log('op', 'browser - ' + target);
       return ok('已关闭 ' + r.closed + ' 个页面', {
@@ -199,17 +188,13 @@ export function registerBrowserInterfaces(): void {
     kind: 'capture_screen',
     label: '抓取页面截图',
     description:
-      '**请求一张当前页面的真实截图**，它会被放进你的上下文（下一轮你就能看到它）。' +
-      '用途：核对自己做出来的界面到底长什么样、有没有重叠/溢出/颜色不对。' +
-      '⚠ 浏览器规定屏幕捕获必须由**用户手势**触发，所以这个调用做的是"登记请求"：' +
-      '输入框上会出现一个「截图给 Agent」按钮，**用户点一下**图才会进来。' +
-      '调用后本轮就结束，别反复调用等结果 —— 图到手时你会在下一轮看到它。',
+      '**Ask for a real screenshot of the current page**; it is put into your context (you will see it next round). Use it to check what you actually built: overlap, overflow, wrong colours. ⚠ The browser requires screen capture to be triggered by a **user gesture**, so this call only registers a request: a "screenshot for the agent" button appears on the input box and **the user clicks it** before the image arrives. End your turn after calling it — do not call it repeatedly waiting for a result.',
     example: { kind: 'capture_screen' },
     cap: 'browser',
     handler: (_op, ctx) => {
       const store = useDesktopStore.getState();
       if (!canCaptureScreen()) {
-        return fail('这个浏览器不支持屏幕捕获（需要 getDisplayMedia），没法截图。');
+        return fail('This browser does not support screen capture (getDisplayMedia is missing), so no screenshot can be taken.');
       }
       store.requestShot(ctx.sessionId);
       store.log('op', '请求截图', ctx.sessionId);
