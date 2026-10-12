@@ -1,0 +1,107 @@
+{
+  "id": "weather",
+  "name": "天气",
+  "version": "1.0",
+  "author": "Yggdrasil",
+  "minAppVersion": "0.1",
+  "description": "查任意城市的实时天气与未来几天预报（Open-Meteo，不需要密钥）。",
+  "hosts": [
+    "api.open-meteo.com",
+    "geocoding-api.open-meteo.com"
+  ],
+  "fields": [
+    {
+      "key": "temperature_unit",
+      "label": "温度单位",
+      "hint": "celsius 或 fahrenheit。这是你的偏好，不是每次调用都能改的东西 —— Agent 应当照着返回里的单位渲染。",
+      "placeholder": "celsius",
+      "default": "celsius"
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "find_city",
+      "label": "查城市坐标",
+      "description": "Look up a city by name and get its coordinates, country, region, timezone and population. **Call this first**: forecast needs latitude/longitude, and you must never invent coordinates. Returns results[]; if several cities share the name, pick by population or by the region the user meant, and tell them which one you used.",
+      "method": "GET",
+      "url": "https://geocoding-api.open-meteo.com/v1/search?name={name}&count={count}&language={language}&format=json",
+      "params": [
+        {
+          "name": "name",
+          "description": "city name (local script works best, e.g. 北京 or Tokyo)",
+          "required": true
+        },
+        {
+          "name": "count",
+          "description": "how many matches to return (1-10)",
+          "default": "5"
+        },
+        {
+          "name": "language",
+          "description": "language for the returned place names",
+          "default": "zh"
+        }
+      ],
+      "pick": [
+        "results[].name",
+        "results[].latitude",
+        "results[].longitude",
+        "results[].country",
+        "results[].admin1",
+        "results[].timezone",
+        "results[].population"
+      ],
+      "maxChars": 8000,
+      "emptyHint": "No city matched. Try the name in its own script (北京 rather than Beijing, or the reverse), try a nearby larger city, or drop the district part of the name. Two attempts is the budget — after that, tell the user you could not find the place.",
+      "example": {
+        "kind": "weather.find_city",
+        "name": "北京",
+        "count": "3"
+      }
+    },
+    {
+      "name": "forecast",
+      "label": "取天气",
+      "description": "Current conditions plus a daily forecast for a coordinate. Pass the latitude/longitude and timezone that find_city returned. Returns current (temperature_2m, apparent_temperature, relative_humidity_2m, wind_speed_10m, weather_code), current_units, daily (weather_code, temperature_2m_max, temperature_2m_min) and daily_units. **Read the units from the response** instead of assuming °C. weather_code is a WMO code — the guide has the table for turning it into words.",
+      "method": "GET",
+      "url": "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone={timezone}&forecast_days={days}&temperature_unit={config:temperature_unit}",
+      "params": [
+        {
+          "name": "latitude",
+          "description": "latitude from find_city",
+          "required": true
+        },
+        {
+          "name": "longitude",
+          "description": "longitude from find_city",
+          "required": true
+        },
+        {
+          "name": "timezone",
+          "description": "IANA timezone from find_city, or \"auto\"",
+          "default": "auto"
+        },
+        {
+          "name": "days",
+          "description": "how many forecast days (1-16)",
+          "default": "3"
+        }
+      ],
+      "pick": [
+        "timezone",
+        "current_units",
+        "current",
+        "daily_units",
+        "daily"
+      ],
+      "maxChars": 12000,
+      "example": {
+        "kind": "weather.forecast",
+        "latitude": "39.9075",
+        "longitude": "116.39723",
+        "timezone": "Asia/Shanghai",
+        "days": "3"
+      }
+    }
+  ]
+}

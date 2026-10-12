@@ -1,0 +1,111 @@
+{
+  "format": "yggdrasil.plugin",
+  "manifest": {
+    "id": "weather",
+    "name": "天气",
+    "version": "1.0",
+    "author": "Yggdrasil",
+    "minAppVersion": "0.1",
+    "description": "查任意城市的实时天气与未来几天预报（Open-Meteo，不需要密钥）。",
+    "hosts": [
+      "api.open-meteo.com",
+      "geocoding-api.open-meteo.com"
+    ],
+    "fields": [
+      {
+        "key": "temperature_unit",
+        "label": "温度单位",
+        "hint": "celsius 或 fahrenheit。这是你的偏好，不是每次调用都能改的东西 —— Agent 应当照着返回里的单位渲染。",
+        "placeholder": "celsius",
+        "default": "celsius"
+      }
+    ],
+    "endpoints": [
+      {
+        "name": "find_city",
+        "label": "查城市坐标",
+        "description": "Look up a city by name and get its coordinates, country, region, timezone and population. **Call this first**: forecast needs latitude/longitude, and you must never invent coordinates. Returns results[]; if several cities share the name, pick by population or by the region the user meant, and tell them which one you used.",
+        "method": "GET",
+        "url": "https://geocoding-api.open-meteo.com/v1/search?name={name}&count={count}&language={language}&format=json",
+        "params": [
+          {
+            "name": "name",
+            "description": "city name (local script works best, e.g. 北京 or Tokyo)",
+            "required": true
+          },
+          {
+            "name": "count",
+            "description": "how many matches to return (1-10)",
+            "default": "5"
+          },
+          {
+            "name": "language",
+            "description": "language for the returned place names",
+            "default": "zh"
+          }
+        ],
+        "pick": [
+          "results[].name",
+          "results[].latitude",
+          "results[].longitude",
+          "results[].country",
+          "results[].admin1",
+          "results[].timezone",
+          "results[].population"
+        ],
+        "maxChars": 8000,
+        "emptyHint": "No city matched. Try the name in its own script (北京 rather than Beijing, or the reverse), try a nearby larger city, or drop the district part of the name. Two attempts is the budget — after that, tell the user you could not find the place.",
+        "example": {
+          "kind": "weather.find_city",
+          "name": "北京",
+          "count": "3"
+        }
+      },
+      {
+        "name": "forecast",
+        "label": "取天气",
+        "description": "Current conditions plus a daily forecast for a coordinate. Pass the latitude/longitude and timezone that find_city returned. Returns current (temperature_2m, apparent_temperature, relative_humidity_2m, wind_speed_10m, weather_code), current_units, daily (weather_code, temperature_2m_max, temperature_2m_min) and daily_units. **Read the units from the response** instead of assuming °C. weather_code is a WMO code — the guide has the table for turning it into words.",
+        "method": "GET",
+        "url": "https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone={timezone}&forecast_days={days}&temperature_unit={config:temperature_unit}",
+        "params": [
+          {
+            "name": "latitude",
+            "description": "latitude from find_city",
+            "required": true
+          },
+          {
+            "name": "longitude",
+            "description": "longitude from find_city",
+            "required": true
+          },
+          {
+            "name": "timezone",
+            "description": "IANA timezone from find_city, or \"auto\"",
+            "default": "auto"
+          },
+          {
+            "name": "days",
+            "description": "how many forecast days (1-16)",
+            "default": "3"
+          }
+        ],
+        "pick": [
+          "timezone",
+          "current_units",
+          "current",
+          "daily_units",
+          "daily"
+        ],
+        "maxChars": 12000,
+        "example": {
+          "kind": "weather.forecast",
+          "latitude": "39.9075",
+          "longitude": "116.39723",
+          "timezone": "Asia/Shanghai",
+          "days": "3"
+        }
+      }
+    ]
+  },
+  "guide": "# weather\n\nLive weather and forecasts for any city, via Open-Meteo. No API key needed.\n\n## Workflow: \"what is the weather in <city>\"\n\n1. `weather.find_city` with `name`. **Never invent coordinates** — take them from the result.\n2. `weather.forecast` with that `latitude`, `longitude` and `timezone`.\n3. Build a component that shows: city name, current temperature (and feels-like), the condition as words, humidity, wind, and the next few days' high/low.\n\n## Rules\n\n- **Units come from the response**: `current_units` / `daily_units` say °C or °F and km/h or mph. Never hardcode \"°C\" — if the user changed the unit field, hardcoding it would be wrong.\n- **Several cities with the same name is normal** (there are three \"北京\" in China). Pick the one with the largest `population` unless the user's wording points elsewhere, and **say which one you used** (\"北京市，中国\").\n- The `timezone` from `find_city` matters: \"today's high\" is meaningless without it. Pass it through instead of guessing.\n- Do not present stale or remembered weather as current. If the call fails, say it failed.\n- Keep the window compact: current conditions first, then a small row per day. This is a glanceable window, not a report.\n\n## WMO weather_code → words\n\n`weather_code` is a number. Map it, and write the label in the user's language (the table below gives both):\n\n| code | English | 中文 |\n| --- | --- | --- |\n| 0 | Clear sky | 晴 |\n| 1 | Mainly clear | 大致晴朗 |\n| 2 | Partly cloudy | 局部多云 |\n| 3 | Overcast | 阴 |\n| 45, 48 | Fog | 雾 |\n| 51, 53, 55 | Drizzle | 毛毛雨 |\n| 56, 57 | Freezing drizzle | 冻雨（小雨） |\n| 61, 63, 65 | Rain | 雨 |\n| 66, 67 | Freezing rain | 冻雨 |\n| 71, 73, 75 | Snow | 雪 |\n| 77 | Snow grains | 米雪 |\n| 80, 81, 82 | Rain showers | 阵雨 |\n| 85, 86 | Snow showers | 阵雪 |\n| 95 | Thunderstorm | 雷阵雨 |\n| 96, 99 | Thunderstorm with hail | 雷阵雨伴冰雹 |\n\nAnything not in the table: render the raw number, do not guess a word for it.\n\n## Failure modes to report instead of working around\n\n- `find_city` returns nothing → see the hint in its result; try one alternative spelling, then tell the user.\n- `forecast` returns an error or nothing → report it; the coordinate pair may be out of range (latitude -90..90, longitude -180..180).\n- If the user asks about a place, not a city (a lake, a mountain), `find_city` may still match it by name — check the returned `admin1`/`country` before trusting it.\n"
+}
