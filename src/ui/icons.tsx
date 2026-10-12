@@ -239,3 +239,25 @@ export function StopIcon(props: SVGProps<SVGSVGElement>) {
     </Svg>
   );
 }
+
+/** 导出：从托盘里向上出去的箭头。 */
+export function ExportIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M8 2.5v7.5" />
+      <path d="M4.8 5.8 8 2.5l3.2 3.3" />
+      <path d="M2.8 10.5v2.2c0 .4.3.8.8.8h8.8c.5 0 .8-.4.8-.8v-2.2" />
+    </Svg>
+  );
+}
+
+/** 导入：从上方落进托盘的箭头。 */
+export function ImportIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M8 2.5V10" />
+      <path d="M4.8 7 8 10.3 11.2 7" />
+      <path d="M2.8 10.5v2.2c0 .4.3.8.8.8h8.8c.5 0 .8-.4.8-.8v-2.2" />
+    </Svg>
+  );
+}

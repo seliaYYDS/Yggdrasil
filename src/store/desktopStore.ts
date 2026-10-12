@@ -25,6 +25,7 @@ import {
   sanitizeTokens,
 } from '../theme/engine';
 import { exportSurfaceStates, importSurfaceStates } from '../kernel/registry/surfaceRegistry';
+import { buildSeed, seedStorageEntries, type SeedFile, type SeedPart } from './seed';
 
 /**
  * 一个会话的用量统计。**不进持久化** —— 刷新后重新开始计，避免把历史数字当成这次的开销。
@@ -724,6 +725,17 @@ interface DesktopState {
   reportConsoleError: (text: string) => void;
   /** 关掉那个确认框（用户点了取消，或已经交给 Agent 了）。 */
   dismissConsolePrompt: () => void;
+  /** 导出/导入场景的对话框：'export' | 'import' | null。 */
+  seedDialog: 'export' | 'import' | null;
+  setSeedDialog: (mode: 'export' | 'import' | null) => void;
+  /** 按勾选的区块组装一个 .seed（纯函数，不落盘 —— 下载交给 UI）。 */
+  exportSeed: (parts: SeedPart[], includeApiKey: boolean) => SeedFile;
+  /**
+   * 载入一个场景：把文件里的区块**写进落盘存储，再走一遍 hydrate()**。
+   * 这样迁移 / 去重 / 夹进视口这些逻辑全部复用，不必再写第二套装载逻辑。
+   * 只覆盖文件里带的区块，其余保持原样。
+   */
+  importSeed: (seed: SeedFile) => Promise<void>;
   /** Agent 请求截图（真正的抓取要等用户点按钮，见 pendingShot）。 */
   requestShot: (sessionId: string) => void;
   /** 清掉待截图请求（用户点了、或放弃了）。 */
@@ -923,7 +935,7 @@ function readRun(s: DesktopState, id: string): RunSlice {
   return ses ? { status: ses.status, trace: ses.trace, queue: ses.queue } : EMPTY_RUN;
 }
 
-function snapshot(): PersistedRoot {
+export function snapshot(): PersistedRoot {
   const s = useDesktopStore.getState();
   return {
     nodes: s.nodes,
@@ -1015,6 +1027,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   dying: {},
   consolePrompt: null,
   pendingShot: null,
+  seedDialog: null,
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -1442,6 +1455,41 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   dismissConsolePrompt: () => set({ consolePrompt: null }),
 
+  setSeedDialog: (mode) => set({ seedDialog: mode }),
+
+  exportSeed: (parts, includeApiKey) => buildSeed(snapshot(), parts, includeApiKey),
+
+  importSeed: async (seed) => {
+    const adapter = await initStorage();
+    adapterRef = adapter;
+    /*
+     * 先掐掉待落盘的定时器：它会在 400ms 后按**当前状态**重写存储，
+     * 如果插在我们的写入与 hydrate 之间，就会把刚导进去的区块盖回旧值。
+     */
+    if (persistTimer !== null) {
+      window.clearTimeout(persistTimer);
+      persistTimer = null;
+    }
+    for (const [key, value] of seedStorageEntries(seed)) {
+      /*
+       * 设置**按字段合并**：文件里有的字段覆盖，没有的保持当前。
+       *
+       * 这一步不是可选的：导出时可以不含 API Key，如果直接把这个 settings 写进去，
+       * hydrate 会用 DEFAULT_SETTINGS 补缺字段 —— 用户的 key 就被清成空串了。
+       * "没导出 key" 应当意味着"不要动我的 key"，而不是"把 key 删掉"。
+       */
+      if (key === 'settings') {
+        await adapter.set(key, { ...get().settings, ...(value as LlmSettings) });
+        continue;
+      }
+      await adapter.set(key, value);
+    }
+    // 交给 hydrate：它负责迁移、去重、夹取，并把 loaded / 视口等一起复位。
+    await get().hydrate();
+    get().log('op', 'seed import · ' + seed.parts.join('+'));
+    schedulePersist();
+  },
+
   requestShot: (sessionId) => set({ pendingShot: { sessionId } }),
   clearPendingShot: () => set({ pendingShot: null }),
 
@@ -1778,6 +1826,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       dying: {},
       consolePrompt: null,
       pendingShot: null,
+      seedDialog: null,
       inspectorRect: panels.inspector,
       settingsRect: panels.settings,
       traceRect: panels.trace,

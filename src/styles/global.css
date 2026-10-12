@@ -454,6 +454,9 @@ button:focus:not(:focus-visible) { outline: none; }
 
 /* ---------------- 顶部按钮组（固定右上角） ---------------- */
 
+/* 左上角那一组：场景的导出 / 导入（右边那组是打开面板） */
+.ygg-topbar.ygg-topbar-left { left: 14px; right: auto; }
+
 .ygg-topbar {
   position: fixed;
   top: 14px;
@@ -1213,5 +1216,22 @@ button:focus:not(:focus-visible) { outline: none; }
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* 场景对话框：一行一个区块，勾选框 + 标题 + 说明 */
+.ygg-seed-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ygg-fg);
+  cursor: pointer;
+}
+.ygg-seed-row input { margin-top: 2px; accent-color: var(--ygg-accent); }
+.ygg-seed-row .desc { display: block; color: var(--ygg-fg-muted); font-size: 11px; }
+.ygg-seed-parts { margin: 0 0 11px; padding-left: 18px; color: var(--ygg-fg-muted); font-size: 11px; line-height: 1.6; }
+.ygg-seed-parts strong { color: var(--ygg-fg); }
+.ygg-seed-warn { margin: 0 0 11px; font-size: 11px; line-height: 1.6; color: var(--ygg-danger); }
 
 .ygg-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }

@@ -1,15 +1,43 @@
 import { useDesktopStore, MAX_SESSIONS } from '../store/desktopStore';
-import { NewInputIcon, NodesIcon, ResetIcon, SettingsIcon, TraceIcon } from './icons';
+import { ExportIcon, ImportIcon, NewInputIcon, NodesIcon, ResetIcon, SettingsIcon, TraceIcon } from './icons';
 
-/** 固定在页面右上角的按钮组。输入框本身只保留输入。 */
+/**
+ * 固定在页面上方两组按钮。
+ *
+ * 左上角 = 场景的进出口（导出 / 导入），右上角 = 打开各个面板与重置。
+ * 分开是有意的：一边是"整个场景的进出"，一边是"看某个面板"，不该混在一排里找。
+ */
 export function TopBar() {
+  const setSeedDialog = useDesktopStore((s) => s.setSeedDialog);
+
+  return (
+    <>
+      {/*
+        左上角：场景的导出 / 导入。
+        放在左边是有意的 —— 右边那组是"打开某个面板"（视图），左边这组是"整个场景的进出"，
+        两类操作分开，不必在一排图标里找。
+      */}
+      <div className="ygg-topbar ygg-topbar-left">
+        <button className="ygg-topbtn" title="导出场景（.seed）" onClick={() => setSeedDialog('export')}>
+          <ExportIcon />
+        </button>
+        <button className="ygg-topbtn" title="导入场景（.seed）" onClick={() => setSeedDialog('import')}>
+          <ImportIcon />
+        </button>
+      </div>
+      <TopRight />
+    </>
+  );
+}
+
+/** 右上角那组：输入框 / 轨迹 / 节点树 / 设置 / 重置。 */
+function TopRight() {
   const setSettingsOpen = useDesktopStore((s) => s.setSettingsOpen);
   const setTreeOpen = useDesktopStore((s) => s.setTreeOpen);
   const setTraceOpen = useDesktopStore((s) => s.setTraceOpen);
   const setResetOpen = useDesktopStore((s) => s.setResetOpen);
   const addSession = useDesktopStore((s) => s.addSession);
   const storageNote = useDesktopStore((s) => s.storageNote);
-  // 所有输入框的轨迹合起来算 —— 轨迹面板就是合并展示的。
   const traceCount = useDesktopStore((s) => s.sessions.reduce((n, ses) => n + ses.trace.length, 0));
   const sessionCount = useDesktopStore((s) => s.sessions.length);
   const runningCount = useDesktopStore((s) => s.sessions.filter((ses) => ses.status.running).length);
