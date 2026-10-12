@@ -36,8 +36,11 @@ export interface SessionMetrics {
   tokensOut: number;
   /** 累计命中缓存的输入 token。 */
   cachedIn: number;
-  /** 最近一次运行的输出速度（token/s）。0 = 还没跑过。 */
-  tps: number;
+  /**
+   * 累计的**生成耗时**（毫秒，只算模型出字的那段时间）。
+   * 整体 tok/s = tokensOut / (msTotal / 1000)，所以必须攒这个数，不能只留"最近一次"。
+   */
+  msTotal: number;
   /** 跑过几次（用来区分"0"和"还没有数据"）。 */
   runs: number;
   /** true = 数字全部来自服务端 usage；false = 含本地估算（界面会标 ~）。 */
@@ -45,7 +48,23 @@ export interface SessionMetrics {
 }
 
 export function emptyMetrics(): SessionMetrics {
-  return { tokensIn: 0, tokensOut: 0, cachedIn: 0, tps: 0, runs: 0, exact: true };
+  return { tokensIn: 0, tokensOut: 0, cachedIn: 0, msTotal: 0, runs: 0, exact: true };
+}
+
+/**
+ * 整体的输出速度：**累计输出 token / 累计生成耗时**。
+ *
+ * 不是"最近一次"的瞬时速度 —— 用户要的是这个会话整体的表现。
+ */
+export function avgTps(m: Pick<SessionMetrics, 'tokensOut' | 'msTotal'>): number {
+  if (m.msTotal <= 0) return 0;
+  return m.tokensOut / (m.msTotal / 1000);
+}
+
+/** 整体命中率 = 累计命中 / 累计输入。0..1；没有输入时返回 null（"还没有数据"，不是 0）。 */
+export function hitRate(m: Pick<SessionMetrics, 'tokensIn' | 'cachedIn'>): number | null {
+  if (m.tokensIn <= 0) return null;
+  return m.cachedIn / m.tokensIn;
 }
 
 export interface RunStatus {
@@ -622,7 +641,10 @@ interface DesktopState {
   /** 会话 id -> 是否该会话还有排队项。 */
   clearQueue: (id: string) => void;
   /** 累加一次运行的用量（token / 速度 / 缓存命中）。 */
-  addMetrics: (id: string, delta: Partial<SessionMetrics> & { tokensIn?: number; tokensOut?: number }) => void;
+  addMetrics: (
+    id: string,
+    delta: Partial<SessionMetrics> & { tokensIn?: number; tokensOut?: number; msTotal?: number },
+  ) => void;
   /** 追加一条消息到这个会话的记忆（基底 agent 的对话按会话分开）。 */
   appendSessionMessage: (id: string, message: Message) => void;
   /** 清空这个会话的记忆。 */
@@ -1420,8 +1442,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
             tokensIn: m.tokensIn + (delta.tokensIn ?? 0),
             tokensOut: m.tokensOut + (delta.tokensOut ?? 0),
             cachedIn: m.cachedIn + (delta.cachedIn ?? 0),
-            // 速度是"最近一次"的瞬时值，不累加；没给就保持原样。
-            tps: delta.tps !== undefined ? delta.tps : m.tps,
+            // 生成耗时累加：整体速度要从总量算，不能用"最近一次"。
+            msTotal: m.msTotal + (delta.msTotal ?? 0),
             runs: m.runs + 1,
             // 只要有一次是估算的，整体就标成非精确（界面上带 ~）。
             exact: m.exact && delta.exact !== false,

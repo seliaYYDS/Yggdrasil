@@ -524,6 +524,7 @@ button:focus:not(:focus-visible) { outline: none; }
 /* ---------------- 输入窗口：一行指令台 ---------------- */
 
 .ygg-compose {
+  position: relative; /* 右下角的用量指标以它为定位基准 */
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -779,15 +780,25 @@ button:focus:not(:focus-visible) { outline: none; }
  * 用量指标：贴在同一行的右端，等宽小字。
  * 刻意不换行（white-space: nowrap）—— 它必须和状态同处一行，换行就等于"单独占一行"了。
  */
+/*
+ * 用量指标：**固定在输入框右下角**。
+ *
+ * 用绝对定位而不是跟着状态行排版 —— 用户要求它"固定"在角落，
+ * 而且没数据时整块不渲染（所以不会留下空占位）。
+ * 它不参与布局，所以状态行要自己留出避让的右边距（见 .ygg-compose-state）。
+ */
 .ygg-metrics {
-  margin-left: auto;
-  flex: none;
+  position: absolute;
+  right: 10px;
+  bottom: 7px;
+  z-index: 1;
   white-space: nowrap;
   font-family: var(--ygg-font-mono);
   font-size: 10px;
   color: var(--ygg-fg-muted);
   letter-spacing: -.01em;
   cursor: default;
+  pointer-events: none;
 }
 
 .ygg-compose-hint { opacity: .85; }
@@ -798,6 +809,8 @@ button:focus:not(:focus-visible) { outline: none; }
   gap: 8px;
   flex: none;
   min-height: 15px;
+  /* 右边给右下角的指标让位：指标是绝对定位的，会盖在这一行的右端上。 */
+  padding-right: 132px;
   font-size: 11px;
   color: var(--ygg-fg-muted);
 }

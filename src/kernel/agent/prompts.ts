@@ -6,6 +6,14 @@ import { capsAllow, CAP_HINTS, CAP_LABELS } from './caps';
 
 export const MAX_HISTORY_MESSAGES = 14;
 /**
+ * 历史上限的**余量**。
+ *
+ * 发出去的历史如果卡死在 14 条，每多一条就丢掉最老的一条 —— 历史块的第一个 token 变了，
+ * 前缀缓存就整段作废（见 §5.68）。所以允许它涨到 14 + 4，再一次性削回 14：
+ * 这样"窗口起点"每 5 条才动一次，中间几轮的前缀是稳定的。
+ */
+export const HISTORY_TRIM_SLACK = 4;
+/**
  * 记忆里最多留多少条消息（存下来的，不是每次发出去的）。
  * 比 MAX_HISTORY_MESSAGES 宽松得多，目的是防止带图片的消息无限堆积。
  */
@@ -201,7 +209,6 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
   const caps = input.caps && !unrestricted ? input.caps.filter((c) => c !== 'global') : input.caps;
   const on = (cap: ActCap): boolean => capsAllow(caps, cap);
   const { lines, examples } = interfaceCatalog(caps);
-  const scoped = scopeNodes(input.nodes, input.scope);
   const identity = unrestricted
     ? `你是 Yggdrasil 的基底 Agent「${input.originName}」，掌管整个桌面。`
     : `你是独立 Agent「${input.originName}」，运行在一个组件里。\n` +
@@ -210,6 +217,10 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
 
   return [
     identity,
+    // 职责与成人模式是**稳定的**（同一个 Agent 每轮都一样），所以必须排在第一个"逐轮会变"的
+    // 小节之前 —— 否则它们永远落在缓存失效区里，每轮白白重算。
+    input.rolePrompt ? '## 你的专项职责\n' + input.rolePrompt : '',
+    ...(input.adultMode ? adultRules() : []),
     '',
     ...noVisibleOutputRules(),
     '',
@@ -235,7 +246,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     '- **你每次只处理标注为【本次请求】的那一条消息**：更早的 user 消息都是**已处理过的历史请求**，' +
       '除非用户这次明确要求重做，否则不要重新执行（这是"把上一个任务又做一遍"的根因）；还要改就用' +
       ' update_component 改现有的，只有明确要求"再做一遍"才新建；',
-    '- 下面「当前窗口 / 当前 Agent」是**实时快照、唯一事实来源**：对话历史里可能有旧状态的残留，一律以快照为准。',
+    '- **最后一条消息里的「当前窗口 / 当前 Agent」是实时快照、唯一事实来源**：' +
+      '对话历史里可能有旧状态的残留，一律以快照为准（它排在最后，就是当前状态）。',
     '',
     'ops 元素示例（只列最常用的几个，其余格式看上面的接口说明）：',
     examples,
@@ -248,7 +260,28 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     ...(on('agents') ? agentRules() : []),
     ...(on('browser') ? browserRules() : []),
     ...(on('net') ? netRules() : []),
-    '',
+  ]
+    .filter((l) => l !== '')
+    .join('\n');
+}
+
+/**
+ * 逐轮会变的那些小节：账本、视口、当前窗口 / 作用域、当前 Agent、样式变量、插槽、可用工具。
+ *
+ * **它必须排在对话历史之后，不能留在系统提示里。** 前缀缓存只认"第一个不同的 token 之前"，
+ * 而这些小节每轮都可能变（账本每做一个任务追加一行、窗口一动快照就变）——
+ * 只要它们还在系统消息里，历史、本次请求、观察回灌就**每轮全部重算**。
+ * 拆出来放到最后一条消息里，缓存前缀就能一路吃到上一轮为止。
+ *
+ * 组装顺序在 runDerivation 里：观察回灌在前、本快照在后 ——
+ * 这样观察回灌那段（只会在尾部追加）也能被上一轮复用。
+ */
+export function buildSnapshotPrompt(input: SystemPromptInput): string {
+  const unrestricted = !input.scope || input.scope === '*';
+  const caps = input.caps && !unrestricted ? input.caps.filter((c) => c !== 'global') : input.caps;
+  const on = (cap: ActCap): boolean => capsAllow(caps, cap);
+  const scoped = scopeNodes(input.nodes, input.scope);
+  return [
     ...ledgerRules(input.ledger, input.nodes),
     '',
     '## 桌面视口',
@@ -270,9 +303,6 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     '',
     on('tools') ? '## 可用工具' : '',
     on('tools') ? toolCatalogText(input.tools) : '',
-    '',
-    input.rolePrompt ? '## 你的专项职责\n' + input.rolePrompt : '',
-    ...(input.adultMode ? adultRules() : []),
   ]
     .filter((l) => l !== '')
     .join('\n');

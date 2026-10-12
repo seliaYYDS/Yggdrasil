@@ -17,9 +17,12 @@ import { parsePlan } from './parse';
 import {
   buildObservationPrompt,
   buildReplyPrompt,
+  buildSnapshotPrompt,
   buildSystemPrompt,
+  HISTORY_TRIM_SLACK,
   MAX_HISTORY_MESSAGES,
   MAX_STORED_MESSAGES,
+  type SystemPromptInput,
 } from './prompts';
 import { executeOps, formatOutcomes, rollback, type ExecuteResult } from '../bus/derivationBus';
 import { desktop, MAIN_SESSION, type RunStatus, useDesktopStore } from '../../store/desktopStore';
@@ -100,7 +103,21 @@ function pushMemory(originId: NodeId, sessionId: string, message: Message): void
 }
 
 function historyMessages(nodeId: NodeId, sessionId: string, input: string): ChatMessage[] {
-  const list = sessionMemory(nodeId, sessionId).slice(-MAX_HISTORY_MESSAGES);
+  /*
+   * 整块裁剪，不要一条一条滑：发出去的历史越长，每次"滑动"作废的前缀就越多。
+   * 允许涨到上限 + 余量，再一次性削回上限。
+   */
+  const all = sessionMemory(nodeId, sessionId);
+  /*
+   * ⚠ **必须先复制再动**：这份数组就是会话记忆本身，下面那个 `pop()` 会把真实记忆删掉。
+   * 之前写的是 `sessionMemory(...).slice(-MAX)`，slice 恰好复制了一份才没出事；
+   * 改成"没超上限就原样用"之后，`pop()` 直接作用在记忆上 ——
+   * 结果是每轮开头刚写进去的那条请求又被弹出去，会话记忆永远是空的。
+   */
+  const list =
+    all.length > MAX_HISTORY_MESSAGES + HISTORY_TRIM_SLACK
+      ? all.slice(-MAX_HISTORY_MESSAGES)
+      : all.slice();
   if (list.length > 0 && list[list.length - 1].content === input) list.pop();
   return list
     .filter((m: Message) => m.role !== 'system')
@@ -273,7 +290,8 @@ async function chatWithRetry(
  * 优先用服务端报的 usage；它没报就按字符估算，并把 `exact` 标成 false ——
  * 界面会在数字前面加个 ~，用户一眼能看出这不是准数。
  *
- * `tps` 只用**输出** token 除以耗时：输入是并发的、拿它算速度没有意义。
+ * 这里只攒**原始量**（token 数 + 生成耗时），速度与命中率都由界面上那两个纯函数算：
+ * 整体速度用输出 token 除以耗时（输入是并发回来的、拿它算速度没有意义）。
  */
 function recordUsage(
   sessionId: string,
@@ -288,7 +306,7 @@ function recordUsage(
       tokensIn: call.usage.promptTokens,
       tokensOut: call.usage.completionTokens,
       cachedIn: call.usage.cachedTokens,
-      tps: +(call.usage.completionTokens / (Math.max(1, call.ms) / 1000)).toFixed(1),
+      msTotal: Math.max(1, call.ms),
       exact: true,
     });
     return;
@@ -297,7 +315,7 @@ function recordUsage(
     tokensIn: estimateTokens('x'.repeat(promptChars)),
     tokensOut: outEst,
     cachedIn: 0,
-    tps: +(outEst / (Math.max(1, call.ms) / 1000)).toFixed(1),
+    msTotal: Math.max(1, call.ms),
     exact: false,
   });
 }
@@ -529,7 +547,13 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         };
         pushStep(modelStep);
 
-        const systemPrompt = buildSystemPrompt({
+        /*
+         * 系统提示与快照共用同一份入参 —— 两份提示词必须看到同一个世界，
+         * 分两处构造迟早会走偏。
+         *
+         * 顺序也有讲究：**稳定的进系统消息，逐轮会变的进最后那条消息**（见下面的 messages）。
+         */
+        const promptInput: SystemPromptInput = {
           nodes: deskNodes(),
           rootId: desktop().rootId,
           viewW: desktop().viewW,
@@ -544,7 +568,9 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           // 能力开关：没开的接口不会出现在接口目录里，提示词也少一大截。
           caps: isAgentic(origin) ? origin.agent.caps : undefined,
           adultMode: store.settings.adultMode === true,
-        });
+        };
+        const systemPrompt = buildSystemPrompt(promptInput);
+        const snapshotPrompt = buildSnapshotPrompt(promptInput);
 
         const messages: ChatMessage[] = [
           { role: 'system', content: systemPrompt },
@@ -553,9 +579,19 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
           { role: 'user', content: userContent(CURRENT_REQUEST_TAG + '\n' + input, images) },
         ];
-        if (observationLog.length > 0) {
-          messages.push({ role: 'user', content: buildObservationPrompt(observationLog) });
-        }
+        /*
+         * **最快的缓存前缀**：稳定系统提示 → 历史 → 本次请求 → 观察回灌 → 本轮的快照。
+         *
+         * 逐轮会变的只有最后那一条：观察回灌只会在尾部追加（所以上一轮那段仍能复用），
+         * 快照排在它后面（它每轮都变，放最后才不污染前面任何东西）。
+         * 以前快照在系统提示里，导致历史与请求每轮全部重算 —— 命中率就是这么丢的。
+         */
+        messages.push({
+          role: 'user',
+          content:
+            (observationLog.length > 0 ? buildObservationPrompt(observationLog) + '\n\n' : '') +
+            snapshotPrompt,
+        });
 
         // 正文与思考分开收集：思考单独展示，不参与 JSON 解析。
         let buffer = '';

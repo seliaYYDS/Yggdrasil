@@ -1,6 +1,12 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { useDesktopStore, type InputSession } from '../store/desktopStore';
+import {
+  avgTps,
+  hitRate,
+  useDesktopStore,
+  type InputSession,
+  type SessionMetrics,
+} from '../store/desktopStore';
 import { submitInput } from '../kernel/agent/scheduler';
 import { WindowFrame } from '../host/WindowFrame';
 import { imageFilesFromClipboard, MAX_IMAGES, prepareImage, type PreparedImage } from '../host/image';
@@ -40,20 +46,20 @@ export function compactCount(n: number): string {
   return (n / 1000000).toFixed(1) + 'M';
 }
 
-/** 状态行右侧那三个数：token/s · 累计 token · 缓存命中率。 */
-function metricsText(m?: {
-  tokensIn: number;
-  tokensOut: number;
-  cachedIn: number;
-  tps: number;
-  runs: number;
-  exact: boolean;
-}): string {
-  if (!m || m.runs === 0) return '— tok/s · — · 缓存 —';
-  const tilde = m.exact ? '' : '~';
+/**
+ * 右下角那三个数，**都是这个会话的整体值**：
+ * 整体命中率 · 整体 tok/s · token 总和。
+ *
+ * 没跑过就返回空串 —— 调用方据此**整块不渲染**（不留占位、不显示"—"）。
+ */
+function metricsText(m?: SessionMetrics): string {
+  if (!m || m.runs === 0) return '';
   const total = compactCount(m.tokensIn + m.tokensOut);
-  const rate = m.tokensIn > 0 ? Math.round((m.cachedIn / m.tokensIn) * 100) + '%' : '—';
-  return tilde + m.tps.toFixed(1) + ' tok/s · ' + tilde + total + ' · 缓存 ' + rate;
+  const rate = hitRate(m);
+  const rateText = rate === null ? '—' : Math.round(rate * 100) + '%';
+  const speed = avgTps(m).toFixed(1);
+  // 有一位是估算的就在整串前面加 ~：三个数里最可能被当成精确值的就是它们。
+  return (m.exact ? '' : '~') + '命中 ' + rateText + ' · ' + speed + ' tok/s · ' + total;
 }
 
 export function inputMinHeight(
@@ -217,6 +223,25 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
     >
       <div className="ygg-compose">
         {/*
+          用量指标：**固定在右下角**（绝对定位，不占流），而且**没数据时整块不渲染**。
+          值都是这个会话的整体值：命中率 / 整体 tok/s / token 总和。
+        */}
+        {metricsText(metrics) ? (
+          <span
+            className="ygg-metrics"
+            title={
+              (metrics.exact ? '' : '（含本地估算，数字前带 ~）') +
+              '本会话整体：命中 ' + metrics.cachedIn.toLocaleString() + ' / 输入 ' +
+              metrics.tokensIn.toLocaleString() + ' = ' +
+              Math.round((hitRate(metrics) ?? 0) * 100) + '%；输出 ' +
+              metrics.tokensOut.toLocaleString() + '；累计生成 ' +
+              (metrics.msTotal / 1000).toFixed(1) + ' 秒'
+            }
+          >
+            {metricsText(metrics)}
+          </span>
+        ) : null}
+        {/*
           被弹窗拦截的页面：网页只能在"用户手势"里开新窗口，所以这里由用户点一下。
           点这个按钮就是真正的手势，window.open 不会被拦。
         */}
@@ -357,19 +382,6 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
               {imageError ? imageError : images.length + ' 张图片将随请求发出'}
             </span>
           ) : null}
-          <span
-            className="ygg-metrics"
-            title={
-              metrics && metrics.runs > 0
-                ? (metrics.exact ? '' : '（含本地估算，数字前带 ~）') +
-                  '本会话累计：输入 ' + metrics.tokensIn.toLocaleString() + ' / 输出 ' +
-                  metrics.tokensOut.toLocaleString() + ' / 缓存命中 ' + metrics.cachedIn.toLocaleString() +
-                  '；最近一次 ' + metrics.tps.toFixed(1) + ' tok/s'
-                : '还没有跑过：这三个数是"速度 · 累计 token · 缓存命中率"'
-            }
-          >
-            {metricsText(metrics)}
-          </span>
         </div>
       </div>
     </WindowFrame>
