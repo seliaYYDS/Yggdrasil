@@ -99,6 +99,10 @@ export function WindowFrame({
   // 最小化 / 恢复都由 store 驱动：先标记 leaving（或 restoring），动画播完才真正收放。
   const leaving = useDesktopStore((s) => !!s.leaving[id]);
   const restoring = useDesktopStore((s) => !!s.restoring[id]);
+  // 关闭淡出：面板与输入框由 store.requestClose 标记，组件由 removeNode 标记 ——
+  // 统一在这里读，调用方不用各自传一遍。
+  const dyingNow = useDesktopStore((s) => !!s.dying[id]);
+  const setResizing = useDesktopStore((s) => s.setResizing);
   const [lunge, setLunge] = useState(false);
   /** 挂载那一刻决定：从任务栏展开的窗口不再播入场动画，改播"长回原位"。 */
   const [fromTaskbar] = useState(restoring);
@@ -187,10 +191,11 @@ export function WindowFrame({
         setDrag({ kind: 'move' });
       } else {
         setDrag({ kind: 'resize', startW: rect.w, startH: rect.h, startX: e.clientX, startY: e.clientY });
+        setResizing(true);
       }
       e.currentTarget.setPointerCapture(e.pointerId);
     },
-    [onRect, pinned, resizable, rect.x, rect.y, rect.w, rect.h],
+    [onRect, pinned, resizable, rect.x, rect.y, rect.w, rect.h, setResizing],
   );
 
   const onPointerDownResize = useCallback(
@@ -198,9 +203,10 @@ export function WindowFrame({
       if (!onRect || !resizable) return;
       e.stopPropagation();
       setDrag({ kind: 'resize', startW: rect.w, startH: rect.h, startX: e.clientX, startY: e.clientY });
+      setResizing(true);
       e.currentTarget.setPointerCapture(e.pointerId);
     },
-    [onRect, resizable, rect.h, rect.w],
+    [onRect, resizable, rect.h, rect.w, setResizing],
   );
 
   useEffect(() => {
@@ -235,6 +241,8 @@ export function WindowFrame({
     };
     const onUp = () => {
       setDrag(null);
+      // 松手后自动高度才能重新工作（此时用户尺寸已经生效，见 YggdrasilInput 的 userSized）。
+      if (drag.kind === 'resize') setResizing(false);
       // 结束拖动一定收起网格：中途松开 Shift 而指针没再动过的情况也得清掉。
       if (snapRef.current) {
         snapRef.current = false;
@@ -249,7 +257,7 @@ export function WindowFrame({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [drag, minH, minW, move, rect, setSnapDrag]);
+  }, [drag, minH, minW, move, rect, setSnapDrag, setResizing]);
 
   const builtinTitlebar = (
     <div className="ygg-titlebar" data-ygg-drag={onRect ? '1' : '0'}>
@@ -281,7 +289,7 @@ export function WindowFrame({
         'ygg-window' +
         (isWidget ? ' is-widget' : '') +
         (newborn ? ' is-newborn' : '') +
-        (dying ? ' is-dying' : '') +
+        (dying || dyingNow ? ' is-dying' : '') +
         (pinned ? ' is-fixed' : '') +
         (focused ? ' is-focused' : '') +
         (drag ? ' is-dragging' : '') +

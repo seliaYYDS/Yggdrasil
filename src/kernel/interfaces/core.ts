@@ -1,7 +1,7 @@
 import { registerInterface } from '../registry/interfaceRegistry';
 import { fail, ok, strOr, tokensOf } from '../bus/opContext';
 import { compileComponent, compileTool } from '../../host/compile';
-import { desktop, useDesktopStore } from '../../store/desktopStore';
+import { defaultWindows, defaultWindowsText, desktop, useDesktopStore } from '../../store/desktopStore';
 import { getTool, registerTool, toolCatalog } from '../registry/toolRegistry';
 import { sanitizeTokens } from '../../theme/engine';
 import {
@@ -347,6 +347,8 @@ export function registerCoreInterfaces(): void {
       if (part === 'all' || part === 'windows') {
         chunks.push(viewport);
         chunks.push('## 窗口\n' + windowsText());
+        // 默认窗口（Nodes / 设置 / Trace / 输入框）不是组件，但也能移动 / 缩放 / 显隐。
+        chunks.push('## 默认窗口\n' + defaultWindowsText(defaultWindows(s)));
       }
       if (part === 'all' || part === 'agents') chunks.push('## Agent\n' + agentsText());
       if (part === 'all' || part === 'tree') chunks.push('## 节点树\n' + treeText(s.nodes, s.rootId));

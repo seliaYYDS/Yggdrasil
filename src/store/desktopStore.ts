@@ -75,6 +75,20 @@ export interface RunStatus {
   runId: string | null;
 }
 
+/** 一个**默认窗口**（常驻面板或输入框会话）的对外视图 —— 供 Agent 读取与修改。 */
+export interface DefaultWindow {
+  id: string;
+  title: string;
+  kind: 'panel' | 'input';
+  rect: PanelRect;
+  z: number;
+  minimized: boolean;
+  /** 面板被 ✕ 关掉时为 false（输入框没有这个概念，恒为 true）。 */
+  open: boolean;
+  /** 改尺寸时不能低于它。 */
+  min: { w: number; h: number };
+}
+
 export interface PanelRect {
   x: number;
   y: number;
@@ -256,6 +270,13 @@ export const PANEL_RECT_KEY: Record<
 /** 视口缩小时派生的窗口最少缩到这个尺寸（再小就没法用了）。 */
 export const FOLLOW_MIN_W = 160;
 export const FOLLOW_MIN_H = 90;
+
+/** 面板显示用的名字（给 Agent 看的清单用它）。 */
+export const PANEL_LABELS: Record<PanelKey, string> = {
+  inspector: 'Nodes',
+  settings: '设置',
+  trace: 'Trace',
+};
 
 /** 各面板的尺寸下限，与 PanelWindow 传的 minW / minH 对齐。 */
 export const PANEL_MIN: Record<PanelKey, { w: number; h: number }> = {
@@ -663,8 +684,23 @@ interface DesktopState {
   setTraceOpen: (open: boolean) => void;
   setResetOpen: (open: boolean) => void;
   setPanelMinimized: (panel: PanelKey, minimized: boolean) => void;
+  /** 打开 / 关掉一个面板（把三个各自不同的开合标记统一成一个入口）。 */
+  setPanelOpen: (panel: PanelKey, open: boolean) => void;
   /** 拖动中切换网格吸附（按住 / 松开 Shift 都会调）。 */
   setSnapDrag: (on: boolean) => void;
+  /**
+   * 正在用右下角手柄调整窗口尺寸。
+   *
+   * 存在的理由：输入框的"内容多高就多高"是自动跟随的，而调整尺寸期间它**必须停手** ——
+   * 否则用户每拖一下，自动高度就把尺寸和位置改回去，表现为"越拖越跑"。
+   */
+  resizing: boolean;
+  setResizing: (on: boolean) => void;
+  /**
+   * 关闭一个窗口（组件 / 面板 / 输入框），**先播淡出动画再真正关闭**。
+   * 组件走 removeNode（它自己也会播），面板与输入框在这里收尾。
+   */
+  requestClose: (windowId: string) => void;
   /**
    * 播一条派生连线。`layer` 决定画在窗口之下还是之上。
    * 到点自动移除，调用方不用管回收。
@@ -752,6 +788,60 @@ function mapRun(
         : ses,
     ),
   };
+}
+
+/**
+ * 列出所有**默认窗口**：三个常驻面板 + 每个输入框会话。
+ *
+ * 用途是让 Agent 能"看到并改到"它们（以前它只能看组件，默认窗口完全不存在于它的世界里）。
+ */
+export function defaultWindows(s: DesktopState): DefaultWindow[] {
+  const panelOpen: Record<PanelKey, boolean> = {
+    inspector: s.treeOpen,
+    settings: s.settingsOpen,
+    trace: s.traceOpen,
+  };
+  const out: DefaultWindow[] = ALL_PANELS.map((key) => {
+    const id = 'panel-' + key;
+    return {
+      id,
+      title: PANEL_LABELS[key],
+      kind: 'panel' as const,
+      rect: s[PANEL_RECT_KEY[key]] as PanelRect,
+      z: s.panelZ[key],
+      minimized: !!s.minimizedPanels[key],
+      open: panelOpen[key],
+      min: PANEL_MIN[key],
+    };
+  });
+  for (const ses of s.sessions) {
+    out.push({
+      id: ses.id,
+      title: ses.title,
+      kind: 'input',
+      rect: ses.rect,
+      z: ses.z,
+      minimized: ses.minimized,
+      open: true,
+      min: PANEL_MIN_SESSION,
+    });
+  }
+  return out;
+}
+
+/** 把默认窗口列成给模型看的一段文本。 */
+export function defaultWindowsText(wins: DefaultWindow[]): string {
+  if (wins.length === 0) return '（没有默认窗口）';
+  return wins
+    .map(
+      (w) =>
+        '- id=' + w.id + ' 「' + w.title + '」 ' +
+        (w.minimized ? '已最小化' : w.open ? '显示中' : '已关闭') +
+        ' pos=' + Math.round(w.rect.x) + ',' + Math.round(w.rect.y) +
+        ' size=' + Math.round(w.rect.w) + 'x' + Math.round(w.rect.h) +
+        ' z=' + w.z,
+    )
+    .join('\n');
 }
 
 /** 只读地取一份运行状态。 */
@@ -848,6 +938,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   leaving: {},
   restoring: {},
   snapDrag: false,
+  resizing: false,
   curves: [],
   dying: {},
   consolePrompt: null,
@@ -1242,6 +1333,12 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   setTraceOpen: (open) => set({ traceOpen: open }),
   setResetOpen: (open) => set({ resetOpen: open }),
 
+  setPanelOpen: (panel, open) => {
+    if (panel === 'inspector') get().setTreeOpen(open);
+    else if (panel === 'trace') get().setTraceOpen(open);
+    else get().setSettingsOpen(open);
+  },
+
   setPanelMinimized: (panel, minimized) => {
     set((s) => {
       const next = { ...s.minimizedPanels };
@@ -1282,6 +1379,39 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     window.setTimeout(() => {
       set((s) => ({ curves: s.curves.filter((x) => x.id !== id) }));
     }, CURVE_MS);
+  },
+
+  setResizing: (on) => set({ resizing: on }),
+
+  requestClose: (windowId) => {
+    const s = get();
+    const isPanel = windowId.startsWith('panel-');
+    const isSession = s.sessions.some((ses) => ses.id === windowId);
+    // 组件交给 removeNode：它自己会标记 dying 并延后删除。
+    if (!isPanel && !isSession) {
+      get().removeNode(windowId);
+      return;
+    }
+    // 只剩一个输入框不能关：全关掉就没有入口了（UI 也不给按钮）。
+    if (isSession && s.sessions.length <= 1) return;
+    if (s.dying[windowId]) return;
+    set((cur) => ({ dying: { ...cur.dying, [windowId]: true } }));
+    window.setTimeout(() => {
+      const st = get();
+      set((cur) => {
+        const dying = { ...cur.dying };
+        delete dying[windowId];
+        return { dying };
+      });
+      if (isPanel) {
+        const key = windowId.slice('panel-'.length) as PanelKey;
+        if (key === 'inspector') st.setTreeOpen(false);
+        else if (key === 'trace') st.setTraceOpen(false);
+        else if (key === 'settings') st.setSettingsOpen(false);
+      } else {
+        st.removeSession(windowId);
+      }
+    }, DEATH_MS);
   },
 
   setSnapDrag: (on) => {
@@ -1568,6 +1698,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       leaving: {},
       restoring: {},
       snapDrag: false,
+      resizing: false,
       curves: [],
       dying: {},
       consolePrompt: null,

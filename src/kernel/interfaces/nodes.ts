@@ -1,7 +1,14 @@
 import { registerInterface } from '../registry/interfaceRegistry';
-import { clampNumber, fail, ok, strOr, tokensOf } from '../bus/opContext';
+import { clampNumber, fail, ok, strOr, tokensOf, type OpResult } from '../bus/opContext';
 import { compileComponent } from '../../host/compile';
-import { desktop, makeFacet, useDesktopStore } from '../../store/desktopStore';
+import {
+  defaultWindows,
+  desktop,
+  fitRectToViewport,
+  makeFacet,
+  useDesktopStore,
+  type PanelKey,
+} from '../../store/desktopStore';
 import { unregisterTool } from '../registry/toolRegistry';
 import { sanitizeTokens } from '../../theme/engine';
 import type { ActCap, ComponentNode, DerivationOp, YggNode } from '../types';
@@ -55,6 +62,106 @@ function isSubstantiveAgent(op: DerivationOp): boolean {
  * 没有"创建 Agent"这条独立路径 —— **创建一个带 agent 能力的组件，就是创建 Agent**。
  * 带不带能力由 op.agent 或源码里的 useAgent 决定，产出的都是一个普通组件。
  */
+/**
+ * 改一个**默认窗口**（面板 / 输入框）的位置与尺寸。
+ *
+ * 与组件分开实现，而不是硬塞进组件那条路：默认窗口没有源码 / 标题 / 挂件 / 锁定这些概念，
+ * 混在一起会让"哪些字段对谁有效"变得不可预测。几何算法与 `update_component` 保持一致
+ * （同一套 fill / center / align 助手），差别只有夹取时用各自的尺寸下限。
+ */
+function updateDefaultWindow(op: DerivationOp, ref: string): OpResult {
+  const s = desktop();
+  const win = defaultWindows(s).find((w) => w.id === ref);
+  if (!win) {
+    const list = defaultWindows(s).map((w) => w.id + '「' + w.title + '」').join('、');
+    return fail('没有这个默认窗口 ' + ref + '。现有的：' + list);
+  }
+  const viewW = s.viewW;
+  const viewH = s.viewH;
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const base = { ...win.rect };
+  const pos = op.pos as { x?: unknown; y?: unknown } | undefined;
+  if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+    base.x = Math.round(pos.x);
+    base.y = Math.round(pos.y);
+  }
+  const size = op.size as { w?: unknown; h?: unknown } | undefined;
+  if (size) {
+    base.w = clampNumber(size.w, base.w, win.min.w, viewW);
+    base.h = clampNumber(size.h, base.h, win.min.h, viewH);
+  }
+  let rect: Rect = { ...base };
+  const dx = num(op.dx);
+  const dy = num(op.dy);
+  const dw = num(op.dw);
+  const dh = num(op.dh);
+  if (dx || dy || dw || dh) {
+    rect = { x: rect.x + dx, y: rect.y + dy, w: rect.w + dw, h: rect.h + dh };
+  }
+  if (op.fill === true) rect = fillRect(viewW, viewH);
+  else if (op.center === true) rect = centerRect(rect, viewW, viewH);
+  else if (typeof op.align === 'string' && op.align) rect = alignRect(rect, op.align, viewW, viewH);
+  // 用各自的尺寸下限夹进视口（面板 280×220 起，输入框 300×70 起）。
+  const fitted = fitRectToViewport(rect, viewW, viewH, win.min.w, win.min.h);
+
+  const touched: string[] = [];
+  if (fitted.x !== win.rect.x || fitted.y !== win.rect.y) touched.push('位置');
+  if (fitted.w !== win.rect.w || fitted.h !== win.rect.h) touched.push('尺寸');
+  if (op.focus === true) {
+    s.bringToFront(win.id);
+    touched.push('置顶');
+  }
+  if (touched.length === 0) return fail('没有给出任何可改的字段（默认窗口只支持 pos/size/dx/dy/dw/dh/center/fill/align/focus）。');
+
+  if (win.kind === 'panel') {
+    const key = win.id.slice('panel-'.length) as PanelKey;
+    s.setPanelRect(key, fitted);
+  } else {
+    s.setSessionRect(win.id, fitted);
+  }
+  s.log('op', 'panel ' + win.id + ' ' + touched.join('+'), win.id);
+  return ok('已调整默认窗口「' + win.title + '」：' + touched.join('、'), {
+    observation:
+      win.id + ' pos=' + fitted.x + ',' + fitted.y + ' size=' + fitted.w + 'x' + fitted.h,
+  });
+}
+
+/**
+ * 默认窗口的显隐。
+ *
+ * 映射关系（面板与输入框的"状态"概念不一样，所以在这里统一翻译）：
+ * - **面板**：closed = 关掉（面板自己的 open 标记）；minimized = 收进任务栏；active = 打开并取消最小化。
+ * - **输入框**：closed = 移除这个会话（只剩一个时拒绝）；minimized / active 照常。
+ */
+function setDefaultWindowState(ref: string, state: 'active' | 'minimized' | 'closed'): OpResult {
+  const s = desktop();
+  const win = defaultWindows(s).find((w) => w.id === ref);
+  if (!win) {
+    const list = defaultWindows(s).map((w) => w.id + '「' + w.title + '」').join('、');
+    return fail('没有这个默认窗口 ' + ref + '。现有的：' + list);
+  }
+  if (win.kind === 'panel') {
+    const key = win.id.slice('panel-'.length) as PanelKey;
+    if (state === 'closed') s.setPanelOpen(key, false);
+    else if (state === 'minimized') {
+      s.setPanelOpen(key, true);
+      s.setPanelMinimized(key, true);
+    } else {
+      s.setPanelOpen(key, true);
+      s.setPanelMinimized(key, false);
+    }
+  } else if (state === 'closed') {
+    if (s.sessions.length <= 1) return fail('只剩一个输入框，关掉就没有入口了。');
+    s.removeSession(win.id);
+  } else {
+    s.setSessionMinimized(win.id, state === 'minimized');
+  }
+  if (state !== 'closed') s.bringToFront(win.id);
+  s.log('op', 'panel ' + win.id + ' ' + state, win.id);
+  const label = state === 'active' ? '显示' : state === 'minimized' ? '最小化' : '关闭';
+  return ok('已' + label + '默认窗口「' + win.title + '」');
+}
+
 function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionId: string }) {
   const name = strOr(op.name, '组件');
   const store = useDesktopStore.getState();
@@ -277,11 +384,20 @@ export function registerNodeInterfaces(): void {
     description:
       '修改已有组件（= 调整窗口），未给的字段不动：source 换源码；name 改标题；status 显隐；' +
       'tokens 局部样式；z 或 focus=true 置顶；frame 换窗口/挂件；fixed / locked 开关。' +
-      '**几何**：绝对 `pos/size`、相对 `dx dy dw dh`、或视口算好的 `center` / `fill` / `align`。结果都会夹进视口。',
+      '**几何**：绝对 `pos/size`、相对 `dx dy dw dh`、或视口算好的 `center` / `fill` / `align`。结果都会夹进视口。' +
+      '**默认窗口**（Nodes / 设置 / Trace / 输入框）不是组件，改用 `panel` 指它们（id 见「默认窗口」一节，' +
+      '如 panel-settings / input），只支持几何与 focus。',
     example: { kind: 'update_component', id: 'n_xxx', dx: 120, dy: 0, focus: true },
     mutates: true,
     cap: 'desktop',
     handler: (op) => {
+      /*
+       * 先分流：`panel` 给的是**默认窗口**（常驻面板 / 输入框），它们不是节点。
+       * 只认几何与 focus —— 它们没有源码、没有标题、没有挂件形态、也没有锁定。
+       */
+      const panelRef = strOr(op.panel, '');
+      if (panelRef) return updateDefaultWindow(op, panelRef);
+
       const id = strOr(op.id, '');
       const node = findComponent(id);
       if (!node) return fail('组件 ' + id + ' 不存在。');
@@ -530,7 +646,9 @@ export function registerNodeInterfaces(): void {
     kind: 'set_window_state',
     label: '窗口显隐',
     description:
-      '设置组件的窗口状态：active 显示 / minimized 最小化 / closed 关闭（保留节点，可从桌面左下任务栏恢复）。按名字或 id 指定。',
+      '设置窗口状态：active 显示 / minimized 最小化 / closed 关闭（保留节点，可从桌面左下任务栏恢复）。按名字或 id 指定。' +
+      '**默认窗口**（Nodes / 设置 / Trace / 输入框）用 `panel` 指定（见「默认窗口」一节）：' +
+      'closed 是关掉面板、minimized 是收进任务栏、active 是重新打开。',
     example: { kind: 'set_window_state', name: '计算器', state: 'minimized' },
     mutates: true,
     cap: 'desktop',
@@ -539,6 +657,8 @@ export function registerNodeInterfaces(): void {
       if (!['active', 'minimized', 'closed'].includes(state)) {
         return fail('state 只接受 active / minimized / closed。');
       }
+      const panelRef = strOr(op.panel, '');
+      if (panelRef) return setDefaultWindowState(panelRef, state as 'active' | 'minimized' | 'closed');
       const id = strOr(op.id, '');
       const name = strOr(op.name, '');
       const targets = Object.values(desktop().nodes).filter(

@@ -292,3 +292,4 @@ export function isAgentNode(n: YggNode | undefined): n is ComponentNode {
 export function isWindowNode(n: YggNode | undefined): n is ComponentNode {
   return isComponent(n) && !n.root;
 }
+

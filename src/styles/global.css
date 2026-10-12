@@ -117,7 +117,16 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 
 /* 正在被收走的窗口：淡出 + 轻微缩小，和那条线一起消失。 */
+/*
+ * 关闭（淡出）动画。
+ *
+ * ⚠ **必须写 animation: none**：.ygg-window 上有 `animation: ygg-window-in … both`，
+ * 而带 fill 的动画值在层叠上**压过普通声明** —— 不关掉它，下面的 opacity/transform 根本不生效，
+ * 窗口只是"等 260ms 然后凭空消失"（用户反馈"关闭动画完全看不到"就是这个原因）。
+ * 这与 .is-leaving / .is-restoring 是同一个坑。
+ */
 .ygg-window.is-dying {
+  animation: none;
   opacity: 0;
   transform: scale(.97);
   transition: opacity 260ms var(--ygg-ease), transform 260ms var(--ygg-ease);

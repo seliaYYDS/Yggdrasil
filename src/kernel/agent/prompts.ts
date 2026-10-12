@@ -147,6 +147,12 @@ export interface SystemPromptInput {
   caps?: ActCap[];
   /** 成人模式：开启时注入 adultRules()。默认关闭。 */
   adultMode?: boolean;
+  /**
+   * 默认窗口（面板 / 输入框）的清单，**已经渲染成文本**。
+   *
+   * 传文本而不是结构，是为了让这个模块保持"纯"—— 它不该知道 store 的形状（PanelRect 住在 store 里）。
+   */
+  defaultWindows?: string;
   /** 桌面视口尺寸。窗口坐标都基于它，模型算位置时必须知道。 */
   viewW?: number;
   viewH?: number;
@@ -290,6 +296,14 @@ export function buildSnapshotPrompt(input: SystemPromptInput): string {
     '',
     unrestricted ? '## 当前窗口（实时快照，唯一事实来源）' : '## 你的作用域（只能看到这些）',
     windowsText(scoped),
+    '',
+    // 默认窗口（Nodes / 设置 / Trace / 每个输入框）不是组件，但也是窗口 —— 得让 Agent 看得到。
+    // 受限作用域的 Agent 看不到它们：它本来也改不动宿主界面。
+    unrestricted && input.defaultWindows ? '## 默认窗口（不是组件，也可移动 / 缩放 / 显隐）' : '',
+    unrestricted && input.defaultWindows ? input.defaultWindows : '',
+    unrestricted && input.defaultWindows
+      ? '改它们用 update_component 的 panel 字段（id 见上），显隐用 set_window_state 的 panel。'
+      : '',
     '',
     '## 当前 Agent（实时快照）',
     agentsText(scoped),

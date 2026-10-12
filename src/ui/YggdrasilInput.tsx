@@ -115,7 +115,8 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   const pendingOpen = useDesktopStore((s) => s.pendingOpen);
   const clearPendingOpen = useDesktopStore((s) => s.clearPendingOpen);
   const setSessionRect = useDesktopStore((s) => s.setSessionRect);
-  const removeSession = useDesktopStore((s) => s.removeSession);
+  const requestCloseSession = useDesktopStore((s) => s.requestClose);
+  const resizing = useDesktopStore((s) => s.resizing);
   const focusedId = useDesktopStore((s) => s.focusedId);
   const bringToFront = useDesktopStore((s) => s.bringToFront);
   const requestMinimize = useDesktopStore((s) => s.requestMinimize);
@@ -193,14 +194,22 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
    * 以**底边为锚**：变高时 y 一起上移，否则贴底的输入框会顶出屏幕底部。
    * 用户手动拉高过（当前高度不等于上次自动值）就不缩回去。
    */
-  const autoH = useRef(0);
+  /*
+   * 用户一旦手动调过尺寸（宽**或**高），这个会话就不再自动跟随内容改高度。
+   *
+   * 为什么必须这样：缩窄时文字会换行 → 内容需要更高 → 自动高度立刻把 h 撑回去、
+   * 并以底边为锚把 y 一起上移；用户继续拖，它继续抢 —— 表现就是
+   * "**拉到最小之后继续拉，输入框自己会跑**"（用户反馈的正是这个）。
+   * 自动高度是"帮忙"，不能压过用户的手。
+   */
+  const userSized = useRef(false);
   useLayoutEffect(() => {
+    // 正在拖手柄时绝对不动：否则每一帧都跟用户抢尺寸和位置。
+    if (resizing) return;
+    if (userSized.current) return;
     if (needed === rect.h) return;
-    const userResized = rect.h !== autoH.current;
-    if (needed < rect.h && userResized) return;
-    autoH.current = needed;
     setSessionRect(session.id, { ...rect, y: Math.max(0, rect.y + rect.h - needed), h: needed });
-  }, [needed, session.id, rect, setSessionRect]);
+  }, [needed, session.id, rect, setSessionRect, resizing]);
 
   // 最小化后交给任务栏渲染，这里什么都不画。
   if (minimized) return null;
@@ -212,11 +221,16 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
       rect={rect}
       zIndex={z}
       focused={focusedId === session.id}
-      onRect={(r) => setSessionRect(session.id, r)}
+      onRect={(r) => {
+        // 尺寸变了（宽或高）就记住"这是用户自己定的"，此后不再自动改高度。
+        if (r.w !== rect.w || r.h !== rect.h) userSized.current = true;
+        setSessionRect(session.id, r);
+      }}
       onFocus={() => bringToFront(session.id)}
       onMinimize={() => requestMinimize(session.id)}
       // 只剩一个时不给关：全关掉就没有入口了。
-      onDelete={sessionCount > 1 ? () => removeSession(session.id) : undefined}
+      // 先播淡出再真正移除（store 里收尾）；只剩一个时不给关。
+      onDelete={sessionCount > 1 ? () => requestCloseSession(session.id) : undefined}
       minW={300}
       minH={70}
       minHeightCss={needed}

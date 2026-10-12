@@ -25,7 +25,14 @@ import {
   type SystemPromptInput,
 } from './prompts';
 import { executeOps, formatOutcomes, rollback, type ExecuteResult } from '../bus/derivationBus';
-import { desktop, MAIN_SESSION, type RunStatus, useDesktopStore } from '../../store/desktopStore';
+import {
+  defaultWindows,
+  defaultWindowsText,
+  desktop,
+  MAIN_SESSION,
+  type RunStatus,
+  useDesktopStore,
+} from '../../store/desktopStore';
 import { toolCatalog } from '../registry/toolRegistry';
 
 /** 带 agent facet 的组件。 */
@@ -568,6 +575,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           // 能力开关：没开的接口不会出现在接口目录里，提示词也少一大截。
           caps: isAgentic(origin) ? origin.agent.caps : undefined,
           adultMode: store.settings.adultMode === true,
+          defaultWindows: defaultWindowsText(defaultWindows(desktop())),
         };
         const systemPrompt = buildSystemPrompt(promptInput);
         const snapshotPrompt = buildSnapshotPrompt(promptInput);

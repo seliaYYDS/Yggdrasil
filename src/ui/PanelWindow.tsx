@@ -9,6 +9,7 @@ interface Props {
   minW?: number;
   minH?: number;
   resizable?: boolean;
+  /** 关闭后的额外清理；**关闭动画与真正的关闭由 store.requestClose 负责**（✕ 不再直接调它）。 */
   onClose?: () => void;
   /** 覆盖窗口默认最小高度（默认 120px 对矮面板太高）。 */
   minHeightCss?: number;
@@ -29,7 +30,6 @@ export function PanelWindow({
   minW,
   minH,
   resizable = true,
-  onClose,
   minHeightCss,
   children,
 }: Props) {
@@ -40,6 +40,7 @@ export function PanelWindow({
   const bringToFront = useDesktopStore((s) => s.bringToFront);
   const minimized = useDesktopStore((s) => !!s.minimizedPanels[panel]);
   const requestMinimize = useDesktopStore((s) => s.requestMinimize);
+  const requestClose = useDesktopStore((s) => s.requestClose);
 
   // 最小化后交给任务栏渲染，这里什么都不画。
   if (minimized) return null;
@@ -59,7 +60,8 @@ export function PanelWindow({
       onFocus={() => bringToFront(domId)}
       // 交给 store：先播"收进任务栏"动画，动画结束才真正收起。
       onMinimize={() => requestMinimize(domId)}
-      onDelete={onClose}
+      // 先播淡出再真正关闭（store 里收尾）；onClose 仍然保留给调用方做额外清理。
+      onDelete={() => requestClose(domId)}
       minW={minW}
       minH={minH}
       resizable={resizable}
