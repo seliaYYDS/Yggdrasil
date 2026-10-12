@@ -297,8 +297,45 @@ export function makeFacet(partial: Partial<AgentFacet> = {}): AgentFacet {
     messages: partial.messages ?? [],
     ledger: partial.ledger ?? [],
     scope: partial.scope ?? '*',
+    progress: partial.progress ?? 'trace',
   };
 }
+
+/* ------------------------------------------------------------------ */
+/* 运行会话：输入框与组件 agent 各一份工作状态                          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 一次运行的"工作状态"：队列、进度、轨迹。
+ *
+ * 输入框会话（'input' / 'input-2'）和组件 agent（'agent:<nodeId>'）各有一份，
+ * **互不相通** —— 这就是"子 agent 不占用基底"的实现基础。
+ * 共享的是底层记忆（节点树、样式、各自的对话历史与账本），不是这个。
+ */
+export interface RunSlice {
+  status: RunStatus;
+  trace: TraceStep[];
+  queue: QueuedInput[];
+}
+
+/** 组件 agent 的运行会话前缀。 */
+export const AGENT_SESSION_PREFIX = 'agent:';
+
+/** 某个组件 agent 的运行会话 id。 */
+export function agentSessionId(nodeId: string): string {
+  return AGENT_SESSION_PREFIX + nodeId;
+}
+
+export function isAgentSession(id: string): boolean {
+  return typeof id === 'string' && id.startsWith(AGENT_SESSION_PREFIX);
+}
+
+/** 空运行状态（常量：给组件订阅时保持引用稳定，避免无谓重渲染）。 */
+export const EMPTY_RUN: RunSlice = Object.freeze({
+  status: emptyStatus(),
+  trace: [],
+  queue: [],
+}) as RunSlice;
 
 /**
  * 基底 Agent。
@@ -439,6 +476,15 @@ interface DesktopState {
   logs: LogEntry[];
   /** 每个输入框一个会话。至少一个。 */
   sessions: InputSession[];
+  /**
+   * 组件 agent 的运行状态，键是**节点 id**。
+   *
+   * 为什么和 sessions 分开：输入框会话还要带窗口几何（rect / z / 最小化），
+   * 而组件 agent 没有面板，只需要队列 / 进度 / 轨迹。
+   * 两者用同一套动作读写（见 mapRun），但存储形状不同。
+   * 不进持久化：进度和排队项都是瞬态的。
+   */
+  agentRuns: Record<NodeId, RunSlice>;
   feedback: RunFeedback | null;
   traceOpen: boolean;
   settings: LlmSettings;
@@ -504,6 +550,13 @@ interface DesktopState {
   shiftQueued: (id: string) => QueuedInput | null;
   /** 会话 id -> 是否该会话还有排队项。 */
   clearQueue: (id: string) => void;
+  /**
+   * 这个会话 id 现在有效吗。
+   * 输入框会话要求输入框存在；agent 会话要求目标组件还在（且带能力）。
+   */
+  hasSession: (id: string) => boolean;
+  /** 读运行状态（只读，给组件订阅用）。 */
+  runOf: (id: string) => RunSlice;
 
   setSettings: (patch: Partial<LlmSettings>) => void;
   setSettingsOpen: (open: boolean) => void;
@@ -541,6 +594,39 @@ interface DesktopState {
 
 let persistTimer: number | null = null;
 let adapterRef: StorageAdapter | null = null;
+
+/**
+ * 把一次运行状态的修改同时映射到"输入框会话"和"组件 agent"两种存储上。
+ *
+ * 这是这一版的关键：动作的签名不动（都只收一个会话 id），
+ * 于是调度器 / agentRuntime 完全不用知道自己在驱动的是输入框还是子 agent。
+ * 只有这里知道两种存储形状的差别。
+ */
+function mapRun(
+  s: DesktopState,
+  id: string,
+  fn: (run: RunSlice) => RunSlice,
+): Partial<DesktopState> {
+  if (isAgentSession(id)) {
+    const key = id.slice(AGENT_SESSION_PREFIX.length);
+    const cur = s.agentRuns[key] ?? EMPTY_RUN;
+    return { agentRuns: { ...s.agentRuns, [key]: fn(cur) } };
+  }
+  return {
+    sessions: s.sessions.map((ses) =>
+      ses.id === id
+        ? { ...ses, ...fn({ status: ses.status, trace: ses.trace, queue: ses.queue }) }
+        : ses,
+    ),
+  };
+}
+
+/** 只读地取一份运行状态。 */
+function readRun(s: DesktopState, id: string): RunSlice {
+  if (isAgentSession(id)) return s.agentRuns[id.slice(AGENT_SESSION_PREFIX.length)] ?? EMPTY_RUN;
+  const ses = s.sessions.find((x) => x.id === id);
+  return ses ? { status: ses.status, trace: ses.trace, queue: ses.queue } : EMPTY_RUN;
+}
 
 function snapshot(): PersistedRoot {
   const s = useDesktopStore.getState();
@@ -609,6 +695,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   zCounter: 10,
   logs: [],
   sessions: [makeSession(1, resolveInputRect(window.innerWidth, window.innerHeight), window.innerWidth, window.innerHeight)],
+  agentRuns: {},
   feedback: null,
   traceOpen: false,
   settings: { ...DEFAULT_SETTINGS },
@@ -800,7 +887,14 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     set((s) => {
       const nodes = { ...s.nodes };
       for (const nid of ids) delete nodes[nid];
-      return { nodes, focusedId: s.focusedId && ids.includes(s.focusedId) ? null : s.focusedId };
+      // 被删掉的 agent 的运行状态一并清掉，别留下没有窗口的进度。
+      const agentRuns = { ...s.agentRuns };
+      for (const nid of ids) delete agentRuns[nid];
+      return {
+        nodes,
+        agentRuns,
+        focusedId: s.focusedId && ids.includes(s.focusedId) ? null : s.focusedId,
+      };
     });
     schedulePersist();
   },
@@ -912,31 +1006,24 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   },
 
   setSessionStatus: (id, patch) => {
-    set((s) => ({
-      sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, status: { ...ses.status, ...patch } } : ses)),
-    }));
+    set((s) => mapRun(s, id, (run) => ({ ...run, status: { ...run.status, ...patch } })));
   },
 
   beginSessionTrace: (id, runId) => {
-    set((s) => ({
-      feedback: null,
-      sessions: s.sessions.map((ses) =>
-        ses.id === id ? { ...ses, trace: [], status: { ...ses.status, runId } } : ses,
-      ),
-    }));
+    // 清空 trace 只清**这个会话自己**的 —— 子 agent 起跑不会再顶掉基底的轨迹。
+    set((s) => ({ feedback: null, ...mapRun(s, id, (run) => ({ ...run, trace: [], status: { ...run.status, runId } })) }));
   },
 
   upsertSessionStep: (id, step) => {
-    set((s) => ({
-      sessions: s.sessions.map((ses) => {
-        if (ses.id !== id) return ses;
-        const i = ses.trace.findIndex((x) => x.id === step.id);
+    set((s) =>
+      mapRun(s, id, (run) => {
+        const i = run.trace.findIndex((x) => x.id === step.id);
         return {
-          ...ses,
-          trace: i >= 0 ? ses.trace.map((x, j) => (j === i ? step : x)) : [...ses.trace, step],
+          ...run,
+          trace: i >= 0 ? run.trace.map((x, j) => (j === i ? step : x)) : [...run.trace, step],
         };
       }),
-    }));
+    );
   },
 
   setSettings: (patch) => {
@@ -1088,34 +1175,31 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   clearPendingOpen: () => set({ pendingOpen: [] }),
 
   enqueue: (id, item) => {
-    set((s) => ({
-      sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, queue: [...ses.queue, item] } : ses)),
-    }));
+    set((s) => mapRun(s, id, (run) => ({ ...run, queue: [...run.queue, item] })));
   },
 
   removeQueued: (id, itemId) => {
-    set((s) => ({
-      sessions: s.sessions.map((ses) =>
-        ses.id === id ? { ...ses, queue: ses.queue.filter((q) => q.id !== itemId) } : ses,
-      ),
-    }));
+    set((s) => mapRun(s, id, (run) => ({ ...run, queue: run.queue.filter((q) => q.id !== itemId) })));
   },
 
   shiftQueued: (id) => {
-    const ses = get().sessions.find((x) => x.id === id);
-    if (!ses || ses.queue.length === 0) return null;
-    const head = ses.queue[0];
-    set((s) => ({
-      sessions: s.sessions.map((x) => (x.id === id ? { ...x, queue: x.queue.slice(1) } : x)),
-    }));
+    const head = readRun(get(), id).queue[0];
+    if (!head) return null;
+    set((s) => mapRun(s, id, (run) => ({ ...run, queue: run.queue.slice(1) })));
     return head;
   },
 
   clearQueue: (id) => {
-    set((s) => ({
-      sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, queue: [] } : ses)),
-    }));
+    set((s) => mapRun(s, id, (run) => ({ ...run, queue: [] })));
   },
+
+  hasSession: (id) => {
+    const s = get();
+    if (isAgentSession(id)) return !!s.nodes[id.slice(AGENT_SESSION_PREFIX.length)];
+    return s.sessions.some((x) => x.id === id);
+  },
+
+  runOf: (id) => readRun(get(), id),
 
   requestMinimize: (windowId) => {
     if (get().leaving[windowId]) return;
@@ -1198,6 +1282,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       sessions: [
         makeSession(1, resolveInputRect(window.innerWidth, window.innerHeight), window.innerWidth, window.innerHeight),
       ],
+      agentRuns: {},
       resetOpen: false,
       minimizedPanels: {},
       panelZ: { ...DEFAULT_PANEL_Z },

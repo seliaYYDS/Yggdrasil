@@ -76,6 +76,14 @@ export interface AgentFacet {
    * 基底 Agent 用 scope='*' 表示不受限。
    */
   scope: NodeId[] | '*';
+  /**
+   * 它的进度要不要并进 Trace 面板。默认 'trace'（显示）。
+   *
+   * 为什么是个开关：创建它的那个 Agent 最清楚进度该显示在哪 ——
+   * 如果它已经在子 Agent 自己的界面里画了进度条，再往 Trace 里塞一份就是重复。
+   * 所以"显不显示"在**创建时**由创建者决定。
+   */
+  progress?: 'trace' | 'none';
 }
 
 export interface ComponentNode extends BaseNode {

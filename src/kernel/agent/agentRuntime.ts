@@ -227,11 +227,20 @@ async function chatWithRetry(
 export async function runDerivation(input: string, options: RunOptions = {}): Promise<RunSummary> {
   const store = useDesktopStore.getState();
   const settings = store.settings;
-  const originId = options.originId && store.nodes[options.originId] ? options.originId : store.rootId;
+  /*
+   * 发起节点必须存在。
+   *
+   * 以前这里会**静默回落到基底**：提交时组件还在、跑起来时已被删，于是这条消息
+   * 被基底吃掉了 —— 用户以为在跟子 agent 说话，实际是基底在干。宁可明确失败。
+   * 只有"用户直接对着输入框说话"（没给 originId）才落到基底。
+   */
+  const originId = options.originId ?? store.rootId;
   const origin = store.nodes[originId];
   if (!origin) {
-    store.setFeedback(mkFeedback('fail', '找不到发起节点', ''));
-    return { ok: false, added: 0, rounds: 0, okCount: 0, failCount: 0, error: '找不到发起节点。' };
+    const msg = '发起节点 ' + originId + ' 已不存在（可能在排队期间被删了），这条消息不再执行。';
+    store.log('warn', 'run ✕ ' + msg);
+    store.setFeedback(mkFeedback('fail', '发起节点已删除', msg));
+    return { ok: false, added: 0, rounds: 0, okCount: 0, failCount: 0, error: msg };
   }
 
   const sessionId = options.sessionId ?? MAIN_SESSION;

@@ -122,6 +122,8 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
       messages: [],
       ledger: [],
       scope: parseScope(rawScope, id),
+      // 创建时就能决定它的进度显不显示（'trace' 默认 / 'none' 不并进 Trace）。
+      progress: parseProgress(agentRaw?.progress ?? op.progress),
     });
   }
 
@@ -148,6 +150,17 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
 function pickToolIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter((x): x is string => typeof x === 'string');
+}
+
+/**
+ * 子 agent 的进度要不要并进 Trace 面板。
+ *
+ * 默认 'trace'（显示）—— 创建者不表态时就给个安全的默认，别让进度凭空消失。
+ * 创建者如果已经把它画在子 agent 自己的界面里（源码里读 useAgent().progress），
+ * 就可以传 'none' 避免重复。认不出来的值一律按默认处理。
+ */
+function parseProgress(raw: unknown): 'trace' | 'none' {
+  return raw === 'none' ? 'none' : 'trace';
 }
 
 
@@ -186,7 +199,9 @@ export function registerNodeInterfaces(): void {
       '**这是默认也是唯一的创建入口**，绝大多数任务（计算器、列表、图表、看板、抓取结果展示）都到这里为止：' +
       '给一个 source，产出一个普通组件。pos / size 可选，不给就落在空位。' +
       'agent 字段是**可选的、默认不写**的重武器，只有用户明确要求"这个组件自己思考 / 自己行动 / 定时自主运行"时才附带；' +
-      '判据见提示词「agent 能力」一节。',
+      '判据见提示词「agent 能力」一节。' +
+      'agent.progress 可选 "trace"（默认，进度并进 Trace 面板）或 "none"（你自己在组件界面里画进度时用）；' +
+      '子 agent 跑起来占用自己的会话，不占用你。',
     example: {
       kind: 'create_component',
       name: '计算器',
@@ -341,6 +356,8 @@ export function registerNodeInterfaces(): void {
       '可以自己思考并行动。' +
       '**界面不变** —— 组件长什么样完全由它自己的 source 决定；' +
       '要让它在界面上呈现消息或按钮，就在它的源码里用 import { useAgent } from "yggdrasil" 自行渲染。' +
+      '它跑起来**占用自己的会话**，不占你、也不占别的 agent；进度可以用 useAgent().progress 画在它自己的界面里，' +
+      'progress: "none" 表示不要额外并进 Trace 面板。' +
       '这是"派生 Agent"的正解：Agent 是能力，不是另一种窗口。' +
       '**默认不要用**：用户没明确要求"它自己思考 / 自己行动 / 定时自主运行"时，普通组件就够了。' +
       '必须给出 systemPrompt（它的职责）或 tools，否则会被拒绝。',
@@ -377,6 +394,7 @@ export function registerNodeInterfaces(): void {
         messages: [],
         ledger: [],
         scope: parseScope(rawScope, id),
+        progress: parseProgress(op.progress),
       }));
       desktop().log('op', 'attach agent ' + node.name, id);
       return ok('已给「' + node.name + '」接入 agent 能力', {

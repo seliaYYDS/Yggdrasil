@@ -61,6 +61,23 @@ function agentDetailText(id: string): string {
   if (f.ledger.length === 0) lines.push('（空）');
   else for (const e of f.ledger.slice(-30)) lines.push('- ' + e);
 
+  // 运行状态：跑没跑、在做什么、排了几条、最近几步 —— 这是"进度"的查询口。
+  const run = useDesktopStore.getState().runOf('agent:' + id);
+  lines.push(
+    '',
+    '运行状态：' + (run.status.running ? '正在跑' : '空闲') +
+      (run.status.phase ? '；当前阶段：' + run.status.phase : '') +
+      (run.status.detail ? '；细节：' + run.status.detail : '') +
+      '；排队 ' + run.queue.length + ' 条',
+  );
+  lines.push('进度显示：' + (f.progress === 'none' ? '不并进 Trace 面板（创建者自己画在组件界面里）' : '并进 Trace 面板'));
+  if (run.trace.length > 0) {
+    lines.push('最近步骤（共 ' + run.trace.length + ' 步）：');
+    for (const s of run.trace.slice(-6)) {
+      lines.push('  [' + s.status + '] ' + (s.round > 0 ? 'R' + s.round + ' ' : '') + s.label + ' — ' + (s.message || '').slice(0, 100));
+    }
+  }
+
   lines.push('', '最近消息（共 ' + f.messages.length + ' 条，只列最近 ' + Math.min(10, f.messages.length) + ' 条）：');
   if (f.messages.length === 0) lines.push('（空）');
   else {
@@ -597,7 +614,8 @@ export function registerCoreInterfaces(): void {
     kind: 'set_agent_config',
     label: '配置 Agent',
     description:
-      '修改某个 Agent 的名字、职责、作用域或工具子集。用 id 指定（Agent 就是带 agent 能力的组件）。这不会清空它的对话历史。',
+      '修改某个 Agent 的名字、职责、作用域、工具子集，或它的进度显不显示（progress: "trace" / "none"）。' +
+      '用 id 指定（Agent 就是带 agent 能力的组件）。这不会清空它的对话历史。',
     example: { kind: 'set_agent_config', id: 'n_xxx', systemPrompt: '你专注于数据分析' },
     handler: (op) => {
       const id = strOr(op.id, '');
@@ -626,8 +644,12 @@ export function registerCoreInterfaces(): void {
         facetPatch.toolIds = op.tools.filter((x): x is string => typeof x === 'string');
         touched.push('工具');
       }
+      if (op.progress === 'trace' || op.progress === 'none') {
+        facetPatch.progress = op.progress;
+        touched.push(op.progress === 'none' ? '不显示进度' : '显示进度');
+      }
       if (touched.length === 0) {
-        return fail('set_agent_config 需要 name / systemPrompt / scope / tools 之一。');
+        return fail('set_agent_config 需要 name / systemPrompt / scope / tools / progress 之一。');
       }
       const store = useDesktopStore.getState();
       if (Object.keys(nodePatch).length) store.updateNode(agent.id, nodePatch as Partial<YggNode>);

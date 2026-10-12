@@ -6,8 +6,9 @@ import { runDerivation } from './agentRuntime';
 /**
  * 输入调度器。
  *
- * **每个输入框（会话）各有一条自己的串行队列**，互相独立 ——
- * 两个输入框可以同时在跑，各自显示各自的进度。
+ * **每个会话各有一条自己的串行队列**，互相独立 ——
+ * 两个输入框、以及每个组件 agent（'agent:<nodeId>'）都各算一个会话，
+ * 所以基底与子 agent、子 agent 之间都能同时跑，各自显示各自的进度。
  *
  * 为什么会话内部必须串行：`runDerivation` 会写这个会话的 trace / status / 队列，
  * 同一会话并发跑两条会互相覆盖。会话之间则天然隔离 ——
@@ -51,7 +52,8 @@ export function submitInput(
   if (!value && images.length === 0) return false;
   const store = useDesktopStore.getState();
   const sessionId = options.sessionId ?? MAIN_SESSION;
-  if (!store.sessions.some((s) => s.id === sessionId)) return false;
+  // 输入框会话要求输入框在；agent 会话要求目标组件在（hasSession 两种都认）。
+  if (!store.hasSession(sessionId)) return false;
   const target = options.originId && store.nodes[options.originId] ? options.originId : store.rootId;
 
   if (busy.has(sessionId)) {

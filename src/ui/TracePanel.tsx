@@ -30,6 +30,8 @@ export function TracePanel() {
   const open = useDesktopStore((s) => s.traceOpen);
   const setOpen = useDesktopStore((s) => s.setTraceOpen);
   const sessions = useDesktopStore((s) => s.sessions);
+  const nodes = useDesktopStore((s) => s.nodes);
+  const agentRuns = useDesktopStore((s) => s.agentRuns);
   const logs = useDesktopStore((s) => s.logs);
   const clearLogs = useDesktopStore((s) => s.clearLogs);
 
@@ -40,14 +42,32 @@ export function TracePanel() {
   if (!open) return null;
 
   /*
-   * 每个输入框有自己的轨迹（工作状态不共享）。面板把它们**按时间合并**展示，
-   * 多于一个输入框时在行首标出是哪个输入框发起的。
+   * 每个输入框、每个组件 agent 都有自己的轨迹（工作状态不共享）。
+   * 面板把它们**按时间合并**展示，来源多于一个时在行首标出是谁。
+   *
+   * `agent.progress === 'none'` 的 agent 不并进来 —— 那是创建者在说
+   * "进度我已经画在它自己的界面里了，别重复显示"。
    */
-  const merged = sessions.flatMap((ses) =>
-    ses.trace.map((step) => ({ step, sessionId: ses.id, sessionTitle: ses.title })),
-  );
-  const many = sessions.length > 1;
-  const anyRunning = sessions.some((ses) => ses.status.running);
+  const agentRows = Object.entries(agentRuns)
+    .filter(([id]) => {
+      const n = nodes[id];
+      return !!n && n.kind === 'component' && n.agent?.progress !== 'none';
+    })
+    .flatMap(([id, run]) => {
+      const n = nodes[id];
+      const whose = n && n.kind === 'component' ? n.name : id;
+      return run.trace.map((step) => ({ step, whose, owner: id }));
+    });
+  const merged = [
+    ...sessions.flatMap((ses) =>
+      ses.trace.map((step) => ({ step, whose: ses.title, owner: ses.id })),
+    ),
+    ...agentRows,
+  ];
+  const many = new Set(merged.map((m) => m.owner)).size > 1;
+  const anyRunning =
+    sessions.some((ses) => ses.status.running) ||
+    Object.values(agentRuns).some((r) => r.status.running);
 
   const okCount = merged.filter((m) => m.step.status === 'ok').length;
   const failCount = merged.filter((m) => m.step.status === 'fail').length;
@@ -129,7 +149,7 @@ export function TracePanel() {
             ) : null}
 
             <div className="ygg-trace">
-              {shown.map(({ step, sessionTitle }) => {
+              {shown.map(({ step, whose }) => {
                 const isOpen = expanded === step.id;
                 return (
                   <div
@@ -149,7 +169,7 @@ export function TracePanel() {
                   >
                     <div className="ygg-step-head">
                       <span className="mark">{STATUS_MARK[step.status]}</span>
-                      {many ? <span className="kind whose">{sessionTitle}</span> : null}
+                      {many ? <span className="kind whose">{whose}</span> : null}
                       <span className="kind">{step.round > 0 ? 'R' + step.round : '·'}</span>
                       <span className="label">{step.label}</span>
                       <span className="spacer" />
