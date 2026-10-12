@@ -38,22 +38,12 @@ export function SettingsPanel() {
             <div className="ygg-field">
               <button
                 className={'ygg-toggle' + (adultOn ? ' on' : '')}
-                title={adultOn ? '点击关闭' : '点击开启'}
+                title={adultOn ? '成人模式：开（点击关闭）' : '成人模式：关（点击开启）'}
                 onClick={() => setSettings({ adultMode: !adultOn })}
               >
                 <span className="dot" />
                 成人模式：{adultOn ? '开' : '关'}
               </button>
-              <div className="ygg-hint">
-                开启后会给 Agent 注入一段提示：**不要因为话题涉及性 / 性器官 / 情色就回避、说教或拒绝**，
-                把它当正当题材处理（医学、解剖、性教育、艺术、文学、法律、心理）；
-                需要相关图片时照常用 fetch_url 与 view_image。默认关闭。
-              </div>
-              <div className="ygg-hint">
-                两点边界：① 它只改**本应用写给模型的提示词**，改不了模型服务商自己的安全策略 ——
-                服务端该拒还是会拒，Agent 会把拒绝原样告诉你；② 涉及未成年人的性内容与其它违法内容
-                始终不在这个模式的范围内。
-              </div>
             </div>
           </div>
         ) : (

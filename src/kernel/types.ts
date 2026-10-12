@@ -145,6 +145,11 @@ export interface ComponentNode extends BaseNode {
    * 要先在 Nodes 里解锁才能删。
    */
   locked?: boolean;
+  /**
+   * 它是从哪儿被派生出来的：**发起这次派生的输入框会话 id，或发起它的组件 id**。
+   * 用来画"派生连线"（从源的中心连到它的中心），也让"关闭"能连回同一个来源。
+   */
+  bornFrom?: string;
   /** 带这个字段的组件就是一个 Agent。 */
   agent?: AgentFacet;
   /** 基底 Agent：它是 agent 组件，但不作为窗口渲染。 */

@@ -8,6 +8,7 @@ import { SNAP_GRID } from './grid';
 import { Taskbar } from '../ui/Taskbar';
 import { YggdrasilInput } from '../ui/YggdrasilInput';
 import { InspectorPanel } from '../ui/InspectorPanel';
+import { FxLayer } from '../ui/FxLayer';
 import { TracePanel } from '../ui/TracePanel';
 import { SettingsPanel } from '../ui/SettingsPanel';
 import type { ComponentNode } from '../kernel/types';
@@ -42,6 +43,7 @@ export function Desktop() {
    */
   // 按住 Shift 拖动窗口时铺一层网格；网格尺寸与吸附点共用 SNAP_GRID，不会各写一份。
   const snapDrag = useDesktopStore((s) => s.snapDrag);
+  const dying = useDesktopStore((s) => s.dying);
 
   const reportError = useCallback(
     (m: string, id: string, name: string) => log('error', 'comp ' + name + ' ✕ ' + m, id),
@@ -67,6 +69,9 @@ export function Desktop() {
         网格：只作为背景图案，层级夹在背景与窗口之间（z-index: 0）。
         用 SVG <pattern> 画线，不用渐变 —— 一是界面约束里禁掉了渐变，二是 SVG 线更锐利。
       */}
+      {/* 派生连线：创建时画在窗口之下（组件从线的末端长出来），关闭时画在窗口之上（像被线收走）。 */}
+      <FxLayer />
+
       {snapDrag ? (
         <div className="ygg-grid-overlay" aria-hidden>
           <svg width="100%" height="100%">
@@ -96,6 +101,9 @@ export function Desktop() {
           tokens={node.tokens}
           frame={node.frame}
           fixed={node.fixed}
+          dying={!!dying[node.id]}
+          // 刚派生出来的窗口：入场更慢一点，让"曲线先到、组件再浮现"的顺序看得出来。
+          newborn={!!node.bornFrom && Date.now() - node.createdAt < 1500}
           onRect={(r) => updateNode(node.id, { pos: { x: r.x, y: r.y }, size: { w: r.w, h: r.h } })}
           onFocus={() => focus(node.id)}
           // 交给 store：先播"收进任务栏"动画，动画结束才真正变成 minimized。

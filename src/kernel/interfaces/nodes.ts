@@ -55,7 +55,7 @@ function isSubstantiveAgent(op: DerivationOp): boolean {
  * 没有"创建 Agent"这条独立路径 —— **创建一个带 agent 能力的组件，就是创建 Agent**。
  * 带不带能力由 op.agent 或源码里的 useAgent 决定，产出的都是一个普通组件。
  */
-function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
+function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionId: string }) {
   const name = strOr(op.name, '组件');
   const store = useDesktopStore.getState();
   const id = newNodeId();
@@ -151,8 +151,35 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
     });
   }
 
+  // 记下"从哪来"：这条信息用来画派生连线，也用来在关闭时连回同一个来源。
+  node.bornFrom = ctx.sessionId;
   store.addNode(node);
   store.focus(id);
+  /*
+   * 派生连线：从来源（输入框会话，或发起它的那个组件）的中心，
+   * 连到新组件的中心。曲线画在窗口**之下**，所以它是"组件从这条线里长出来"的顺序。
+   */
+  const view = desktop();
+  const ses = view.sessions.find((x) => x.id === ctx.sessionId);
+  const host = view.nodes[ctx.originId];
+  const center = ses
+    ? { x: ses.rect.x + ses.rect.w / 2, y: ses.rect.y + ses.rect.h / 2 }
+    : // 宿主组件也可以当源（子 Agent 自己派生出来的东西）；
+      // 但基底不算 —— 它不是窗口，没有可用的矩形。
+      host && host.kind === 'component' && !host.root
+      ? { x: host.pos.x + host.size.w / 2, y: host.pos.y + host.size.h / 2 }
+      : null;
+  if (center) {
+    store.emitCurve({
+      fromX: center.x,
+      fromY: center.y,
+      toX: node.pos.x + node.size.w / 2,
+      toY: node.pos.y + node.size.h / 2,
+      kind: 'birth',
+      // 画在窗口**之下**：曲线先到，组件再从它末端缓缓长出来。
+      layer: 'back',
+    });
+  }
   desktop().log('op', '+ comp ' + name, id);
 
   // 返回信息只说明"这个组件有没有 agent 能力"，不把它叫成另一种东西。

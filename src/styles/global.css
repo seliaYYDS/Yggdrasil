@@ -56,6 +56,76 @@ button:focus:not(:focus-visible) { outline: none; }
 @keyframes ygg-spin { to { transform: rotate(360deg); } }
 @keyframes ygg-grow { from { transform: scaleY(.2); opacity: 0; } to { transform: scaleY(1); opacity: 1; } }
 
+/* ---------------- 派生连线（组件从哪儿长出来的） ---------------- */
+
+/*
+ * 曲线层铺满视口、不接鼠标事件。
+ * 创建时画在窗口**之下**（back），关闭时画在窗口**之上**（front）——
+ * 顺序不同是因为叙事不同：创建是"从线里长出来"，关闭是"被线收回去"。
+ */
+.ygg-fx {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.ygg-fx-back { z-index: 1; }
+.ygg-fx-front { z-index: 900000; }
+
+/*
+ * 曲线用 pathLength=1 归一化，于是 stroke-dasharray/dashoffset 与长度无关：
+ * 先"画出来"（0→45%），停一下，再整体淡出（→100%）。
+ */
+.ygg-curve,
+.ygg-curve-halo {
+  fill: none;
+  stroke: var(--ygg-accent);
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: ygg-curve-draw 820ms var(--ygg-ease-out) both;
+}
+.ygg-curve { stroke-width: 1.5; }
+.ygg-curve-halo { stroke-width: 5; opacity: .18; }
+.ygg-curve.is-death, .ygg-curve-halo.is-death { stroke: var(--ygg-accent-hi); }
+.ygg-curve-dot {
+  fill: var(--ygg-accent-hi);
+  animation: ygg-curve-dot 820ms var(--ygg-ease-out) both;
+}
+
+@keyframes ygg-curve-draw {
+  0% { stroke-dashoffset: 1; opacity: 1; }
+  45% { stroke-dashoffset: 0; opacity: 1; }
+  70% { stroke-dashoffset: 0; opacity: 1; }
+  100% { stroke-dashoffset: 0; opacity: 0; }
+}
+@keyframes ygg-curve-dot {
+  0% { opacity: 0; r: 0; }
+  45% { opacity: 1; }
+  70% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/*
+ * 刚派生出来的窗口：**慢一点、晚一点**出现。
+ * 于是顺序是"曲线先流过去 → 组件缓缓浮现"，而不是两件事同时发生。
+ */
+.ygg-window.is-newborn {
+  animation: ygg-window-born 520ms var(--ygg-ease-out) 260ms both;
+}
+@keyframes ygg-window-born {
+  from { opacity: 0; transform: translateY(4px) scale(.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 正在被收走的窗口：淡出 + 轻微缩小，和那条线一起消失。 */
+.ygg-window.is-dying {
+  opacity: 0;
+  transform: scale(.97);
+  transition: opacity 260ms var(--ygg-ease), transform 260ms var(--ygg-ease);
+  pointer-events: none;
+}
+
 /* ---------------- 桌面：世界树的根系 ---------------- */
 
 .ygg-desktop { position: fixed; inset: 0; overflow: hidden; }

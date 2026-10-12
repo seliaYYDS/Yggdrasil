@@ -52,6 +52,10 @@ interface Props {
   frame?: 'window' | 'widget';
   /** 挂件固定后连操控按钮都不显示（也就动不了）。 */
   fixed?: boolean;
+  /** 正在播"被收走"的淡出动画：淡出结束后才真正删除。 */
+  dying?: boolean;
+  /** 刚派生出来：入场动画更慢、带一点延迟，让派生连线先到。 */
+  newborn?: boolean;
   children: ReactNode;
 }
 
@@ -79,6 +83,8 @@ export function WindowFrame({
   tokens,
   frame,
   fixed,
+  dying,
+  newborn,
   children,
 }: Props) {
   const isWidget = frame === 'widget';
@@ -274,6 +280,8 @@ export function WindowFrame({
       className={
         'ygg-window' +
         (isWidget ? ' is-widget' : '') +
+        (newborn ? ' is-newborn' : '') +
+        (dying ? ' is-dying' : '') +
         (pinned ? ' is-fixed' : '') +
         (focused ? ' is-focused' : '') +
         (drag ? ' is-dragging' : '') +

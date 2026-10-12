@@ -329,6 +329,24 @@ export function makeFacet(partial: Partial<AgentFacet> = {}): AgentFacet {
  * **互不相通** —— 这就是"子 agent 不占用基底"的实现基础。
  * 共享的是底层记忆（节点树、样式、各自的对话历史与账本），不是这个。
  */
+/** 一条派生连线的几何与时间。坐标是桌面坐标系，渲染时直接用。 */
+export interface FxCurve {
+  id: string;
+  fromX: number;
+  fromY: number;
+  toX: number;
+  toY: number;
+  /** birth = 创建（连线出现 → 组件缓缓浮现）；death = 关闭（连线出现 → 组件淡出）。 */
+  kind: 'birth' | 'death';
+  /** 画在哪一层之上：'back' 在窗口之下（创建时），'front' 在窗口之上（关闭时）。 */
+  layer: 'back' | 'front';
+}
+
+/** 曲线存活时长，与 CSS 动画时长对齐。 */
+export const CURVE_MS = 820;
+/** 关闭动画时长：先淡出，再真正删除。 */
+export const DEATH_MS = 260;
+
 export interface RunSlice {
   status: RunStatus;
   trace: TraceStep[];
@@ -533,6 +551,16 @@ interface DesktopState {
    * 不进持久化。
    */
   snapDrag: boolean;
+  /**
+   * 正在播的"派生连线"：从发起它的输入框 / 组件中心，连到新组件中心的一条 S 曲线。
+   * 纯视觉，不进持久化 —— 每个图形到点自己过期。
+   */
+  curves: FxCurve[];
+  /**
+   * 正在播"消失动画"的节点 id。它们仍在 nodes 里，只是渲染成淡出态；
+   * 动画结束后才真正删除。不进持久化。
+   */
+  dying: Record<string, true>;
 
   hydrate: () => Promise<void>;
   addNode: (node: YggNode) => void;
@@ -587,6 +615,11 @@ interface DesktopState {
   setPanelMinimized: (panel: PanelKey, minimized: boolean) => void;
   /** 拖动中切换网格吸附（按住 / 松开 Shift 都会调）。 */
   setSnapDrag: (on: boolean) => void;
+  /**
+   * 播一条派生连线。`layer` 决定画在窗口之下还是之上。
+   * 到点自动移除，调用方不用管回收。
+   */
+  emitCurve: (c: Omit<FxCurve, 'id'>) => void;
   setFeedback: (feedback: RunFeedback | null) => void;
   appendLedger: (agentId: NodeId, entries: string[]) => void;
   setPanelRect: (panel: PanelKey, rect: PanelRect) => void;
@@ -640,6 +673,28 @@ function mapRun(
         : ses,
     ),
   };
+}
+
+/**
+ * 求"派生源"的中心点，用于画派生连线。
+ *
+ * 来源可以是**输入框会话 id**（用户从某个输入框让它派生）或**组件节点 id**
+ * （子 Agent 自己派生出来的东西）。两者取不到就返回 null —— 没有源就不画线，
+ * 不要瞎连一个默认位置。
+ */
+function sourceCenter(
+  s: Pick<DesktopState, 'sessions' | 'nodes'>,
+  ref: string | undefined,
+): { x: number; y: number } | null {
+  if (!ref) return null;
+  const ses = s.sessions.find((x) => x.id === ref);
+  if (ses) return { x: ses.rect.x + ses.rect.w / 2, y: ses.rect.y + ses.rect.h / 2 };
+  const node = s.nodes[ref];
+  // 基底不是窗口，它的 pos/size 是无意义的 0×0 —— 拿它当源会画出一条从左上角冒出来的线。
+  if (node && node.kind === 'component' && !node.root) {
+    return { x: node.pos.x + node.size.w / 2, y: node.pos.y + node.size.h / 2 };
+  }
+  return null;
 }
 
 /** 只读地取一份运行状态。 */
@@ -736,6 +791,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   leaving: {},
   restoring: {},
   snapDrag: false,
+  curves: [],
+  dying: {},
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -938,10 +995,60 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       get().log('warn', '已锁定，未删除 ' + lockedHit, lockedHit);
       return;
     }
+
+    /*
+     * 先把"它当初是从哪个输入框/组件冒出来的"那条线放出来，并让窗口淡出，
+     * 260ms 后才真正删。数据层推迟一点没有副作用 —— 期间它只是带了个 dying 标记。
+     */
+    const s0 = get();
+    const freshly = ids.filter((nid) => !s0.dying[nid]);
+    if (freshly.length > 0) {
+      for (const nid of freshly) {
+        const node = s0.nodes[nid];
+        if (!node || node.kind !== 'component' || node.root) continue;
+        const from = sourceCenter(s0, node.bornFrom);
+        if (!from) continue;
+        s0.emitCurve({
+          fromX: from.x,
+          fromY: from.y,
+          toX: node.pos.x + node.size.w / 2,
+          toY: node.pos.y + node.size.h / 2,
+          kind: 'death',
+          layer: 'front',
+        });
+      }
+      set((s) => {
+        const dying = { ...s.dying };
+        for (const nid of freshly) dying[nid] = true;
+        return { dying };
+      });
+
+      window.setTimeout(() => {
+        const st = useDesktopStore.getState();
+        set((s) => {
+          const nodes = { ...s.nodes };
+          for (const nid of ids) delete nodes[nid];
+          // 被删掉的 agent 的运行状态一并清掉，别留下没有窗口的进度。
+          const agentRuns = { ...s.agentRuns };
+          for (const nid of ids) delete agentRuns[nid];
+          const dying = { ...s.dying };
+          for (const nid of ids) delete dying[nid];
+          return {
+            nodes,
+            agentRuns,
+            dying,
+            focusedId: s.focusedId && ids.includes(s.focusedId) ? null : s.focusedId,
+          };
+        });
+        st.log('op', '- ' + id);
+        schedulePersist();
+      }, DEATH_MS);
+      return;
+    }
+
     set((s) => {
       const nodes = { ...s.nodes };
       for (const nid of ids) delete nodes[nid];
-      // 被删掉的 agent 的运行状态一并清掉，别留下没有窗口的进度。
       const agentRuns = { ...s.agentRuns };
       for (const nid of ids) delete agentRuns[nid];
       return {
@@ -1098,6 +1205,15 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       return { minimizedPanels: next };
     });
     schedulePersist();
+  },
+
+  emitCurve: (c) => {
+    const id = newNodeId();
+    set((s) => ({ curves: [...s.curves, { ...c, id }] }));
+    // 到点自己走，调用方不用管回收；图形多了也只是短暂堆积。
+    window.setTimeout(() => {
+      set((s) => ({ curves: s.curves.filter((x) => x.id !== id) }));
+    }, CURVE_MS);
   },
 
   setSnapDrag: (on) => {
@@ -1361,6 +1477,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       leaving: {},
       restoring: {},
       snapDrag: false,
+      curves: [],
+      dying: {},
       inspectorRect: panels.inspector,
       settingsRect: panels.settings,
       traceRect: panels.trace,
