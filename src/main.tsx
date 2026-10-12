@@ -5,9 +5,17 @@ import { registerBuiltinTools } from './kernel/registry/builtins';
 import { registerAllInterfaces } from './kernel/interfaces';
 import { registerBuiltinSurfaces } from './host/surfaces';
 import { registerModule } from './host/compile';
+import { installConsoleErrorHooks } from './host/consoleErrors';
 import { AgentIdContext, useAgent, isAgentId } from './host/agentRuntimeModule';
 import './styles/tokens.css';
 import './styles/global.css';
+
+/*
+ * 控制台报错钩子**在这里就装**，而不是等 App 的 useEffect ——
+ * 后者要等第一次渲染完成，挂载期间（以及早于渲染的模块错误）都会被漏掉，
+ * 用户看到的就是"报错了但没弹窗"。
+ */
+installConsoleErrorHooks();
 
 registerBuiltinTools();
 registerAllInterfaces();

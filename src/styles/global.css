@@ -816,8 +816,11 @@ button:focus:not(:focus-visible) { outline: none; }
   gap: 8px;
   flex: none;
   min-height: 15px;
-  /* 右边给右下角的指标让位：指标是绝对定位的，会盖在这一行的右端上。 */
-  padding-right: 132px;
+  /*
+   * 右边给右下角的指标让位（绝对值会盖在这一行右端）。
+   * 宽度由 YggdrasilInput 实测后以行内样式给出 —— 写死数值会在指标变长时压到文字上。
+   */
+  padding-right: 0;
   font-size: 11px;
   color: var(--ygg-fg-muted);
 }
@@ -847,6 +850,7 @@ button:focus:not(:focus-visible) { outline: none; }
   letter-spacing: .03em;
 }
 
+.ygg-compose-send.is-stop { border-color: var(--ygg-danger); color: var(--ygg-danger); }
 .ygg-compose-send {
   flex: none;
   /* 输入行被拉伸时，发送键贴在行底，不跟着变高 */

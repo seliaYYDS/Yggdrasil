@@ -7,7 +7,9 @@ import {
   type InputSession,
   type SessionMetrics,
 } from '../store/desktopStore';
-import { submitInput } from '../kernel/agent/scheduler';
+import { stopRun, submitInput } from '../kernel/agent/scheduler';
+import { QueueIcon, SendIcon, StopIcon } from './icons';
+import { captureScreen } from '../host/screen';
 import { WindowFrame } from '../host/WindowFrame';
 import { imageFilesFromClipboard, MAX_IMAGES, prepareImage, type PreparedImage } from '../host/image';
 
@@ -113,6 +115,9 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   const detail = status.detail;
   const removeQueued = useDesktopStore((s) => s.removeQueued);
   const pendingOpen = useDesktopStore((s) => s.pendingOpen);
+  const pendingShot = useDesktopStore((s) => s.pendingShot);
+  const clearPendingShot = useDesktopStore((s) => s.clearPendingShot);
+  const shotMine = pendingShot?.sessionId === session.id;
   const clearPendingOpen = useDesktopStore((s) => s.clearPendingOpen);
   const setSessionRect = useDesktopStore((s) => s.setSessionRect);
   const requestCloseSession = useDesktopStore((s) => s.requestClose);
@@ -188,6 +193,21 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   }, [text]);
 
   const needed = inputMinHeight(areaH, queue.length, pendingOpen.length, images.length);
+  /** 生成中且输入框为空 → 发送按钮变成停止。 */
+  const canStop = busy && !text.trim() && images.length === 0;
+
+  /*
+   * 右下角那三个数的**实际宽度**要告诉状态行，让它留出对应的右边距。
+   *
+   * 之前这里写死 132px：指标串一变长（比如 ~命中 100% · 123.4 tok/s · 1.2M）就压到
+   * 状态行的文字上 —— 生成过程中 detail 很长时最明显，用户看到的就是"输出和指标重叠"。
+   */
+  const metricsRef = useRef<HTMLSpanElement | null>(null);
+  const [metricsW, setMetricsW] = useState(0);
+  useLayoutEffect(() => {
+    const w = metricsRef.current ? Math.ceil(metricsRef.current.getBoundingClientRect().width) : 0;
+    setMetricsW((prev) => (prev === w ? prev : w));
+  });
 
   /**
    * 把"内容需要多高"同步回会话矩形。
@@ -242,6 +262,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
         */}
         {metricsText(metrics) ? (
           <span
+            ref={metricsRef}
             className="ygg-metrics"
             title={
               (metrics.exact ? '' : '（含本地估算，数字前带 ~）') +
@@ -259,6 +280,42 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           被弹窗拦截的页面：网页只能在"用户手势"里开新窗口，所以这里由用户点一下。
           点这个按钮就是真正的手势，window.open 不会被拦。
         */}
+        {/*
+          截图请求：浏览器只允许在"用户手势"里抓屏，所以 Agent 只能登记请求，
+          由用户点这一下 —— 点了才有手势，才抓得到真实的当前画面。
+        */}
+        {shotMine ? (
+          <button
+            className="ygg-pending"
+            title="浏览器要求由用户手势触发截图；点了之后这张图会直接进入 Agent 的上下文"
+            onClick={() => {
+              clearPendingShot();
+              void (async () => {
+                const r = await captureScreen();
+                const store = useDesktopStore.getState();
+                if (!r.ok) {
+                  store.log('warn', '截图 ✕ ' + r.error);
+                  return;
+                }
+                // 图进"要它的那个会话"的上下文：下一轮它就看得见。
+                store.appendSessionMessage(session.id, {
+                  role: 'user',
+                  content: '[截图] 这是当前页面的真实截图。',
+                  images: [r.dataUrl],
+                });
+                store.log('op', '截图已进入上下文', session.id);
+                // 自动追问一句，否则 Agent 要等用户下次说话才看得到这张图。
+                submitInput('[截图] 当前页面的截图已经附上，请查看并据此判断是否符合预期。', {
+                  sessionId: session.id,
+                });
+              })();
+            }}
+          >
+            <span className="ygg-pending-dot" />
+            截图给 Agent
+          </button>
+        ) : null}
+
         {pendingOpen.length > 0 ? (
           <button
             className="ygg-pending"
@@ -367,12 +424,22 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
             }}
           />
           <button
-            className={'ygg-compose-send' + (busy ? ' is-queue' : '')}
-            disabled={!text.trim() && images.length === 0}
-            title={busy ? '加入队列' : '发送'}
-            onClick={submit}
+            /*
+             * 生成中 + 输入框是空的 → 这个按钮变成**停止**。
+             * 输入框里有内容时才保持"加入队列"（那时用户显然是想再发一条）。
+             */
+            className={'ygg-compose-send' + (busy ? ' is-queue' : '') + (canStop ? ' is-stop' : '')}
+            disabled={!canStop && !text.trim() && images.length === 0}
+            title={canStop ? '停止本轮（会清空排队）' : busy ? '加入队列' : '发送'}
+            onClick={canStop ? () => stopRun(session.id) : submit}
           >
-            {busy ? '⇥' : '↑'}
+            {canStop ? (
+              <StopIcon width={13} height={13} />
+            ) : busy ? (
+              <QueueIcon width={13} height={13} />
+            ) : (
+              <SendIcon width={13} height={13} />
+            )}
           </button>
         </div>
 
@@ -380,7 +447,11 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           状态行：左边是运行状态（或图片/报错提示），右边固定是三个用量指标。
           **指标不单独占一行** —— 它跟状态共用这一行，靠 margin-left:auto 贴到右端。
         */}
-        <div className={'ygg-compose-state' + (busy ? ' is-busy' : '')}>
+        <div
+          className={'ygg-compose-state' + (busy ? ' is-busy' : '')}
+          // 按指标实测宽度避让（没数据时指标不渲染，宽度回 0）。
+          style={metricsW > 0 ? { paddingRight: metricsW + 10 } : undefined}
+        >
           {busy ? (
             <>
               <span className="ygg-spin" />

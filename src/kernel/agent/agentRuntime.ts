@@ -142,6 +142,8 @@ export interface RunOptions {
   sessionId?: string;
   /** 这次请求附带的图片（data URL）。用户在输入框里粘贴或拖进来的。 */
   images?: string[];
+  /** 用户按"停止"时在这里中止 —— 轮次之间、以及模型调用中都会检查它。 */
+  signal?: AbortSignal;
 }
 
 /**
@@ -260,6 +262,8 @@ interface CallOk {
 interface CallFail {
   ok: false;
   error: string;
+  /** true = 用户按了"停止"（不是服务端/网络故障），不要再重试、也不要当失败汇报。 */
+  stopped?: boolean;
 }
 
 async function chatWithRetry(
@@ -267,12 +271,18 @@ async function chatWithRetry(
   messages: ChatMessage[],
   handlers: StreamHandlers,
   attempts = 3,
+  /** 用户按"停止"时会被 abort —— 中止不是故障，不该重试、也不该报成错误。 */
+  stopSignal?: AbortSignal,
 ): Promise<CallOk | CallFail> {
   let lastError = '';
   for (let i = 0; i < attempts; i += 1) {
+    if (stopSignal?.aborted) return { ok: false, error: '已停止', stopped: true };
     handlers.onAttempt?.(i);
     const ctl = new AbortController();
     const timer = window.setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
+    // 停止信号与超时信号合并：任一触发都中止这次请求。
+    const onStop = () => ctl.abort();
+    stopSignal?.addEventListener('abort', onStop, { once: true });
     try {
       const out = await chatStream(settings, messages, {
         onDelta: handlers.onDelta,
@@ -282,10 +292,12 @@ async function chatWithRetry(
       return { ok: true, text: out.text, usage: out.usage, ms: out.ms };
     } catch (e) {
       lastError = (e as Error).message;
+      if (stopSignal?.aborted) return { ok: false, error: '已停止', stopped: true };
       if (!isRetryable(lastError) || i === attempts - 1) break;
       await sleep(400 * (i + 1));
     } finally {
       window.clearTimeout(timer);
+      stopSignal?.removeEventListener('abort', onStop);
     }
   }
   return { ok: false, error: lastError };
@@ -343,6 +355,7 @@ async function runReply(
   sessionId: string,
   runId: string,
   images: string[],
+  signal?: AbortSignal,
 ): Promise<RunSummary> {
   const store = useDesktopStore.getState();
   const origin = store.nodes[originId];
@@ -396,7 +409,7 @@ async function runReply(
       text = '';
       thinking = '';
     },
-  });
+  }, 3, signal);
 
   const failReply = (title: string, detail: string, err: string): RunSummary => {
     store.upsertSessionStep(sessionId, { ...step, status: 'fail', message: err, endedAt: Date.now() });
@@ -406,6 +419,8 @@ async function runReply(
     return { ok: false, added: 0, rounds: 0, okCount: 0, failCount: 1, error: err };
   };
 
+  // 停止要排在"失败"前面：它是用户意图，不是故障。
+  if (!call.ok && call.stopped) return failReply('已停止', '你按了停止，这一轮没有继续。', '已停止');
   if (!call.ok) return failReply('模型回复失败', call.error, call.error);
   const reply = call.text.trim();
   if (!reply) return failReply('模型没有返回内容', '这次调用没有拿到任何文本。', '空内容');
@@ -446,6 +461,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
   }
 
   const sessionId = options.sessionId ?? MAIN_SESSION;
+  // 用户按"停止"时 abort 它；轮次之间与模型调用中都会检查。
+  const signal = options.signal;
   const images = (options.images ?? []).filter(
     (u) => typeof u === 'string' && u.startsWith('data:image/'),
   );
@@ -461,7 +478,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
    * act 档才需要下面那一整套（接口目录、JSON 解析、多轮、观察回灌、账本、作用域）。
    */
   if (isAgentic(origin) && origin.agent.mode === 'reply') {
-    return runReply(input, originId, sessionId, runId, images);
+    return runReply(input, originId, sessionId, runId, images, options.signal);
   }
 
   const pushStep = (step: TraceStep) => useDesktopStore.getState().upsertSessionStep(sessionId, step);
@@ -633,7 +650,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             flush();
             setRunStatus({ phase: '模型思考中', detail: chunk.slice(-140) });
           },
-        }, 3);
+        }, 3, signal);
 
         if (call.ok) {
           // 每轮都记：act 档一轮可能发多次请求，累计的才是这次任务真实的开销。

@@ -627,6 +627,13 @@ interface DesktopState {
    * 纯瞬态，不进持久化。
    */
   consolePrompt: { id: string; text: string } | null;
+  /**
+   * Agent 请求了截图、等用户点一下。
+   *
+   * 浏览器只在**用户手势**里允许屏幕捕获，所以 Agent 的调用只能"登记请求"，
+   * 由输入框显示一个按钮等用户点。记住是哪个会话要的，图才能进对上下文。
+   */
+  pendingShot: { sessionId: string } | null;
 
   hydrate: () => Promise<void>;
   addNode: (node: YggNode) => void;
@@ -717,6 +724,12 @@ interface DesktopState {
   reportConsoleError: (text: string) => void;
   /** 关掉那个确认框（用户点了取消，或已经交给 Agent 了）。 */
   dismissConsolePrompt: () => void;
+  /** Agent 请求截图（真正的抓取要等用户点按钮，见 pendingShot）。 */
+  requestShot: (sessionId: string) => void;
+  /** 清掉待截图请求（用户点了、或放弃了）。 */
+  clearPendingShot: () => void;
+  /** 内部用：挂上提示（策略判断在 reportConsoleError 里，别直接调它）。 */
+  showConsolePrompt: (text: string) => void;
   setFeedback: (feedback: RunFeedback | null) => void;
   appendLedger: (agentId: NodeId, entries: string[]) => void;
   setPanelRect: (panel: PanelKey, rect: PanelRect) => void;
@@ -744,9 +757,20 @@ interface DesktopState {
 }
 
 /** 同一个错误在这个时间内不再追问（毫秒）。 */
-const ERROR_ASK_COOLDOWN_MS = 60000;
+const ERROR_ASK_COOLDOWN_MS = 20000;
 /** 两次追问之间至少隔这么久 —— 防止一个狂抛错的组件把我问疯。 */
-const ERROR_ASK_GAP_MS = 15000;
+const ERROR_ASK_GAP_MS = 4000;
+/** Agent 忙时先记下错误，等它空闲再问；这是轮询间隔。 */
+const ERROR_RETRY_MS = 800;
+/**
+ * 等待空闲期间暂存的错误。
+ *
+ * 之前是"忙就直接丢" —— 用户看到的现象就是"有时候不弹，刷新一下才弹"：
+ * 报错时 Agent 正在跑，这条错误被永久丢掉；刷新后同一个错误再抛一次，那时空闲了才弹。
+ * 现在暂存下来，等它跑完再问。
+ */
+let pendingError: { text: string; at: number } | null = null;
+let retryTimer: number | null = null;
 /** 指纹 -> 上次问过的时间。只活在内存里，刷新即清。 */
 const consoleAsked = new Map<string, number>();
 let lastAskAt = 0;
@@ -759,6 +783,54 @@ function nowMs(): number {
 export function resetConsoleAskMemory(): void {
   consoleAsked.clear();
   lastAskAt = 0;
+  pendingError = null;
+  if (retryTimer !== null) {
+    window.clearTimeout(retryTimer);
+    retryTimer = null;
+  }
+}
+
+/** 有没有任何会话在跑。 */
+function isAgentRunning(s: DesktopState): boolean {
+  return (
+    s.sessions.some((ses) => ses.status.running) ||
+    Object.values(s.agentRuns).some((r) => r.status.running)
+  );
+}
+
+/**
+ * 真正决定"弹不弹"的地方。返回是否弹了。
+ *
+ * 三条策略：同一个错误 20s 内不重复问；两次追问至少隔 4s（防狂抛错刷屏）；
+ * 已经有提示时不再叠。
+ */
+function tryShowConsolePrompt(text: string): boolean {
+  const s = useDesktopStore.getState();
+  if (s.consolePrompt) return false;
+  const fp = text.slice(0, 300);
+  const last = consoleAsked.get(fp) ?? 0;
+  if (nowMs() - last < ERROR_ASK_COOLDOWN_MS) return false;
+  if (nowMs() - lastAskAt < ERROR_ASK_GAP_MS) return false;
+  consoleAsked.set(fp, nowMs());
+  lastAskAt = nowMs();
+  pendingError = null;
+  s.showConsolePrompt(text);
+  return true;
+}
+
+/** Agent 忙的时候挂一个轮询，等它空闲了再把暂存的错误问出来。 */
+function scheduleConsoleRetry(): void {
+  if (retryTimer !== null) return;
+  retryTimer = window.setTimeout(() => {
+    retryTimer = null;
+    const s = useDesktopStore.getState();
+    if (!pendingError) return;
+    if (isAgentRunning(s)) {
+      scheduleConsoleRetry();
+      return;
+    }
+    tryShowConsolePrompt(pendingError.text);
+  }, ERROR_RETRY_MS);
 }
 
 let persistTimer: number | null = null;
@@ -942,6 +1014,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   curves: [],
   dying: {},
   consolePrompt: null,
+  pendingShot: null,
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -1304,6 +1377,11 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   setSessionStatus: (id, patch) => {
     set((s) => mapRun(s, id, (run) => ({ ...run, status: { ...run.status, ...patch } })));
+    // 运行刚结束 → 顺手把"跑到一半时报的错"问出来（不用等轮询）。
+    if (patch.running === false && pendingError) {
+      const s = get();
+      if (!isAgentRunning(s)) scheduleConsoleRetry();
+    }
   },
 
   beginSessionTrace: (id, runId) => {
@@ -1350,27 +1428,24 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   },
 
   reportConsoleError: (text) => {
-    const s = get();
     const value = text.trim();
     if (!value) return;
-    // ① Agent 必须空闲：忙的时候问了也没人能动，反而干扰正在跑的任务。
-    const busy =
-      s.sessions.some((ses) => ses.status.running) ||
-      Object.values(s.agentRuns).some((r) => r.status.running);
-    if (busy) return;
-    // ② 同一个错误在冷却期内不重复问。
-    const fp = value.slice(0, 300);
-    const last = consoleAsked.get(fp) ?? 0;
-    if (nowMs() - last < ERROR_ASK_COOLDOWN_MS) return;
-    // ③ 也不能连着问：一个每帧抛错的组件会瞬间堆出几十条不同文本。
-    if (nowMs() - lastAskAt < ERROR_ASK_GAP_MS) return;
-    if (s.consolePrompt) return;
-    consoleAsked.set(fp, nowMs());
-    lastAskAt = nowMs();
-    set({ consolePrompt: { id: newNodeId(), text: value } });
+    // Agent 忙 → **记下来等它空闲**（以前是直接丢，所以"有时要刷新才弹"）。
+    if (isAgentRunning(get())) {
+      // 只留最新一条：连抛错时问最靠后的那个更有意义。
+      pendingError = { text: value, at: nowMs() };
+      scheduleConsoleRetry();
+      return;
+    }
+    tryShowConsolePrompt(value);
   },
 
   dismissConsolePrompt: () => set({ consolePrompt: null }),
+
+  requestShot: (sessionId) => set({ pendingShot: { sessionId } }),
+  clearPendingShot: () => set({ pendingShot: null }),
+
+  showConsolePrompt: (text) => set({ consolePrompt: { id: newNodeId(), text } }),
 
   emitCurve: (c) => {
     const id = newNodeId();
@@ -1702,6 +1777,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       curves: [],
       dying: {},
       consolePrompt: null,
+      pendingShot: null,
       inspectorRect: panels.inspector,
       settingsRect: panels.settings,
       traceRect: panels.trace,

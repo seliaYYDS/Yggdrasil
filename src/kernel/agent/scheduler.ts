@@ -19,6 +19,37 @@ import { runDerivation } from './agentRuntime';
 /** 会话 id -> 是否正在跑。 */
 const busy = new Set<string>();
 
+/**
+ * 会话 id -> 当前这次运行的中止控制器。
+ *
+ * "停止"要能打断**正在流式生成的那次请求**，所以必须把控制器留在这里：
+ * UI 只知道会话 id，拿不到 runDerivation 内部那个 signal。
+ */
+const running = new Map<string, AbortController>();
+
+/**
+ * 停止某个会话正在跑的这一轮。
+ *
+ * 语义（写在按钮的 title 里，别让用户猜）：
+ * - 中止正在进行的模型请求；
+ * - **清空这个会话的排队项** —— 按了停止就是要停下来，不是在原地等下一跳；
+ * - 已经落地的改动不回滚（组件已经建出来了，那是实实在在的结果）。
+ */
+export function stopRun(sessionId: string = MAIN_SESSION): boolean {
+  const ctl = running.get(sessionId);
+  if (!ctl) return false;
+  const store = useDesktopStore.getState();
+  store.clearQueue(sessionId);
+  ctl.abort();
+  store.log('warn', '已停止 ' + sessionId);
+  return true;
+}
+
+/** 这个会话是不是可以被打断（UI 据此决定按钮是"发送"还是"停止"）。 */
+export function canStop(sessionId: string = MAIN_SESSION): boolean {
+  return running.has(sessionId);
+}
+
 /** 某个会话是否正在跑（含它跑完后要继续消化的排队项）。 */
 export function isBusy(sessionId: string = MAIN_SESSION): boolean {
   return busy.has(sessionId);
@@ -86,16 +117,21 @@ async function drain(
   firstImages: string[] = [],
 ): Promise<void> {
   busy.add(sessionId);
+  // 每次运行一个控制器，"停止"就是把它 abort 掉。
+  const ctl = new AbortController();
+  running.set(sessionId, ctl);
   let text: string | null = firstText;
   let origin: NodeId = firstOrigin;
   let images: string[] = firstImages;
   try {
     while (text !== null) {
       try {
-        await runDerivation(text, { originId: origin, sessionId, images });
+        await runDerivation(text, { originId: origin, sessionId, images, signal: ctl.signal });
       } catch (e) {
         useDesktopStore.getState().log('error', 'run ✕ ' + (e as Error).message);
       }
+      // 被停止之后不再消化队列（stopRun 已经把它清空了，这里只是兜一层）。
+      if (ctl.signal.aborted) break;
 
       let next = useDesktopStore.getState().shiftQueued(sessionId);
       while (next && !useDesktopStore.getState().nodes[next.originId]) {
@@ -113,5 +149,11 @@ async function drain(
     }
   } finally {
     busy.delete(sessionId);
+    if (running.get(sessionId) === ctl) running.delete(sessionId);
+    // 停止之后把这个会话的状态收尾，否则界面会一直停在"运行中"。
+    if (ctl.signal.aborted) {
+      const store = useDesktopStore.getState();
+      store.setSessionStatus(sessionId, { running: false, phase: '已停止', detail: '', round: 0 });
+    }
   }
 }

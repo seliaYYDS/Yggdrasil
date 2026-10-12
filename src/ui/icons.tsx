@@ -209,3 +209,33 @@ export function CloseIcon(props: SVGProps<SVGSVGElement>) {
     </Svg>
   );
 }
+
+/** 发送：向上的箭头。 */
+export function SendIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M8 13.5V3" />
+      <path d="M3.6 7.4 8 3l4.4 4.4" />
+    </Svg>
+  );
+}
+
+/** 排队：向右进入一条线（表示"等前面跑完"）。 */
+export function QueueIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M2.5 8h8" />
+      <path d="M7.8 5.2 10.6 8l-2.8 2.8" />
+      <path d="M13.5 3v10" />
+    </Svg>
+  );
+}
+
+/** 停止：方块（生成中代替发送按钮）。 */
+export function StopIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1.2" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}

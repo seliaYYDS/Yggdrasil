@@ -1,6 +1,7 @@
 import { registerInterface } from '../registry/interfaceRegistry';
 import { fail, ok, strOr } from '../bus/opContext';
 import { desktop, useDesktopStore } from '../../store/desktopStore';
+import { canCaptureScreen } from '../../host/screen';
 import { closePage, listPages, openPage, resizePage, setFullscreen, viewportInfo } from '../net/browser';
 import { newId } from '../ids';
 
@@ -190,6 +191,32 @@ export function registerBrowserInterfaces(): void {
       desktop().log('op', 'browser - ' + target);
       return ok('已关闭 ' + r.closed + ' 个页面', {
         observation: '关闭了 ' + r.closed + ' 个' + (r.failed.length ? '；失败：' + r.failed.join('；') : ''),
+      });
+    },
+  });
+
+  registerInterface({
+    kind: 'capture_screen',
+    label: '抓取页面截图',
+    description:
+      '**请求一张当前页面的真实截图**，它会被放进你的上下文（下一轮你就能看到它）。' +
+      '用途：核对自己做出来的界面到底长什么样、有没有重叠/溢出/颜色不对。' +
+      '⚠ 浏览器规定屏幕捕获必须由**用户手势**触发，所以这个调用做的是"登记请求"：' +
+      '输入框上会出现一个「截图给 Agent」按钮，**用户点一下**图才会进来。' +
+      '调用后本轮就结束，别反复调用等结果 —— 图到手时你会在下一轮看到它。',
+    example: { kind: 'capture_screen' },
+    cap: 'browser',
+    handler: (_op, ctx) => {
+      const store = useDesktopStore.getState();
+      if (!canCaptureScreen()) {
+        return fail('这个浏览器不支持屏幕捕获（需要 getDisplayMedia），没法截图。');
+      }
+      store.requestShot(ctx.sessionId);
+      store.log('op', '请求截图', ctx.sessionId);
+      return ok('已请求截图：请用户在输入框上点「截图给 Agent」，图会进入你的上下文。', {
+        observation:
+          '截图需要用户手势，已挂起请求。**这一轮到此为止**，不要重复调用；' +
+          '图到手后你会收到一条带图片的新消息。',
       });
     },
   });
