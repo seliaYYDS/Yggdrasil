@@ -4,6 +4,8 @@ import { Surface } from '../host/Surface';
 import { Feedback } from '../ui/Feedback';
 import { TopBar } from '../ui/TopBar';
 import { ResetDialog } from '../ui/ResetDialog';
+import { ConsoleErrorPrompt } from '../ui/ConsoleErrorPrompt';
+import { installConsoleErrorHooks, subscribeConsoleErrors } from '../host/consoleErrors';
 import { useDesktopStore } from '../store/desktopStore';
 
 export function App() {
@@ -13,6 +15,17 @@ export function App() {
   useEffect(() => {
     void hydrate();
   }, [hydrate]);
+
+  /*
+   * 控制台报错 → 交给 store 决定要不要问用户。
+   * 组件只管"听"，策略（agent 忙不忙、是不是刚问过）全在 store 里，别分两处。
+   */
+  useEffect(() => {
+    installConsoleErrorHooks();
+    return subscribeConsoleErrors((e) => {
+      useDesktopStore.getState().reportConsoleError(e.text);
+    });
+  }, []);
 
   // 视口变化时把所有面板与窗口夹回可见区域 —— 不然缩小浏览器后标题栏会够不到。
   useEffect(() => {
@@ -53,6 +66,7 @@ export function App() {
       {/* 下面两个是覆盖层，本就该在最上面 */}
       <TopBar />
       <ResetDialog />
+      <ConsoleErrorPrompt />
       <Feedback />
     </>
   );

@@ -24,10 +24,10 @@ function Curve({ c }: { c: FxCurve }) {
   return (
     <>
       {/* 底下一层更粗更淡的，做出一点辉光感（不用 filter，保持扁平） */}
-      <path className={'ygg-curve-halo is-' + c.kind} d={path} pathLength={1} />
-      <path className={'ygg-curve is-' + c.kind} d={path} pathLength={1} />
+      <path className="ygg-curve-halo" d={path} pathLength={1} />
+      <path className="ygg-curve" d={path} pathLength={1} />
       {/* 终点一个小圆点：让"落点"更明确 */}
-      <circle className={'ygg-curve-dot is-' + c.kind} cx={c.toX} cy={c.toY} r={3} />
+      <circle className="ygg-curve-dot" cx={c.toX} cy={c.toY} r={2.2} />
     </>
   );
 }
@@ -36,22 +36,12 @@ export function FxLayer() {
   const curves = useDesktopStore((s) => s.curves);
   if (curves.length === 0) return null;
   // 曲线坐标就是桌面坐标，所以这一层铺满视口、直接按坐标画即可。
+  // 只在**创建**时画：关闭走的是单纯淡出，不再连线。
   return (
-    <>
-      {curves
-        .filter((c) => c.layer === 'back')
-        .map((c) => (
-          <svg className="ygg-fx ygg-fx-back" key={c.id} aria-hidden>
-            <Curve c={c} />
-          </svg>
-        ))}
-      {curves
-        .filter((c) => c.layer === 'front')
-        .map((c) => (
-          <svg className="ygg-fx ygg-fx-front" key={c.id} aria-hidden>
-            <Curve c={c} />
-          </svg>
-        ))}
-    </>
+    <svg className="ygg-fx" aria-hidden>
+      {curves.map((c) => (
+        <Curve key={c.id} c={c} />
+      ))}
+    </svg>
   );
 }

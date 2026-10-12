@@ -4,7 +4,6 @@ import { useDesktopStore, type InputSession } from '../store/desktopStore';
 import { submitInput } from '../kernel/agent/scheduler';
 import { WindowFrame } from '../host/WindowFrame';
 import { imageFilesFromClipboard, MAX_IMAGES, prepareImage, type PreparedImage } from '../host/image';
-import { NewInputIcon } from './icons';
 
 /*
  * 下面这些常量必须与 global.css 里的实际值一致 ——
@@ -33,6 +32,30 @@ const MAX_LINES = 6;
  * 比实际需要少 20px 左右 —— 于是窗口总是不够高，输入区被窗口 body 的滚动条裁掉一截，
  * 看起来就是"输入区域大小固定、只是贴在底部"。
  */
+/** 12,345 → 12.3k；小于 1000 原样。指标要在一行里放下，所以必须紧凑。 */
+export function compactCount(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n < 1000) return String(Math.round(n));
+  if (n < 1000000) return (n / 1000).toFixed(n < 10000 ? 1 : 0) + 'k';
+  return (n / 1000000).toFixed(1) + 'M';
+}
+
+/** 状态行右侧那三个数：token/s · 累计 token · 缓存命中率。 */
+function metricsText(m?: {
+  tokensIn: number;
+  tokensOut: number;
+  cachedIn: number;
+  tps: number;
+  runs: number;
+  exact: boolean;
+}): string {
+  if (!m || m.runs === 0) return '— tok/s · — · 缓存 —';
+  const tilde = m.exact ? '' : '~';
+  const total = compactCount(m.tokensIn + m.tokensOut);
+  const rate = m.tokensIn > 0 ? Math.round((m.cachedIn / m.tokensIn) * 100) + '%' : '—';
+  return tilde + m.tps.toFixed(1) + ' tok/s · ' + tilde + total + ' · 缓存 ' + rate;
+}
+
 export function inputMinHeight(
   areaH: number,
   queueCount: number,
@@ -77,7 +100,8 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
    * 所以两个输入框同时在跑时，各自只在自己的状态变了才重渲染。
    */
   const live = useDesktopStore((s) => s.sessions.find((x) => x.id === session.id)) ?? session;
-  const { status, queue, rect, z, title, minimized } = live;
+  // metrics 跟着会话走：每个输入框显示自己的用量。
+  const { status, queue, rect, z, title, minimized, metrics } = live;
   const running = status.running;
   const phase = status.phase;
   const detail = status.detail;
@@ -313,6 +337,10 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           </button>
         </div>
 
+        {/*
+          状态行：左边是运行状态（或图片/报错提示），右边固定是三个用量指标。
+          **指标不单独占一行** —— 它跟状态共用这一行，靠 margin-left:auto 贴到右端。
+        */}
         <div className={'ygg-compose-state' + (busy ? ' is-busy' : '')}>
           {busy ? (
             <>
@@ -323,16 +351,25 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
               ) : null}
               {detail ? <span className="ygg-compose-detail">{detail}</span> : null}
             </>
-          ) : (
+          ) : null}
+          {!busy && (imageError || images.length > 0) ? (
             <span className="ygg-compose-hint">
-              <NewInputIcon width={11} height={11} />
-              {imageError
-                ? imageError
-                : images.length > 0
-                  ? images.length + ' 张图片将随请求发出'
-                  : 'Enter 发送 · Shift+Enter 换行 · 可粘贴图片'}
+              {imageError ? imageError : images.length + ' 张图片将随请求发出'}
             </span>
-          )}
+          ) : null}
+          <span
+            className="ygg-metrics"
+            title={
+              metrics && metrics.runs > 0
+                ? (metrics.exact ? '' : '（含本地估算，数字前带 ~）') +
+                  '本会话累计：输入 ' + metrics.tokensIn.toLocaleString() + ' / 输出 ' +
+                  metrics.tokensOut.toLocaleString() + ' / 缓存命中 ' + metrics.cachedIn.toLocaleString() +
+                  '；最近一次 ' + metrics.tps.toFixed(1) + ' tok/s'
+                : '还没有跑过：这三个数是"速度 · 累计 token · 缓存命中率"'
+            }
+          >
+            {metricsText(metrics)}
+          </span>
         </div>
       </div>
     </WindowFrame>

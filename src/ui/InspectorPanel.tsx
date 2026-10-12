@@ -65,7 +65,7 @@ export function InspectorPanel() {
     if (!instruction) return;
     setBusy(true);
     try {
-      const out = await chatStream(settings, buildComponentPatchPrompt(node, instruction));
+      const out = (await chatStream(settings, buildComponentPatchPrompt(node, instruction))).text;
       const source = stripFence(out);
       const check = compileComponent(node.id, source);
       if (!check.ok) {

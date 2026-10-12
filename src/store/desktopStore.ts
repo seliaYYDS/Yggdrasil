@@ -26,6 +26,28 @@ import {
 } from '../theme/engine';
 import { exportSurfaceStates, importSurfaceStates } from '../kernel/registry/surfaceRegistry';
 
+/**
+ * 一个会话的用量统计。**不进持久化** —— 刷新后重新开始计，避免把历史数字当成这次的开销。
+ */
+export interface SessionMetrics {
+  /** 累计输入 token（含每轮重发的历史，所以它天然比"内容量"大）。 */
+  tokensIn: number;
+  /** 累计输出 token。 */
+  tokensOut: number;
+  /** 累计命中缓存的输入 token。 */
+  cachedIn: number;
+  /** 最近一次运行的输出速度（token/s）。0 = 还没跑过。 */
+  tps: number;
+  /** 跑过几次（用来区分"0"和"还没有数据"）。 */
+  runs: number;
+  /** true = 数字全部来自服务端 usage；false = 含本地估算（界面会标 ~）。 */
+  exact: boolean;
+}
+
+export function emptyMetrics(): SessionMetrics {
+  return { tokensIn: 0, tokensOut: 0, cachedIn: 0, tps: 0, runs: 0, exact: true };
+}
+
 export interface RunStatus {
   running: boolean;
   phase: string;
@@ -73,6 +95,8 @@ export interface InputSession {
   status: RunStatus;
   trace: TraceStep[];
   queue: QueuedInput[];
+  /** 这个会话的用量统计（token / 速度 / 缓存命中），不进持久化。 */
+  metrics: SessionMetrics;
   /**
    * **这个输入框自己的对话记忆。**
    *
@@ -127,6 +151,7 @@ export function makeSession(n: number, base: PanelRect, viewW: number, viewH: nu
     status: emptyStatus(),
     trace: [],
     queue: [],
+    metrics: emptyMetrics(),
     messages: [],
   };
 }
@@ -336,10 +361,6 @@ export interface FxCurve {
   fromY: number;
   toX: number;
   toY: number;
-  /** birth = 创建（连线出现 → 组件缓缓浮现）；death = 关闭（连线出现 → 组件淡出）。 */
-  kind: 'birth' | 'death';
-  /** 画在哪一层之上：'back' 在窗口之下（创建时），'front' 在窗口之上（关闭时）。 */
-  layer: 'back' | 'front';
 }
 
 /** 曲线存活时长，与 CSS 动画时长对齐。 */
@@ -561,6 +582,11 @@ interface DesktopState {
    * 动画结束后才真正删除。不进持久化。
    */
   dying: Record<string, true>;
+  /**
+   * 控制台报错后"要不要让 Agent 来修"的待确认提示。null = 没有。
+   * 纯瞬态，不进持久化。
+   */
+  consolePrompt: { id: string; text: string } | null;
 
   hydrate: () => Promise<void>;
   addNode: (node: YggNode) => void;
@@ -595,6 +621,8 @@ interface DesktopState {
   shiftQueued: (id: string) => QueuedInput | null;
   /** 会话 id -> 是否该会话还有排队项。 */
   clearQueue: (id: string) => void;
+  /** 累加一次运行的用量（token / 速度 / 缓存命中）。 */
+  addMetrics: (id: string, delta: Partial<SessionMetrics> & { tokensIn?: number; tokensOut?: number }) => void;
   /** 追加一条消息到这个会话的记忆（基底 agent 的对话按会话分开）。 */
   appendSessionMessage: (id: string, message: Message) => void;
   /** 清空这个会话的记忆。 */
@@ -620,6 +648,17 @@ interface DesktopState {
    * 到点自动移除，调用方不用管回收。
    */
   emitCurve: (c: Omit<FxCurve, 'id'>) => void;
+  /**
+   * 收到一条控制台报错。
+   *
+   * 这里做**全部的策略判断**（组件只管听、对话框只管显示）：
+   * - **Agent 忙的时候不问** —— 问了也做不了，还会把正在跑的任务搞乱；
+   * - **同一个错误短时间内不问第二次**，也**不连续追问**（否则一个每帧抛错的组件会把我问疯）；
+   * - 空闲且是新错误 → 弹出确认框。
+   */
+  reportConsoleError: (text: string) => void;
+  /** 关掉那个确认框（用户点了取消，或已经交给 Agent 了）。 */
+  dismissConsolePrompt: () => void;
   setFeedback: (feedback: RunFeedback | null) => void;
   appendLedger: (agentId: NodeId, entries: string[]) => void;
   setPanelRect: (panel: PanelKey, rect: PanelRect) => void;
@@ -644,6 +683,24 @@ interface DesktopState {
   requestRestore: (windowId: string) => void;
 
   resetAll: () => Promise<void>;
+}
+
+/** 同一个错误在这个时间内不再追问（毫秒）。 */
+const ERROR_ASK_COOLDOWN_MS = 60000;
+/** 两次追问之间至少隔这么久 —— 防止一个狂抛错的组件把我问疯。 */
+const ERROR_ASK_GAP_MS = 15000;
+/** 指纹 -> 上次问过的时间。只活在内存里，刷新即清。 */
+const consoleAsked = new Map<string, number>();
+let lastAskAt = 0;
+/** 单独包一层是为了测试里能替换时间源（不用真的等 60 秒）。 */
+function nowMs(): number {
+  return Date.now();
+}
+
+/** 清掉"问过哪些错误"的记忆。重置之后应当重新开始问。 */
+export function resetConsoleAskMemory(): void {
+  consoleAsked.clear();
+  lastAskAt = 0;
 }
 
 let persistTimer: number | null = null;
@@ -673,28 +730,6 @@ function mapRun(
         : ses,
     ),
   };
-}
-
-/**
- * 求"派生源"的中心点，用于画派生连线。
- *
- * 来源可以是**输入框会话 id**（用户从某个输入框让它派生）或**组件节点 id**
- * （子 Agent 自己派生出来的东西）。两者取不到就返回 null —— 没有源就不画线，
- * 不要瞎连一个默认位置。
- */
-function sourceCenter(
-  s: Pick<DesktopState, 'sessions' | 'nodes'>,
-  ref: string | undefined,
-): { x: number; y: number } | null {
-  if (!ref) return null;
-  const ses = s.sessions.find((x) => x.id === ref);
-  if (ses) return { x: ses.rect.x + ses.rect.w / 2, y: ses.rect.y + ses.rect.h / 2 };
-  const node = s.nodes[ref];
-  // 基底不是窗口，它的 pos/size 是无意义的 0×0 —— 拿它当源会画出一条从左上角冒出来的线。
-  if (node && node.kind === 'component' && !node.root) {
-    return { x: node.pos.x + node.size.w / 2, y: node.pos.y + node.size.h / 2 };
-  }
-  return null;
 }
 
 /** 只读地取一份运行状态。 */
@@ -793,6 +828,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   snapDrag: false,
   curves: [],
   dying: {},
+  consolePrompt: null,
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -881,6 +917,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
           status: emptyStatus(),
           trace: [],
           queue: [],
+          metrics: emptyMetrics(),
           messages: Array.isArray(p.messages) ? (p.messages as Message[]) : [],
         });
       }
@@ -997,26 +1034,12 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     }
 
     /*
-     * 先把"它当初是从哪个输入框/组件冒出来的"那条线放出来，并让窗口淡出，
-     * 260ms 后才真正删。数据层推迟一点没有副作用 —— 期间它只是带了个 dying 标记。
+     * 先让窗口淡出，260ms 后才真正删。
+     * 关闭**不画连线**（用户要求：直接淡出就好），只有创建时才连。
      */
     const s0 = get();
     const freshly = ids.filter((nid) => !s0.dying[nid]);
     if (freshly.length > 0) {
-      for (const nid of freshly) {
-        const node = s0.nodes[nid];
-        if (!node || node.kind !== 'component' || node.root) continue;
-        const from = sourceCenter(s0, node.bornFrom);
-        if (!from) continue;
-        s0.emitCurve({
-          fromX: from.x,
-          fromY: from.y,
-          toX: node.pos.x + node.size.w / 2,
-          toY: node.pos.y + node.size.h / 2,
-          kind: 'death',
-          layer: 'front',
-        });
-      }
       set((s) => {
         const dying = { ...s.dying };
         for (const nid of freshly) dying[nid] = true;
@@ -1207,6 +1230,29 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
+  reportConsoleError: (text) => {
+    const s = get();
+    const value = text.trim();
+    if (!value) return;
+    // ① Agent 必须空闲：忙的时候问了也没人能动，反而干扰正在跑的任务。
+    const busy =
+      s.sessions.some((ses) => ses.status.running) ||
+      Object.values(s.agentRuns).some((r) => r.status.running);
+    if (busy) return;
+    // ② 同一个错误在冷却期内不重复问。
+    const fp = value.slice(0, 300);
+    const last = consoleAsked.get(fp) ?? 0;
+    if (nowMs() - last < ERROR_ASK_COOLDOWN_MS) return;
+    // ③ 也不能连着问：一个每帧抛错的组件会瞬间堆出几十条不同文本。
+    if (nowMs() - lastAskAt < ERROR_ASK_GAP_MS) return;
+    if (s.consolePrompt) return;
+    consoleAsked.set(fp, nowMs());
+    lastAskAt = nowMs();
+    set({ consolePrompt: { id: newNodeId(), text: value } });
+  },
+
+  dismissConsolePrompt: () => set({ consolePrompt: null }),
+
   emitCurve: (c) => {
     const id = newNodeId();
     set((s) => ({ curves: [...s.curves, { ...c, id }] }));
@@ -1363,6 +1409,28 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     set((s) => mapRun(s, id, (run) => ({ ...run, queue: [] })));
   },
 
+  addMetrics: (id, delta) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => {
+        if (ses.id !== id) return ses;
+        const m = ses.metrics;
+        return {
+          ...ses,
+          metrics: {
+            tokensIn: m.tokensIn + (delta.tokensIn ?? 0),
+            tokensOut: m.tokensOut + (delta.tokensOut ?? 0),
+            cachedIn: m.cachedIn + (delta.cachedIn ?? 0),
+            // 速度是"最近一次"的瞬时值，不累加；没给就保持原样。
+            tps: delta.tps !== undefined ? delta.tps : m.tps,
+            runs: m.runs + 1,
+            // 只要有一次是估算的，整体就标成非精确（界面上带 ~）。
+            exact: m.exact && delta.exact !== false,
+          },
+        };
+      }),
+    }));
+  },
+
   appendSessionMessage: (id, message) => {
     set((s) => ({
       sessions: s.sessions.map((ses) => {
@@ -1454,6 +1522,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       }
     }
     const panels = resolvePanels(window.innerWidth, window.innerHeight);
+    resetConsoleAskMemory();
     applyTheme(DEFAULT_TOKENS);
     importSurfaceStates(null);
     set({
@@ -1479,6 +1548,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       snapDrag: false,
       curves: [],
       dying: {},
+      consolePrompt: null,
       inspectorRect: panels.inspector,
       settingsRect: panels.settings,
       traceRect: panels.trace,

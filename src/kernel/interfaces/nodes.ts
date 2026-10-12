@@ -175,9 +175,6 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionI
       fromY: center.y,
       toX: node.pos.x + node.size.w / 2,
       toY: node.pos.y + node.size.h / 2,
-      kind: 'birth',
-      // 画在窗口**之下**：曲线先到，组件再从它末端缓缓长出来。
-      layer: 'back',
     });
   }
   desktop().log('op', '+ comp ' + name, id);

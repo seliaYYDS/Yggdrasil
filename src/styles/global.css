@@ -69,8 +69,7 @@ button:focus:not(:focus-visible) { outline: none; }
   pointer-events: none;
   overflow: visible;
 }
-.ygg-fx-back { z-index: 1; }
-.ygg-fx-front { z-index: 900000; }
+.ygg-fx { z-index: 1; }
 
 /*
  * 曲线用 pathLength=1 归一化，于是 stroke-dasharray/dashoffset 与长度无关：
@@ -85,9 +84,8 @@ button:focus:not(:focus-visible) { outline: none; }
   stroke-dashoffset: 1;
   animation: ygg-curve-draw 820ms var(--ygg-ease-out) both;
 }
-.ygg-curve { stroke-width: 1.5; }
-.ygg-curve-halo { stroke-width: 5; opacity: .18; }
-.ygg-curve.is-death, .ygg-curve-halo.is-death { stroke: var(--ygg-accent-hi); }
+.ygg-curve { stroke-width: 0.8; }
+.ygg-curve-halo { stroke-width: 2.6; opacity: .12; }
 .ygg-curve-dot {
   fill: var(--ygg-accent-hi);
   animation: ygg-curve-dot 820ms var(--ygg-ease-out) both;
@@ -777,7 +775,22 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-compose-area { caret-color: var(--ygg-accent); }
 .ygg-compose-area::placeholder { color: var(--ygg-fg-muted); opacity: .55; transition: opacity var(--ygg-t) var(--ygg-ease); }
 .ygg-compose:focus-within .ygg-compose-area::placeholder { opacity: .8; }
-.ygg-compose:focus-within .ygg-compose-hint { opacity: .85; }
+.ygg-compose:focus-within /*
+ * 用量指标：贴在同一行的右端，等宽小字。
+ * 刻意不换行（white-space: nowrap）—— 它必须和状态同处一行，换行就等于"单独占一行"了。
+ */
+.ygg-metrics {
+  margin-left: auto;
+  flex: none;
+  white-space: nowrap;
+  font-family: var(--ygg-font-mono);
+  font-size: 10px;
+  color: var(--ygg-fg-muted);
+  letter-spacing: -.01em;
+  cursor: default;
+}
+
+.ygg-compose-hint { opacity: .85; }
 
 .ygg-compose-state {
   display: flex;
@@ -1160,4 +1173,21 @@ button:focus:not(:focus-visible) { outline: none; }
   animation: ygg-window-in var(--ygg-t-slow) var(--ygg-ease-out) both;
 }
 .ygg-confirm-text { font-size: 12px; line-height: 1.7; color: var(--ygg-fg); }
+/* 弹窗里的报错原文：等宽、可滚、限高，别把弹窗撑到屏幕外 */
+.ygg-error-text {
+  max-height: 190px;
+  overflow: auto;
+  margin: 0 0 11px;
+  padding: 8px 9px;
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  background: var(--ygg-bg);
+  color: var(--ygg-fg-muted);
+  font-family: var(--ygg-font-mono);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .ygg-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }

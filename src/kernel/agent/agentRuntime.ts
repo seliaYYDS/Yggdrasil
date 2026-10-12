@@ -11,7 +11,7 @@ import type {
   YggNode,
 } from '../types';
 import { newId } from '../ids';
-import { chatStream } from '../llm/client';
+import { chatStream, estimateTokens, type LlmUsage } from '../llm/client';
 import type { ChatMessage, ContentPart } from '../llm/types';
 import { parsePlan } from './parse';
 import {
@@ -225,24 +225,37 @@ interface StreamHandlers {
   onAttempt?: (attempt: number) => void;
 }
 
+interface CallOk {
+  ok: true;
+  text: string;
+  /** 服务端报的用量；没报就是 null（上层按字符估算）。 */
+  usage: LlmUsage | null;
+  /** 这一次（含重试后成功的那次）的耗时。 */
+  ms: number;
+}
+interface CallFail {
+  ok: false;
+  error: string;
+}
+
 async function chatWithRetry(
   settings: Parameters<typeof chatStream>[0],
   messages: ChatMessage[],
   handlers: StreamHandlers,
   attempts = 3,
-): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+): Promise<CallOk | CallFail> {
   let lastError = '';
   for (let i = 0; i < attempts; i += 1) {
     handlers.onAttempt?.(i);
     const ctl = new AbortController();
     const timer = window.setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
     try {
-      const text = await chatStream(settings, messages, {
+      const out = await chatStream(settings, messages, {
         onDelta: handlers.onDelta,
         onThinking: handlers.onThinking,
         signal: ctl.signal,
       });
-      return { ok: true, text };
+      return { ok: true, text: out.text, usage: out.usage, ms: out.ms };
     } catch (e) {
       lastError = (e as Error).message;
       if (!isRetryable(lastError) || i === attempts - 1) break;
@@ -252,6 +265,41 @@ async function chatWithRetry(
     }
   }
   return { ok: false, error: lastError };
+}
+
+/**
+ * 把一次模型调用的用量记到会话上。
+ *
+ * 优先用服务端报的 usage；它没报就按字符估算，并把 `exact` 标成 false ——
+ * 界面会在数字前面加个 ~，用户一眼能看出这不是准数。
+ *
+ * `tps` 只用**输出** token 除以耗时：输入是并发的、拿它算速度没有意义。
+ */
+function recordUsage(
+  sessionId: string,
+  call: { usage: LlmUsage | null; ms: number },
+  promptChars: number,
+  outputText: string,
+): void {
+  const store = useDesktopStore.getState();
+  const outEst = estimateTokens(outputText);
+  if (call.usage) {
+    store.addMetrics(sessionId, {
+      tokensIn: call.usage.promptTokens,
+      tokensOut: call.usage.completionTokens,
+      cachedIn: call.usage.cachedTokens,
+      tps: +(call.usage.completionTokens / (Math.max(1, call.ms) / 1000)).toFixed(1),
+      exact: true,
+    });
+    return;
+  }
+  store.addMetrics(sessionId, {
+    tokensIn: estimateTokens('x'.repeat(promptChars)),
+    tokensOut: outEst,
+    cachedIn: 0,
+    tps: +(outEst / (Math.max(1, call.ms) / 1000)).toFixed(1),
+    exact: false,
+  });
 }
 
 /**
@@ -336,6 +384,7 @@ async function runReply(
   if (!call.ok) return failReply('模型回复失败', call.error, call.error);
   const reply = call.text.trim();
   if (!reply) return failReply('模型没有返回内容', '这次调用没有拿到任何文本。', '空内容');
+  recordUsage(sessionId, call, messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : 0), 0), reply);
 
   // 回复写进记忆：这就是"它说过的话"，组件从这里渲染。
   pushMemory(originId, sessionId, { role: 'assistant', content: reply });
@@ -541,6 +590,16 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             setRunStatus({ phase: '模型思考中', detail: chunk.slice(-140) });
           },
         }, 3);
+
+        if (call.ok) {
+          // 每轮都记：act 档一轮可能发多次请求，累计的才是这次任务真实的开销。
+          recordUsage(
+            sessionId,
+            call,
+            messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : 0), 0),
+            buffer,
+          );
+        }
 
         if (!call.ok) {
           // 重试仍失败：不断整轮终止，而是把错误回灌，让 Agent 下一轮换个做法。
