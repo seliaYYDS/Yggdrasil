@@ -1,0 +1,109 @@
+{
+  "id": "currency",
+  "name": "汇率",
+  "version": "1.0",
+  "author": "Yggdrasil",
+  "minAppVersion": "0.1",
+  "description": "查汇率与换算（Frankfurter，欧洲央行数据，不需要密钥）。",
+  "hosts": [
+    "api.frankfurter.app"
+  ],
+  "fields": [],
+  "endpoints": [
+    {
+      "name": "currencies",
+      "label": "可用币种",
+      "description": "List every currency code this service knows, as { \"CODE\": \"Name\" } (about 30 of them, all from the European Central Bank). Call it before using a code you are not sure about — an unknown code makes the other two operations fail with \"not found\".",
+      "method": "GET",
+      "url": "https://api.frankfurter.app/currencies",
+      "params": [],
+      "maxChars": 4000,
+      "example": {
+        "kind": "currency.currencies"
+      }
+    },
+    {
+      "name": "latest",
+      "label": "汇率 / 换算",
+      "description": "The latest exchange rate, optionally converting an amount. Give from (base, e.g. USD) and to (one or more targets separated by commas, e.g. CNY,EUR). Returns amount, base, date and rates{\"CNY\": 6.69}. Set amount to convert that many units (amount=100, from=USD → rates are for 100 USD). Dates are the ECB working day, so the newest date can be a few days old on a weekend.",
+      "method": "GET",
+      "url": "https://api.frankfurter.app/latest?amount={amount}&from={from}&to={to}",
+      "params": [
+        {
+          "name": "from",
+          "description": "base currency code, e.g. USD",
+          "required": true
+        },
+        {
+          "name": "to",
+          "description": "target code, or several separated by commas (CNY,EUR,JPY)",
+          "required": true
+        },
+        {
+          "name": "amount",
+          "description": "convert this many units of the base currency",
+          "default": "1"
+        }
+      ],
+      "pick": [
+        "amount",
+        "base",
+        "date",
+        "rates"
+      ],
+      "maxChars": 4000,
+      "emptyHint": "{\"message\":\"not found\"} with HTTP 404 means one of the currency codes is not in the list. Call currency.currencies to see the valid codes; do not retry the same pair.",
+      "example": {
+        "kind": "currency.latest",
+        "from": "USD",
+        "to": "CNY",
+        "amount": "100"
+      }
+    },
+    {
+      "name": "history",
+      "label": "历史汇率",
+      "description": "Daily rates over a date range. Give start and end as YYYY-MM-DD (inclusive) and the same from / to as the other operations. Returns rates{\"2026-09-01\": {\"CNY\": 6.72}, ...}. Weekends and holidays have no rates, so the returned end_date can be earlier than the end you asked for — say which range actually came back instead of assuming.",
+      "method": "GET",
+      "url": "https://api.frankfurter.app/{start}..{end}?from={from}&to={to}",
+      "params": [
+        {
+          "name": "start",
+          "description": "start date, YYYY-MM-DD",
+          "required": true
+        },
+        {
+          "name": "end",
+          "description": "end date, YYYY-MM-DD (inclusive)",
+          "required": true
+        },
+        {
+          "name": "from",
+          "description": "base currency code",
+          "required": true
+        },
+        {
+          "name": "to",
+          "description": "target code, or several separated by commas",
+          "required": true
+        }
+      ],
+      "pick": [
+        "amount",
+        "base",
+        "start_date",
+        "end_date",
+        "rates"
+      ],
+      "maxChars": 12000,
+      "emptyHint": "404 \"not found\" means a bad currency code or a date range with no data. Check both; do not retry the same request.",
+      "example": {
+        "kind": "currency.history",
+        "start": "2026-09-01",
+        "end": "2026-09-30",
+        "from": "USD",
+        "to": "CNY"
+      }
+    }
+  ]
+}

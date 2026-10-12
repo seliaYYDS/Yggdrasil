@@ -114,7 +114,8 @@
 | `method` | `GET` | 只支持 `GET` / `POST` |
 | `url` | 必填 | 地址模板，见下 |
 | `params` | | 模型可以给的参数 |
-| `headers` | | 附加请求头，值可以写 `{config:key}`（**不做 URL 编码**，适合 `Authorization`） |
+| `headers` | | 附加请求头，值可以写 `{config:key}`（**不做 URL 编码**，适合 `Authorization`）；**引用了没填的字段时整条头会被丢掉**（可选鉴权靠这个） |
+| `body` | | POST 时**只把这些参数**放进 JSON 请求体（默认全部）。路径参数不该混进 body |
 | `pick` | | 只挑要用的字段，见下 |
 | `emptyHint` | | 返回空结果时追加给模型的一句提示，见下 |
 | `maxChars` | `8000` | 回读长度上限，100 到 200000 |
@@ -163,6 +164,37 @@
 ⚠ `POST` + `application/json` 会触发**跨域预检**（浏览器先发 `OPTIONS`）。
 很多 API 只对 GET 配了 CORS，`OPTIONS` 返回 404 —— 那种情况下 POST 在浏览器里**注定失败**。
 写插件前先用带 `Origin` 的请求确认一下（见「排错」里那条）。
+
+
+### 可选鉴权：不填密钥也能用
+
+很多服务（GitHub、各类开放 API）匿名可用但额度低，填了令牌额度高、还能写。想让一个插件**同时支持两种情况**：
+
+    "fields": [
+      { "key": "token", "label": "Token（可选）", "secret": true, "hint": "不填也能用（每小时 60 次）；填了变成 5000 次，并且只有填了才能创建。" }
+    ],
+    "endpoints": [
+      {
+        "name": "repo",
+        "url": "https://api.github.com/repos/{owner}/{repo}",
+        "headers": { "authorization": "Bearer {config:token}" }
+      }
+    ]
+
+关键规则：**请求头里引用了没填的字段时，整条头会被丢掉**。
+不这么做的话 ~~Bearer {config:token}~~ 会渲染成 ~~"Bearer "~~ ——
+服务端会把它当成一个**无效令牌**直接拒绝，而不是当成匿名请求，于是"不填也能用"就废了。
+
+（查询串里的 ~~{config:key}~~ 没填时只是留空，不影响请求，所以那边不需要特殊处理。）
+
+### 密钥尽量放请求头，别放查询串
+
+URL 会进日志、进 Trace、进你贴给别人的截图；请求头不会。
+所以令牌、cookie、API Key 一律用 ~~headers~~ + ~~{config:...}~~。反面教材是把密钥拼在地址里
+（~~?token=xxx~~）—— 那个地址一旦被打印出来，密钥就跟着走了。
+
+案例：~~github~~ 插件用 ~~authorization: "Bearer {config:token}"~~；~~netease-music~~ 只能把 cookie 放查询串，
+因为那个服务就是这么设计的（这不是好示范，但它说明了现实）。
 
 #### ★ pick：把响应削成模型真正要用的部分
 

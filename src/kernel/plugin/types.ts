@@ -77,6 +77,11 @@ export interface PluginEndpoint {
    * 插件最清楚"空了通常意味着什么"，所以让它自己写这句话。
    */
   emptyHint?: string;
+  /**
+   * POST 时**只把这些参数**放进 JSON 请求体（默认全部）。
+   * 路径参数（owner / repo）不该混进 body。
+   */
+  body?: string[];
   /** 会不会改到外部数据（只影响反馈措辞）。 */
   mutates?: boolean;
   example?: Record<string, unknown>;

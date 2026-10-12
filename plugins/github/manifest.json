@@ -1,0 +1,322 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "version": "1.0",
+  "author": "Yggdrasil",
+  "minAppVersion": "0.1",
+  "description": "查仓库、issue、README 与用户；填了 Token 才能建 issue（不填也能只读查询）。",
+  "hosts": [
+    "api.github.com"
+  ],
+  "fields": [
+    {
+      "key": "token",
+      "label": "Personal Access Token（可选）",
+      "secret": true,
+      "hint": "不填也能用：匿名每分钟 10 次、每小时 60 次。填一个 fine-grained token（只勾读权限即可）会变成每小时 5000 次，并且**只有填了**才能创建 issue。把令牌放在请求头里，它不会出现在提示词里。",
+      "default": ""
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "rate_limit",
+      "label": "剩余额度",
+      "description": "How many API calls are left and when the window resets: resources.core.{limit,remaining,reset}. Call it when a request comes back 403/429, or to check whether the token in the plugin panel is actually being used (without a token the limit is 60/h, with one it is 5000/h).",
+      "method": "GET",
+      "url": "https://api.github.com/rate_limit",
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "authorization": "Bearer {config:token}"
+      },
+      "params": [],
+      "pick": [
+        "resources.core.limit",
+        "resources.core.remaining",
+        "resources.core.reset",
+        "resources.search.limit",
+        "resources.search.remaining"
+      ],
+      "maxChars": 3000,
+      "example": {
+        "kind": "github.rate_limit"
+      }
+    },
+    {
+      "name": "search_repos",
+      "label": "搜仓库",
+      "description": "Search repositories. q accepts GitHub search syntax (e.g. \"netease music\", \"language:rust stars:>1000\", \"topic:cli\"). Returns total_count and items[] with full_name, description, stargazers_count, language, html_url, owner.login, updated_at, license.spdx_id.",
+      "method": "GET",
+      "url": "https://api.github.com/search/repositories?q={q}&per_page={per_page}&sort={sort}",
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "authorization": "Bearer {config:token}"
+      },
+      "params": [
+        {
+          "name": "q",
+          "description": "search terms, GitHub search syntax allowed",
+          "required": true
+        },
+        {
+          "name": "per_page",
+          "description": "how many results (1-30 for unauthenticated)",
+          "default": "5"
+        },
+        {
+          "name": "sort",
+          "description": "stars, forks, updated or best-match",
+          "default": "best-match"
+        }
+      ],
+      "pick": [
+        "total_count",
+        "incomplete_results",
+        "items[].full_name",
+        "items[].description",
+        "items[].stargazers_count",
+        "items[].language",
+        "items[].html_url",
+        "items[].updated_at",
+        "items[].owner.login",
+        "items[].license.spdx_id"
+      ],
+      "maxChars": 12000,
+      "emptyHint": "total_count 0: nothing matched that query. Simplify it (drop qualifiers) or try the owner/name directly. HTTP 403 with \"rate limit\" means the anonymous quota is used up — fill a token in the plugin panel or wait for the reset time from github.rate_limit.",
+      "example": {
+        "kind": "github.search_repos",
+        "q": "netease music",
+        "per_page": "3"
+      }
+    },
+    {
+      "name": "repo",
+      "label": "仓库详情",
+      "description": "One repository: full_name, description, stargazers_count, forks_count, open_issues_count, language, license.spdx_id, default_branch, pushed_at, html_url, topics. owner and repo come from a search hit (full_name splits into them).",
+      "method": "GET",
+      "url": "https://api.github.com/repos/{owner}/{repo}",
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "authorization": "Bearer {config:token}"
+      },
+      "params": [
+        {
+          "name": "owner",
+          "description": "owner or organisation, e.g. facebook",
+          "required": true
+        },
+        {
+          "name": "repo",
+          "description": "repository name, e.g. react",
+          "required": true
+        }
+      ],
+      "pick": [
+        "full_name",
+        "description",
+        "stargazers_count",
+        "forks_count",
+        "open_issues_count",
+        "language",
+        "license.spdx_id",
+        "default_branch",
+        "pushed_at",
+        "topics",
+        "html_url"
+      ],
+      "maxChars": 6000,
+      "emptyHint": "HTTP 404: this owner/repo does not exist (check the spelling) or is private. Report it; do not retry.",
+      "example": {
+        "kind": "github.repo",
+        "owner": "facebook",
+        "repo": "react"
+      }
+    },
+    {
+      "name": "repo_issues",
+      "label": "issue 列表",
+      "description": "Issues of a repository, newest first: number, title, state, user.login, labels[].name, comments, created_at, html_url. **This endpoint also returns pull requests** — an entry is a PR when pull_request is not null; filter those out unless the user wants them. One page is per_page items; use page to go further.",
+      "method": "GET",
+      "url": "https://api.github.com/repos/{owner}/{repo}/issues?state={state}&per_page={per_page}&page={page}",
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "authorization": "Bearer {config:token}"
+      },
+      "params": [
+        {
+          "name": "owner",
+          "description": "repository owner",
+          "required": true
+        },
+        {
+          "name": "repo",
+          "description": "repository name",
+          "required": true
+        },
+        {
+          "name": "state",
+          "description": "open, closed or all",
+          "default": "open"
+        },
+        {
+          "name": "per_page",
+          "description": "how many (1-100)",
+          "default": "10"
+        },
+        {
+          "name": "page",
+          "description": "page number, starting at 1",
+          "default": "1"
+        }
+      ],
+      "pick": [
+        "number",
+        "title",
+        "state",
+        "user.login",
+        "labels[].name",
+        "comments",
+        "created_at",
+        "html_url",
+        "pull_request.url"
+      ],
+      "maxChars": 12000,
+      "emptyHint": "An empty array means no issues in that state. Widen state to all, or check that the repo name is right.",
+      "example": {
+        "kind": "github.repo_issues",
+        "owner": "facebook",
+        "repo": "react",
+        "per_page": "5"
+      }
+    },
+    {
+      "name": "repo_readme",
+      "label": "README 原文",
+      "description": "The repository README as **plain markdown text** (not JSON). Use it to answer \"what is this project / how do I install it\". It can be long — quote the relevant few lines into a component instead of dumping all of it.",
+      "method": "GET",
+      "url": "https://api.github.com/repos/{owner}/{repo}/readme",
+      "headers": {
+        "accept": "application/vnd.github.raw",
+        "x-github-api-version": "2022-11-28",
+        "authorization": "Bearer {config:token}"
+      },
+      "params": [
+        {
+          "name": "owner",
+          "description": "repository owner",
+          "required": true
+        },
+        {
+          "name": "repo",
+          "description": "repository name",
+          "required": true
+        }
+      ],
+      "maxChars": 8000,
+      "emptyHint": "HTTP 404: this repository has no README (or the name is wrong). Say so instead of guessing its content.",
+      "example": {
+        "kind": "github.repo_readme",
+        "owner": "facebook",
+        "repo": "react"
+      }
+    },
+    {
+      "name": "user",
+      "label": "用户资料",
+      "description": "A GitHub user or organisation: login, name, bio, company, location, blog, public_repos, followers, following, created_at, avatar_url, html_url.",
+      "method": "GET",
+      "url": "https://api.github.com/users/{user}",
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "authorization": "Bearer {config:token}"
+      },
+      "params": [
+        {
+          "name": "user",
+          "description": "GitHub login, e.g. torvalds",
+          "required": true
+        }
+      ],
+      "pick": [
+        "login",
+        "name",
+        "bio",
+        "company",
+        "location",
+        "blog",
+        "public_repos",
+        "followers",
+        "following",
+        "created_at",
+        "avatar_url",
+        "html_url"
+      ],
+      "maxChars": 4000,
+      "emptyHint": "HTTP 404: no such user. Check the spelling.",
+      "example": {
+        "kind": "github.user",
+        "user": "torvalds"
+      }
+    },
+    {
+      "name": "create_issue",
+      "label": "建 issue",
+      "description": "**Create an issue** in a repository. Needs the token field filled in. Give owner, repo, title and optionally body. Returns the created issue (number, html_url, state). **Only do this when the user explicitly asked for it** — this is visible to everyone watching that repository and cannot be undone from here. After creating it, show the user the number and the html_url.",
+      "method": "POST",
+      "url": "https://api.github.com/repos/{owner}/{repo}/issues",
+      "headers": {
+        "accept": "application/vnd.github+json",
+        "x-github-api-version": "2022-11-28",
+        "authorization": "Bearer {config:token}"
+      },
+      "params": [
+        {
+          "name": "owner",
+          "description": "repository owner",
+          "required": true
+        },
+        {
+          "name": "repo",
+          "description": "repository name",
+          "required": true
+        },
+        {
+          "name": "title",
+          "description": "issue title",
+          "required": true
+        },
+        {
+          "name": "body",
+          "description": "issue body (markdown)",
+          "default": ""
+        }
+      ],
+      "body": [
+        "title",
+        "body"
+      ],
+      "pick": [
+        "number",
+        "title",
+        "state",
+        "html_url",
+        "created_at",
+        "user.login"
+      ],
+      "maxChars": 4000,
+      "mutates": true,
+      "emptyHint": "HTTP 401/403 means the token is missing, expired, or lacks issue permission — tell the user to check the token field, and do not retry. HTTP 410/404 means issues are disabled or the repo does not exist.",
+      "example": {
+        "kind": "github.create_issue",
+        "owner": "your-name",
+        "repo": "your-repo",
+        "title": "来自 Yggdrasil 的测试 issue",
+        "body": "如果你看到这条，说明插件能写。"
+      }
+    }
+  ]
+}

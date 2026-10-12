@@ -189,6 +189,10 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     if (!CAPS.includes(cap)) return bad('endpoint ' + en + ' 的 cap 不认识：' + String(o.cap));
     const maxChars = typeof o.maxChars === 'number' ? Math.floor(o.maxChars) : 8000;
     if (maxChars < 100 || maxChars > 200000) return bad('endpoint ' + en + ' 的 maxChars 要在 100 到 200000 之间。');
+    const bodyRaw = Array.isArray(o.body) ? o.body : [];
+    for (const b of bodyRaw) {
+      if (typeof b !== 'string') return bad('endpoint ' + en + ' 的 body 里只能写参数名。');
+    }
     const pickRaw = Array.isArray(o.pick) ? o.pick : [];
     for (const pk of pickRaw) {
       if (typeof pk !== 'string' || !/^[A-Za-z0-9_\[\].-]+$/.test(pk)) {
@@ -221,6 +225,9 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     if (o.emptyHint !== undefined && typeof o.emptyHint !== 'string') {
       return bad('endpoint ' + en + ' 的 emptyHint 必须是字符串。');
     }
+    for (const b of bodyRaw) {
+      if (!params.some((x) => x.name === b)) return bad('endpoint ' + en + ' 的 body 里有没声明的参数 ' + b + '。');
+    }
     endpoints.push({
       name: en,
       label,
@@ -230,6 +237,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
       params,
       headers: (o.headers && typeof o.headers === 'object' ? (o.headers as Record<string, string>) : undefined),
       cap,
+      body: bodyRaw.length ? (bodyRaw as string[]) : undefined,
       pick: pickRaw.length ? (pickRaw as string[]) : undefined,
       emptyHint: typeof o.emptyHint === 'string' ? o.emptyHint : undefined,
       maxChars,

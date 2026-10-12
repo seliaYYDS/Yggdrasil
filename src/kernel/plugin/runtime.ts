@@ -213,13 +213,35 @@ export async function httpCall(
   }
 
   const headers: Record<string, string> = { accept: 'application/json, text/plain;q=0.9, */*;q=0.8' };
-  for (const [k, v] of Object.entries(e.headers ?? {})) headers[k] = renderTemplate(v, plugin, params, false);
+  for (const [k, v] of Object.entries(e.headers ?? {})) {
+    /*
+     * 头里引用了**没填**的字段就整条丢掉。
+     *
+     * 这是"可选鉴权"能成立的关键：'Bearer {config:token}' 在没填 token 时会被渲染成 'Bearer '，
+     * 服务端会把它当无效令牌直接拒（而不是当匿名请求）—— 那样不填 token 就用不了了。
+     */
+    const refs = [...v.matchAll(/\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}/g)].map((m) => m[1]);
+    const blank = refs.some((key) => {
+      const f = plugin.fields.find((x) => x.key === key);
+      return !((plugin.values[key] ?? f?.default ?? '').trim());
+    });
+    if (blank) continue;
+    headers[k] = renderTemplate(v, plugin, params, false);
+  }
 
   const method = e.method ?? 'GET';
   const init: RequestInit = { method, headers };
   if (method === 'POST') {
     headers['content-type'] = headers['content-type'] ?? 'application/json';
-    init.body = JSON.stringify(params);
+    /*
+     * 默认全放，但清单可以用 body: ["title"] 指定**只把这些参数放进 JSON 体**。
+     * 需要它是因为路径参数（owner / repo 之类）不属于请求体，
+     * 混进去虽然多数服务端会忽略，但写清楚更不容易踩到"未知字段就报错"的 API。
+     */
+    const keys = e.body && e.body.length ? e.body : Object.keys(params);
+    const payload: Record<string, string> = {};
+    for (const k of keys) if (params[k] !== undefined) payload[k] = params[k];
+    init.body = JSON.stringify(payload);
   }
 
   let res: Response;
