@@ -284,18 +284,27 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
   let update: { url: string } | undefined;
   if (m.update && typeof m.update === 'object') {
     const uUrl = (m.update as Record<string, unknown>).url;
-    if (typeof uUrl !== 'string' || !/^https?:\/\//i.test(uUrl)) return bad('update.url 要是 http(s) 绝对地址。');
-    let uHost = '';
-    try {
-      uHost = new URL(uUrl.replace(/\{[^}]+\}/g, 'x')).hostname;
-    } catch {
-      return bad('update.url 解析不了。');
+    const uText = typeof uUrl === 'string' ? uUrl : '';
+    const uCfg = uText.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}/);
+    if (uCfg) {
+      // 与端点同样的两种开头：写死的 http(s) 或用户的地址字段。
+      const f = fields.find((x) => x.key === uCfg[1]);
+      if (!f) return bad('update.url 里的 {config:' + uCfg[1] + '} 没有对应的字段。');
+      if (f.type !== 'url') return bad('update.url 用 ' + uCfg[1] + ' 当地址前缀，它必须是 type: "url"。');
+    } else {
+      if (!/^https?:\/\//i.test(uText)) return bad('update.url 要是 http(s) 绝对地址。');
+      let uHost = '';
+      try {
+        uHost = new URL(uText.replace(/\{[^}]+\}/g, 'x')).hostname;
+      } catch {
+        return bad('update.url 解析不了。');
+      }
+      // 更新的出口也不额外开：必须已经在这个插件的主机白名单里。
+      if (!hostAllowed(uHost, hosts)) {
+        return bad('update.url 的主机 ' + uHost + ' 不在 hosts 白名单里（更新也不能多开一个出口）。');
+      }
     }
-    // 更新的出口也不额外开：必须已经在这个插件的主机白名单里。
-    if (!hostAllowed(uHost, hosts) && !hosts.some((h) => h.startsWith('{config:'))) {
-      return bad('update.url 的主机 ' + uHost + ' 不在 hosts 白名单里（更新也不能多开一个出口）。');
-    }
-    update = { url: uUrl };
+    update = { url: uText };
   }
 
   const epsRaw = epsRawForNames;

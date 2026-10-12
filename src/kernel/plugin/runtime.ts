@@ -514,11 +514,22 @@ export async function checkPluginUpdate(
 ): Promise<{ ok: boolean; error?: string; latest?: string; url?: string; newer?: boolean }> {
   const at = plugin.update?.url;
   if (!at) return { ok: false, error: '这个插件没有声明更新地址（manifest.update.url）。' };
+  const cfgRef = at.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}/);
+  if (cfgRef) {
+    const f = plugin.fields.find((x) => x.key === cfgRef[1]);
+    const base = (plugin.values[cfgRef[1]] ?? f?.default ?? '').trim();
+    if (!base) {
+      return { ok: false, error: '请先在插件面板里填写「' + (f?.label ?? cfgRef[1]) + '」（更新地址基于它）。' };
+    }
+  }
+  const resolved = cfgRef
+    ? at.replace(/^\{config:[^}]+\}/, (plugin.values[cfgRef[1]] ?? plugin.fields.find((x) => x.key === cfgRef[1])?.default ?? '').trim().replace(/\/+$/, ''))
+    : at;
   let url: URL;
   try {
-    url = new URL(at);
+    url = new URL(resolved);
   } catch {
-    return { ok: false, error: '更新地址不是合法地址。' };
+    return { ok: false, error: '更新地址不是合法地址：' + resolved };
   }
   if (!hostAllowed(url.hostname, effectiveHosts(plugin))) {
     return { ok: false, error: '更新地址的主机 ' + url.hostname + ' 不在这个插件的主机白名单里。' };
@@ -529,10 +540,18 @@ export async function checkPluginUpdate(
     if (!res.ok) return { ok: false, error: '更新地址返回 HTTP ' + res.status };
     const info = JSON.parse(body) as { version?: string; url?: string };
     if (!info.version) return { ok: false, error: '更新信息里没有 version 字段。' };
+    /*
+     * 更新信息里的下载地址可以是相对路径（以 / 开头）—— 相对**更新清单自己的地址**解析。
+     * 这样把清单和包放在同一个目录下就不必写死端口，本机演示也能直接用。
+     */
+    let download = info.url;
+    if (download && download.startsWith('/')) {
+      download = new URL(download, url).href;
+    }
     return {
       ok: true,
       latest: info.version,
-      url: info.url,
+      url: download,
       newer: versionAtLeast(info.version, plugin.version) && info.version !== plugin.version,
     };
   } catch (e) {

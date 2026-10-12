@@ -1,0 +1,155 @@
+{
+  "id": "status-board",
+  "name": "服务看板",
+  "version": "1.1",
+  "author": "Yggdrasil",
+  "minAppVersion": "0.1",
+  "description": "示例插件：一个声明式端点 + 一个 js 工具 + 一块自带界面（把三者凑在一起看它们怎么配合）。",
+  "hosts": [
+    "api.github.com",
+    "{config:update_base}"
+  ],
+  "update": {
+    "url": "{config:update_base}/plugins/status-board.version.json"
+  },
+  "fields": [
+    {
+      "key": "greeting",
+      "label": "看板标题",
+      "placeholder": "服务状态",
+      "default": "服务状态"
+    },
+    {
+      "key": "update_base",
+      "label": "更新地址前缀（可选）",
+      "type": "url",
+      "placeholder": "http://127.0.0.1:19387",
+      "hint": "填你这个应用自己的地址（浏览器地址栏里的那个源）。更新清单与新版包都放在应用的 /plugins/ 下，所以这样填就能真的演示一次\"检查更新 -> 确认安装\"。",
+      "default": ""
+    },
+    {
+      "key": "token",
+      "label": "GitHub Token（1.1 新增，可选）",
+      "secret": true,
+      "hint": "1.1 新增的密钥字段 —— 升级确认里应当能看见它。",
+      "default": ""
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "rate_limit",
+      "label": "探活（GitHub 限流）",
+      "description": "GET api.github.com/rate_limit — a small, fast, key-less endpoint that proves the declarative path works end to end. Returns resources.core.{limit,remaining,reset}. Without an API token the limit is 60 requests per hour, so a low remaining is normal, not a bug.",
+      "method": "GET",
+      "url": "https://api.github.com/rate_limit",
+      "headers": {
+        "accept": "application/vnd.github+json"
+      },
+      "params": [],
+      "pick": [
+        "resources.core.limit",
+        "resources.core.remaining",
+        "resources.core.reset"
+      ],
+      "maxChars": 3000,
+      "example": {
+        "kind": "status-board.rate_limit"
+      }
+    },
+    {
+      "name": "repo_info",
+      "label": "查仓库（1.1 新增）",
+      "description": "Reposilite — added in 1.1 so the upgrade diff has something to show. GET api.github.com/repos/{owner}/{repo}.",
+      "method": "GET",
+      "url": "https://api.github.com/repos/{owner}/{repo}",
+      "headers": {
+        "accept": "application/vnd.github+json"
+      },
+      "params": [
+        {
+          "name": "owner",
+          "description": "repository owner",
+          "required": true
+        },
+        {
+          "name": "repo",
+          "description": "repository name",
+          "required": true
+        }
+      ],
+      "pick": [
+        "full_name",
+        "stargazers_count",
+        "language",
+        "html_url"
+      ],
+      "maxChars": 4000,
+      "example": {
+        "kind": "status-board.repo_info",
+        "owner": "facebook",
+        "repo": "react"
+      }
+    }
+  ],
+  "tools": [
+    {
+      "name": "summarise",
+      "label": "统计并整理",
+      "description": "A **js tool**: takes a list of numbers (comma separated) and returns count / sum / min / max / average, plus a short human sentence. Runs in a sandboxed Worker with no network of its own, so it needs no host. Use it when you want arithmetic that you would rather not do in your head, or as the data step before rendering a board.",
+      "file": "tools/summarise.js",
+      "params": [
+        {
+          "name": "numbers",
+          "description": "comma separated numbers, e.g. \"3, 8, 12\"",
+          "required": true
+        }
+      ],
+      "cap": null,
+      "timeoutMs": 3000,
+      "example": {
+        "kind": "status-board.summarise",
+        "numbers": "3, 8, 12"
+      }
+    },
+    {
+      "name": "probe",
+      "label": "联网探活（经白名单）",
+      "description": "A **js tool that needs the network**: it calls ctx.fetch() to hit api.github.com/rate_limit, measures how long it took and returns {ms, status, remaining}. ctx.fetch is the only network path a js tool has, and the main thread checks the host against the plugin allow-list — that is the difference between \"the sandbox can reach what the plugin declared\" and \"the sandbox can reach anything\".",
+      "file": "tools/probe.js",
+      "params": [],
+      "cap": "net",
+      "timeoutMs": 8000,
+      "example": {
+        "kind": "status-board.probe"
+      }
+    }
+  ],
+  "ui": [
+    {
+      "name": "board",
+      "label": "状态看板",
+      "description": "A screen this plugin ships: renders a small board with the title from the plugin field and whatever data you pass. Put it on the desktop with plugin_ui(\"status-board\", \"board\", data).",
+      "file": "ui/board.tsx",
+      "dataDoc": "{ title?: string; rows?: { label: string; value: string }[] }",
+      "example": {
+        "kind": "plugin_ui",
+        "id": "status-board",
+        "ui": "board",
+        "data": {
+          "title": "今天的数字",
+          "rows": [
+            {
+              "label": "订单",
+              "value": "128"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "signature": {
+    "alg": "ed25519",
+    "publicKey": "u5iOLcNJGQlsuCp6SwPtVfOlnTsvs4OeGzJqMrohm4c=",
+    "value": "SHpQFSN4JaCbGe1q5dQRuOghqujBcckzB7SpDhqjhR86CXCJpXvoAIcmV2iPSO9aycpBpo94XZdCFufEeNwODg=="
+  }
+}

@@ -6,10 +6,11 @@
   "minAppVersion": "0.1",
   "description": "示例插件：一个声明式端点 + 一个 js 工具 + 一块自带界面（把三者凑在一起看它们怎么配合）。",
   "hosts": [
-    "httpbin.org"
+    "api.github.com",
+    "{config:update_base}"
   ],
   "update": {
-    "url": "https://httpbin.org/json"
+    "url": "{config:update_base}/plugins/status-board.version.json"
   },
   "fields": [
     {
@@ -17,32 +18,35 @@
       "label": "看板标题",
       "placeholder": "服务状态",
       "default": "服务状态"
+    },
+    {
+      "key": "update_base",
+      "label": "更新地址前缀（可选）",
+      "type": "url",
+      "placeholder": "http://127.0.0.1:19387",
+      "hint": "填你这个应用自己的地址（浏览器地址栏里的那个源）。更新清单与新版包都放在应用的 /plugins/ 下，所以这样填就能真的演示一次\"检查更新 -> 确认安装\"。",
+      "default": ""
     }
   ],
   "endpoints": [
     {
-      "name": "ping",
-      "label": "探活",
-      "description": "GET httpbin.org/get with a free-form note. Returns the request as the server saw it (headers, args, origin) — useful to show what the browser actually sends.",
+      "name": "rate_limit",
+      "label": "探活（GitHub 限流）",
+      "description": "GET api.github.com/rate_limit — a small, fast, key-less endpoint that proves the declarative path works end to end. Returns resources.core.{limit,remaining,reset}. Without an API token the limit is 60 requests per hour, so a low remaining is normal, not a bug.",
       "method": "GET",
-      "url": "https://httpbin.org/get?note={note}",
-      "params": [
-        {
-          "name": "note",
-          "description": "any text, echoed back",
-          "default": "hello"
-        }
-      ],
+      "url": "https://api.github.com/rate_limit",
+      "headers": {
+        "accept": "application/vnd.github+json"
+      },
+      "params": [],
       "pick": [
-        "args.note",
-        "origin",
-        "headers.Host",
-        "headers.User-Agent"
+        "resources.core.limit",
+        "resources.core.remaining",
+        "resources.core.reset"
       ],
-      "maxChars": 4000,
+      "maxChars": 3000,
       "example": {
-        "kind": "status-board.ping",
-        "note": "hi"
+        "kind": "status-board.rate_limit"
       }
     }
   ],
@@ -69,7 +73,7 @@
     {
       "name": "probe",
       "label": "联网探活（经白名单）",
-      "description": "A **js tool that needs the network**: it calls ctx.fetch() to hit httpbin.org/delay/1, measures how long it took and returns {ms, status}. ctx.fetch is the only network path a js tool has, and the main thread checks it against the plugin host allow-list — try a host outside the list and you get a refusal instead of a request.",
+      "description": "A **js tool that needs the network**: it calls ctx.fetch() to hit api.github.com/rate_limit, measures how long it took and returns {ms, status, remaining}. ctx.fetch is the only network path a js tool has, and the main thread checks the host against the plugin allow-list — that is the difference between \"the sandbox can reach what the plugin declared\" and \"the sandbox can reach anything\".",
       "file": "tools/probe.js",
       "params": [],
       "cap": "net",
@@ -105,6 +109,6 @@
   "signature": {
     "alg": "ed25519",
     "publicKey": "u5iOLcNJGQlsuCp6SwPtVfOlnTsvs4OeGzJqMrohm4c=",
-    "value": "cX3ha05z4hmjQeS9cPMCUezzXb2F+ncPLxAoZHGU3sL8LXdmK8xppbC9jl9Hpd7YXGHVSa3HbYpIIa9efqUrCA=="
+    "value": "8ZgCXs4a0C7BRbJzTdQIfoavx9pdZbXc+P06M4gOZVyw2W0CExaf8w0K0GHEIQHaWeT16KuGIbk1oMuqa5TMCw=="
   }
 }
