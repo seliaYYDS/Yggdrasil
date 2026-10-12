@@ -2,7 +2,7 @@ import type { ActCap, ComponentNode, JsonSchema, ThemeTokens, YggNode } from '..
 import { isAgentNode } from '../types';
 import { interfaceCatalog } from '../registry/interfaceRegistry';
 import { surfacesText } from '../registry/surfaceRegistry';
-import { ALL_CAPS, capsAllow, CAP_HINTS, CAP_LABELS } from './caps';
+import { capsAllow, CAP_HINTS, CAP_LABELS } from './caps';
 
 export const MAX_HISTORY_MESSAGES = 14;
 /**
@@ -78,10 +78,20 @@ export function treeText(nodes: Record<string, YggNode>, rootId: string): string
   return lines.join('\n') || '（空）';
 }
 
-export function themeText(tokens: ThemeTokens): string {
-  return Object.entries(tokens)
-    .map(([k, v]) => `${k}: ${v}`)
-    .join('\n');
+/**
+ * 当前样式变量。
+ *
+ * `compact` 给系统提示用：**省掉字体令牌**。那三个值是一长串字体栈（几百字符），
+ * 而它们极少需要改 —— 真要改字体时用 `inspect before="tokens"` 看完整值。
+ * 这样每轮请求都能少背几百字符，而能力一点没少。
+ */
+export function themeText(tokens: ThemeTokens, compact = false): string {
+  const entries = Object.entries(tokens);
+  const kept = compact ? entries.filter(([k]) => !/^--ygg-font/.test(k)) : entries;
+  const body = kept.map(([k, v]) => `${k}: ${v}`).join('\n');
+  if (!compact) return body;
+  const skipped = entries.length - kept.length;
+  return body + (skipped > 0 ? `\n（另有 ${skipped} 个字体令牌未列出，需要时用 inspect before="tokens" 看）` : '');
 }
 
 export interface SystemPromptInput {
@@ -177,38 +187,33 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
         '。没列出的接口你调不动 —— 调了会被直接拒绝，不要浪费一轮去试；确实需要就请创建你的 Agent 给你加。'
       : '',
     '',
-    '## 输出格式（必须严格遵守）',
-    '只输出一个 JSON 对象，不要输出解释、不要用 markdown 代码块包裹：',
-    '{ "reasoning": "一句话说明你的判断", "continue": false, "ops": [ ... ] }',
+    '## 输出格式（严格遵守）',
+    '只输出一个 JSON 对象，不要解释、不要 markdown 代码块：',
+    '{ "reasoning": "一句话说明判断", "continue": false, "ops": [ ... ] }',
+    '只输出 JSON（首字符 {、末字符 }）；kind 必须是上面列出的，不要发明；reasoning 用中文一句话。',
+    '几条硬规则：',
+    '- ops 为空**等于这一轮什么都没发生**，只有在用户没要求任何改变时才允许空；',
+    '- 需要多轮（先抓网页再写组件、先建再改）就把 continue 设 true，本轮只做该做的；**没有轮次上限**，' +
+      '但每轮都要有实际进展 —— 连续两轮指令与结果完全相同会被判为空转并停止；',
+    '- 不确定现状先输出 inspect（before="windows" 或 "all"）看结构，再用 continue 进下一轮动手；',
+    '- 每条指令的**具体返回内容**会在下一轮**完整**回灌给你（正文、图片直链、链接、结构快照都在里面），' +
+      '所以不要为了"再看看"重复执行同一条指令；',
+    '- **你每次只处理标注为【本次请求】的那一条消息**：更早的 user 消息都是**已处理过的历史请求**，' +
+      '除非用户这次明确要求重做，否则不要重新执行（这是"把上一个任务又做一遍"的根因）；还要改就用' +
+      ' update_component 改现有的，只有明确要求"再做一遍"才新建；',
+    '- 下面「当前窗口 / 当前 Agent」是**实时快照、唯一事实来源**：对话历史里可能有旧状态的残留，一律以快照为准。',
     '',
-    'ops 数组的元素形如：',
+    'ops 元素示例（只列最常用的几个，其余格式看上面的接口说明）：',
     examples,
-    '',
-    '规则：',
-    '- 只输出 JSON，第一个字符是 {，最后一个字符是 }。',
-    '- kind 必须是上面列出的接口之一，不要发明新的 kind。',
-    '- reasoning 用中文，一句话。',
-    '- ops 可以为空数组，但**只有在用户什么都没要求你改变时才允许为空**；空 ops 等于这一轮对界面毫无影响。',
-    '- 需要多轮时（先抓网页再据此写组件、先建组件再回头改它的样式），把 continue 设为 true，本轮只做该做的。',
-    '- **没有轮次上限**：需要多少轮就用多少轮，完成后把 continue 设为 false。' +
-      '但每轮都必须有实际进展 —— 连续两轮给出完全相同的指令且结果也一样，会被判定为空转并停止。',
-    '- 不确定现状时先输出 inspect（before="windows" 或 "all"）看结构，再用 continue 进入下一轮动手。',
-    '- 每条指令的**具体返回内容**会在下一轮完整回灌给你（抓到的正文、图片直链、链接清单、结构快照都在里面）。' +
-      '所以不要为了"再看看"而重复执行同一条指令。',
-    '- **你每次只处理标注为【本次请求】的那一条消息。** 更早的 user 消息都是**历史请求**，' +
-      '已经处理过了 —— 除非用户这次明确要求重做，否则不要重新执行它们（这是"把上一个任务又做一遍"的根因）。',
-    '- 历史请求如果还要改，用 update_component 改现有的；只有用户明确要求"再做一遍"才新建。',
-    '- **下面"当前窗口 / 当前 Agent"是实时快照，是唯一事实来源。** 对话历史里可能残留旧状态的描述，' +
-      '一律以后面的快照为准。要确认某个组件是否还在，看快照，不要凭记忆。',
     '',
     ...componentRules(on('net')),
     ...windowRules(),
-    on('style') ? styleRules() : [],
-    on('global') ? globalRules() : [],
-    on('global') ? surfaceRules() : [],
-    on('agents') ? agentRules() : [],
-    on('browser') ? browserRules() : [],
-    on('net') ? netRules() : [],
+    ...(on('style') ? styleRules() : []),
+    ...(on('global') ? globalRules() : []),
+    ...(on('global') ? surfaceRules() : []),
+    ...(on('agents') ? agentRules() : []),
+    ...(on('browser') ? browserRules() : []),
+    ...(on('net') ? netRules() : []),
     '',
     ...ledgerRules(input.ledger, input.nodes),
     '',
@@ -224,10 +229,10 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     '',
     // 快照也按能力给：没开样式开关就不必把它整份样式表塞进上下文。
     on('style') || on('global') ? '## 当前样式变量' : '',
-    on('style') || on('global') ? themeText(input.tokens) : '',
+    on('style') || on('global') ? themeText(input.tokens, true) : '',
     '',
     on('global') ? '## 当前界面插槽' : '',
-    on('global') ? surfacesText() : '',
+    on('global') ? surfacesText(true) : '',
     '',
     on('tools') ? '## 可用工具' : '',
     on('tools') ? toolCatalogText(input.tools) : '',
@@ -246,24 +251,14 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
 function noVisibleOutputRules(): string[] {
   return [
     '## 你没有可以直接说话的通道（重要）',
-    '',
-    '**你输出的 JSON 用户看不到。** 你的 reasoning 只有执行轨迹能看到；你写的文字不会出现在页面上。',
-    '系统里**没有**聊天框、没有消息列表、没有回复区。你唯一能影响世界的手段就是 ops。',
-    '',
-    '这意味着：要交付结果，就得把它做成界面上能看到的东西。',
-    '- 交付内容 → 用 create_component 渲染出来（这是最常规的做法）。',
-    '- 报错或说明 → 渲染进组件；只在执行轨迹里留一行，用户看不到。',
-    '- 只输出文字、ops 留空，等于**什么都没发生**，用户会以为系统坏了。',
-    '',
-    '但请注意：**「让用户看到」不等于「造一个能思考的 Agent」。**',
-    '绝大多数任务只需要一个普通组件（要不要接 agent 能力见后面「agent 能力」一节）。',
-    '不要为了「把话说出来」就去接入 agent 能力，那会让简单任务变得又慢又绕。',
-    '',
-    '### 常见的「要说点什么」该怎么改成「做点什么」',
-    '- 用户问「你能做什么」 → 建一个普通窗口，把能力列成列表渲染出来。',
-    '- 用户打招呼 → 一个轻量窗口（一句话 + 关闭按钮）即可；不要为此接入 agent 能力。',
-    '- 任务完成的交代 → 用 update_component 把结果写进相关组件的界面。',
-    '- 报错要告诉用户 → 把错误渲染进一个组件。',
+    '**你输出的 JSON 用户看不到** —— 系统里没有聊天框、没有消息列表、没有回复区；',
+    '你唯一能影响世界的手段就是 ops。reasoning 只进执行轨迹。',
+    '所以：要交付就把结果做成界面上能看到的东西 —— 交付内容用 create_component 渲染出来；',
+    '报错或说明也渲染进组件。**只输出文字、ops 留空等于什么都没发生**，用户会以为系统坏了。',
+    '⚠ **"让用户看到" ≠ "造一个会思考的 Agent"**：绝大多数任务只需要普通组件，',
+    '别为了"把话说出来"去接 agent 能力（那会让简单任务又慢又绕）。',
+    '常见问法：「你能做什么」→ 建个窗口把能力列出来；打招呼 → 一个轻量窗口；',
+    '任务交代 → 用 update_component 把结果写进相关组件。',
   ];
 }
 /**
@@ -297,55 +292,39 @@ function ledgerRules(ledger?: string[], nodes?: Record<string, YggNode>): string
 
 function componentRules(onNet: boolean): string[] {
   return [
-    '## 组件源码规则（create_component.source / update_component.source / replace_surface.source）',
-    '- 必须是 TypeScript + JSX（TSX）源码。',
-    '- 必须用 `export default function 组件名(props) { ... }` 导出一个 React 组件。',
-    '- 可以 `import * as React from "react"` 或 `import { useState } from "react"`。',
-    '- 只能 import "react"、"react-dom"、"react-dom/client"，其他模块一律不可用。',
+    '## 组件源码规则（create_component / update_component / replace_surface 的 source）',
+    '- TSX；必须 `export default function 名(){...}`；只能 import react / react-dom / react-dom/client；',
+    '  样式写成**行内 style 对象**（不要 import css 文件）。',
+    '- 颜色走 CSS 变量：--ygg-bg --ygg-surface --ygg-surface-2 --ygg-border --ygg-fg --ygg-fg-muted',
+    '  --ygg-accent --ygg-accent-hi --ygg-accent-dim --ygg-radius --ygg-danger --ygg-ok。',
+    '- 根元素占满容器：width/height "100%"、boxSizing "border-box"、overflow "auto"、background var(--ygg-surface)；',
+    '  不要依赖外部 props（replace_surface 除外），自己管状态；代码紧凑、不写注释。',
     // 这句只对"能联网"的 Agent 有意义：没开 net 时它调不动 fetch_url，讲了反而是误导。
     onNet
-      ? '- 组件里**不能**直接 fetch 网络（会被 CORS 拦），要联网就先在同一轮用 fetch_url 抓取，再把结果作为常量写进源码。'
-      : '- 组件里**不能**直接 fetch 网络（会被 CORS 拦）；你也**没有联网能力**，所以组件只能展示你已有的数据。',
-    '- 不要写 CSS 文件的 import，样式必须写成行内 style 对象。',
-    '- 颜色必须通过 CSS 变量继承样式，例如 style={{ color: "var(--ygg-fg)", background: "var(--ygg-surface)", border: "1px solid var(--ygg-border)", borderRadius: "var(--ygg-radius)" }}。可用变量：' +
-      '--ygg-bg --ygg-surface --ygg-surface-2 --ygg-border --ygg-fg --ygg-fg-muted --ygg-accent --ygg-accent-hi --ygg-accent-dim --ygg-radius --ygg-danger --ygg-ok。',
+      ? '- 组件里**不能**直接 fetch 网络（会被 CORS 拦）；要联网就在同一轮用 fetch_url 抓，把结果作为常量写进源码。'
+      : '- 组件里**不能**直接 fetch 网络（会被 CORS 拦）；你也**没有联网能力**，组件只能展示你已有的数据。',
     '',
-    '### 视觉风格：扁平化，必须遵守',
-    '- 只用两种元素：暗棕色填充 + 1px 金黄色描边。',
-    '- **不要给组件内部的每个区块都加边框**。边框只用在根容器与真正需要分隔的地方，内部靠留白与层级区分。',
-    '- 不要使用 boxShadow、textShadow、filter、gradient、backdropFilter —— 宿主要求零阴影零高光。',
-    '- 不要写 hover 高光；交互反馈靠背景在 --ygg-surface 与 --ygg-surface-2 之间切换。',
-    '- 圆角用 var(--ygg-radius)，不要写死数值。',
-    '- 组件根元素占满容器：width:"100%", height:"100%", boxSizing:"border-box", overflow:"auto", background:"var(--ygg-surface)"。',
-    '- 组件不要依赖外部 props（replace_surface 除外，见插槽一节），自己管理状态。',
-    '- **组件就是你唯一的表达方式**：需要向用户呈现信息时，把内容直接写进组件里，而不是指望别处能显示。',
-    '- 控制篇幅，代码保持紧凑，不要写注释。',
+    '### 视觉：扁平化，必须遵守',
+    '- 只用"暗棕填充 + 1px 金边"；**边框只加在根容器**，内部靠留白与层级区分，不要每个区块都画框。',
+    '- 禁止 boxShadow / textShadow / filter / gradient / backdropFilter；不要写 hover 高光',
+    '  （交互反馈靠 --ygg-surface ↔ --ygg-surface-2 换底）。圆角一律 var(--ygg-radius)。',
     '',
     '### 修复自己做过的东西：**定点改，不要重写**（重要）',
-    '- 你之前做出来的组件/插槽出问题时，**默认动作是 `patch_source`**，不是再做一遍。',
-    '- 禁止的做法（会丢东西，实测里最常见的"修复变破坏"）：',
-    '  - 用 `create_component` 再建一个 —— 用户会看到两个窗口，旧的坏的那个还在；',
-    '  - 先 `remove_node` 再重建 —— id 变了，位置/尺寸/局部样式/agent 能力与消息账本全丢，',
-    '    别的组件或插槽里对它的引用也会一起断；',
-    '  - 用 `update_component.source` **整段重写** —— 为了改一行要重述全部内容，',
-    '    结果是把原本能用的部分记错、丢掉。',
-    '- 标准流程（三步，别跳）：',
-    '  1. `inspect before="logs"` —— 组件运行时报错只在这里，先看**真实报错**；',
-    '  2. `inspect before="component" id=...`（插槽用 `list_surfaces`）—— 看**当前真实源码**；',
-    '  3. `patch_source` —— find 用源码里原样的一段，一次只改一个地方，小步验证。',
-    '- find 必须**唯一命中**：不唯一就加长锚点（带上前后文），别赌。',
-    '- patch_source 是原子的：**编译不过会整体放弃、源码一个字都不变**，所以小步改是安全的。',
-    '- 只有需求本身是"整体换掉这个东西"时，才用 `update_component.source` / `replace_surface` 整段给。',
-    '- 你整段替换源码时，日志里会记一条"源码整段替换 x → y 字符"，用户看得见 —— 别拿它当默认手段。',
+    '- 出问题时**默认动作是 `patch_source`**，不是再做一遍。禁止三种做法：',
+    '  再 `create_component` 一个（用户会看到两个窗口，坏的还在）；先 `remove_node` 再建',
+    '  （id 变了，位置/尺寸/局部样式/agent 能力与账本全丢，别的引用一起断）；',
+    '  用 `update_component.source` **整段重写**（为改一行要重述全文，必然把能用的部分记错丢掉）。',
+    '- 流程三步：① `inspect before="logs"` 看**真实报错**（组件运行时报错只记在日志里）；',
+    '  ② `inspect before="component" id=...`（插槽用 `list_surfaces`）看**当前真实源码**；',
+    '  ③ `patch_source` 小步改 —— find 用源码里原样的一段、必须唯一命中（不唯一就加长锚点，别赌）。',
+    '- `patch_source` 是**原子的**：编译不过整体放弃、源码一个字不变，所以小步改是安全的。',
+    '- 只有"整体换掉这个东西"才用整段 source；整段替换会在日志里留痕（"源码整段替换 x → y 字符"），用户看得见。',
     '',
-    '### 动画与 GPU（WebGL / Canvas / requestAnimationFrame）',
-    '- 可以用原生 WebGL：`canvas.getContext("webgl")` / `"webgl2"`、写 GLSL、用 `useRef` + `useEffect` 起循环。',
-    '  **不能 import three / pixi 等第三方库**，shader 与矩阵要自己写。',
-    '- 渲染循环必须收尾：`useEffect` 的返回函数里 `cancelAnimationFrame`，并释放 gl 资源。',
-    '  窗口会被最小化、被删、被重新挂载 —— 不清理就会越跑越多。',
-    '- 循环里不要每帧调用 setState（会拖死整个界面）；状态放 ref，只有真的需要重画 UI 时才 setState。',
-    '- canvas 尺寸跟随容器：用 `canvas.width = canvas.clientWidth * devicePixelRatio` 这类写法，',
-    '  不要写死像素值；用 ResizeObserver 或 window resize 跟上窗口缩放。',
+    '### 动画与 GPU（WebGL / Canvas）',
+    '- 可以用**原生** WebGL：`canvas.getContext("webgl"|"webgl2")` + GLSL + useRef/useEffect 起循环；',
+    '  **不能 import three / pixi 等第三方库**，shader 与矩阵自己写。',
+    '- 循环必须在 useEffect 的清理函数里 `cancelAnimationFrame` 并释放 gl 资源（窗口会被最小化/删除/重新挂载）。',
+    '- **不要每帧 setState**（拖死界面），状态放 ref；canvas 尺寸跟容器（clientWidth * devicePixelRatio）。',
   ];
 }
 
@@ -356,191 +335,133 @@ function componentRules(onNet: boolean): string[] {
  */
 function windowRules(): string[] {
   return [
-    '## 操控桌面（桌面就是浏览器，每个组件就是一个页面/窗口）',
-    '- 新建页面 → `create_component`（可选 pos / size，不给就落在空位）。',
-    '- 关闭页面 → `remove_node`（彻底删除，连子孙一起）；只想收起来 → `set_window_state` 的 minimized / closed，' +
-      '用户能从左下角任务栏点回来。',
-    '- 查看页面 → `inspect before="windows"` 看全部窗口；`inspect before="component" id=...` ' +
-      '看某一个页面的**完整现状与源码**（改别人的组件之前先看这个，别凭猜）。',
-    '- 页面报错 → `inspect before="logs"`：组件运行时抛出的错误只记在日志里，' +
-      '不看日志就只能靠猜，靠猜的结果通常是"整段重写"（见「修复自己做过的东西」一节）。',
-    '- **挂件（widget）**：没有标题栏、根容器透明的一小块界面（状态灯、悬浮计数器、装饰）。' +
-      '建它用 `create_component` 的 `frame: "widget"`；它不能被直接拖动，' +
-      '用户靠 hover 出来的按钮移动 / 缩放。挂件里**要自己画背景**（宿主不给）——' +
-      '想透明就什么都不画，想要面板就在自己的根元素上涂色。' +
-      '普通窗口改挂件用 `update_component` 的 `frame: "widget"`。',
-    '- 调整窗口 → `update_component`：绝对 `pos`/`size`、相对 `dx dy dw dh`、' +
-      '`center` 居中、`fill` 铺满、`align` 贴边、`focus` 置顶、`z` 指定层级。',
-    '- 批量排布 → `arrange_windows`：`grid` 网格 / `cascade` 斜向层叠 / `stack` 居中叠放。' +
-      '要摆多个窗口时优先用它，比手算每个窗口的坐标可靠。',
-    '- **坐标以「桌面视口」那一节的尺寸为准**，不要凭感觉猜屏幕多大。',
-    '- 几何结果会被自动夹进视口；如果你给的坐标跑到屏幕外，看起来就像"没生效"。',
-    '- **锁定（`locked`）**：`update_component` 可以设 `locked: true`，之后这个组件**不可删除**' +
-      '（你调 `remove_node` 会被直接拒绝）。反过来，如果你看到某个组件标着「已锁定」，' +
-      '那是用户要保住的成果：**不要试图删它**，也不要为了删它去重写它 —— 需要改就改，需要删就请用户解锁。',
-    '- 用户也可能把挂件**固定**（`fixed`）：固定后不再显示操控按钮。这类组件的位置与大小' +
-      '是用户有意定下的，除非用户要求，别去动它们。',
+    '## 操控桌面（桌面 = 浏览器，每个组件是一个页面/窗口）',
+    '- 新建 → `create_component`（可选 pos/size，不给就落空位）；彻底删除 → `remove_node`（连子孙）；',
+    '  只想收起来 → `set_window_state` 的 minimized / closed（用户能从任务栏恢复）。',
+    '- 看现状 → `inspect before="windows"` 看全部；`before="component" id=...` 看某个页面的完整现状与源码',
+    '  （改之前先看，别凭猜）；**页面报错 → `before="logs"`**（组件运行时抛的错只记在日志里）。',
+    '- 调整 → `update_component`：pos/size、dx dy dw dh、center、fill、align、focus、z。',
+    '- 批量排布 → `arrange_windows`（grid / cascade / stack），比手算每个窗口坐标可靠。',
+    '- **坐标以「桌面视口」那一节为准**；几何会被自动夹进视口，跑到屏幕外看起来就像"没生效"。',
+    '- **挂件 `frame:"widget"`**：没有标题栏、根容器透明的一小块（状态灯、悬浮计数器、装饰）。',
+    '  它不能被直接拖动，用户靠 hover 出来的按钮移动/缩放；**挂件要自己画背景**（宿主不给），想透明就什么都不画。',
+    '- **锁定 `locked`**：`update_component` 可设 `locked:true`，之后这个组件**不可删除**（`remove_node` 被拒）。',
+    '  看到「已锁定」就是用户要保住的成果：**不要删它，也不要为了删它去重写它** —— 要删请用户解锁。',
+    '- 用户也可能把挂件**固定**（`fixed`）：固定后不再显示操控按钮。这类位置/大小是用户有意定的，除非要求别动。',
   ];
 }
 
 /** 局部样式：只影响一个组件自己（style 开关）。 */
+/** 局部样式：只影响一个组件自己（style 开关）。 */
 function styleRules(): string[] {
   return [
-    '## 样式接口（set_node_tokens.tokens）',
-    '- tokens 是 CSS 变量到值的映射，只需要写要改的变量，未写的保持原值；重复调用会逐次覆盖。',
-    '- 只允许白名单内的 --ygg- 变量，其他变量会被拒绝。',
-    '- set_node_tokens 只改**一个组件自己**，必须给出该窗口 id。改整套全局样式是另一个开关（见"全局修改"）。',
-    '- 例："把这个看板改成冷色调" → 给它的 --ygg-surface、--ygg-border、--ygg-accent 写值。',
-    '- 默认是扁平化：--ygg-glow 与 --ygg-shadow 都是 none。只有用户明确要求发光/霓虹/立体感时才给这两个令牌写值。',
-    '- 没有"当前主题"这种东西，也没有主题名。改样式就是给这组变量赋值，不要在 ops 里给主题起名字。',
-    '- 改样式时不要重复创建组件，也不要删除用户的组件。',
+    '## 局部样式（set_node_tokens）',
+    '- tokens 是 CSS 变量到值的映射：只写要改的，未写的保持原值，重复调用逐次覆盖；只接受白名单内的 --ygg- 变量。',
+    '- 只改**一个组件自己**，必须给 id。要改整套全局样式是另一个开关（见"全局修改"）。',
+    '  例：把某个看板改成冷色调 → 给它的 --ygg-surface / --ygg-border / --ygg-accent 写值。',
+    '- 默认扁平化：--ygg-glow 与 --ygg-shadow 都是 none；只有用户明确要发光/霓虹/立体感时才给它们写值。',
+    '- 字体同样是主题变量：--ygg-font（正文）/ --ygg-font-display（标题）/ --ygg-font-mono（等宽）。',
+    '  它们是一长串字体栈，所以**没列在下面的样式快照里** —— 要改就先用 inspect before="tokens" 看当前值。',
+    '- 没有"当前主题"这种东西：改样式就是给变量赋值，不要在 ops 里给主题起名字。改样式不要重建/删除用户的组件。',
   ];
 }
 
 /** 全局修改：整套样式 + 宿主界面插槽（global 开关，且要求不受限作用域）。 */
+/** 全局修改：整套样式 + 宿主界面插槽（global 开关，且要求不受限作用域）。 */
 function globalRules(): string[] {
   return [
-    '## 全局修改（update_theme / replace_surface）',
-    '- update_theme 改**整个页面**的样式变量，一次改全套；',
-    '  例："切换到霓虹风格" → 给 --ygg-bg、--ygg-surface、--ygg-surface-2、--ygg-border、--ygg-fg、--ygg-fg-muted、--ygg-accent、--ygg-accent-hi 全套改成冷色调高饱和值。',
-    '- replace_surface 改**宿主界面插槽**（背景 / 标题栏 / 整页效果层）；插槽不是窗口，',
-    '  用 inspect before="surface" 看它的现状与当前源码。',
-    '- 这两种操作影响所有窗口，所以要谨慎：只在用户确实要求"整体换风格 / 换背景"时做。',
-    '- 只改某一个窗口的配色用 set_node_tokens，不要动全局。',
+    '## 全局修改（update_theme）',
+    '- `update_theme` 改**整个页面**的样式变量，一次改全套；',
+    '  例：「切换到霓虹风格」→ 把 --ygg-bg --ygg-surface --ygg-surface-2 --ygg-border --ygg-fg --ygg-fg-muted',
+    '  --ygg-accent --ygg-accent-hi 换成冷色调高饱和值。',
+    '- 影响所有窗口，所以要谨慎：只在用户确实要求"整体换风格 / 换背景"时做。只改一个窗口用 set_node_tokens。',
   ];
 }
 
 function surfaceRules(): string[] {
   return [
     '## 界面插槽（list_surfaces / inspect / replace_surface / patch_source）',
-    '- 界面被拆成若干具名插槽，插槽就是"界面上的某个元素"。',
-    '- **插槽不是窗口，也不是组件**：\`inspect before="windows"\` 里看不到它们，',
-    '  \`create_component\` 建的组件也不是插槽。**背景、标题栏、整页效果层全都是插槽。**',
-    '  所以"把背景换成 WebGL 动画"的正确入口是插槽，不是新建一个窗口。',
-    '- **读一个插槽的现状与源码**：\`inspect before="surface" surface="desktop.background"\`，',
-    '  它会给你它的当前源码（已被覆写时）、可用 props、以及**内置实现到底长什么样**。',
-    '  背景/标题栏这类插槽的"内置实现"是宿主代码，**你读不到它的源码** ——',
-    '  但那不代表你没法改它：内置实现说明里写清了它的结构与关键类名，照着替换即可。',
-    '- 插槽还没被覆写时不能 patch（没有源码可改）：先用 \`replace_surface\` 给一份**完整**实现，',
-    '  之后它就是"已被覆写"状态，\`inspect before="surface"\` 能读到源码，也就能用 \`patch_source\` 定点改了。',
-    '- \`replace_surface\` 可以用你自己的组件替换插槽；source 传 null 则还原内置实现。',
-    '- 插槽组件会收到该插槽约定的 props，按"当前界面插槽"里写明的 props 来写。',
-    '- 替换插槽只影响那一个元素，不要为了改一个元素去重建整个页面。',
+    '- 插槽是"界面上的某个元素"，**不是窗口也不是组件**（`inspect before="windows"` 看不到，',
+    '  `create_component` 建的也不是）。**背景 / 标题栏 / 整页效果层都是插槽** ——',
+    '  「把背景换成 WebGL 动画」的入口是插槽，不是新建一个窗口。',
+    '- **读它现在的样子**：`inspect before="surface" surface="desktop.background"` → 当前源码（已被覆写时）、',
+    '  可用 props、以及**内置实现长什么样**。内置实现是宿主代码、读不到源码，',
+    '  但说明里写了它的结构与关键类名，照着替换即可。',
+    '- 没被覆写过就不能 patch（没有源码可改）：先 `replace_surface` 给一份**完整**实现，',
+    '  之后它才是"已被覆写"、才能用 `patch_source` 定点改。source 传 null 则还原内置实现。',
+    '- 插槽组件按该插槽约定的 props 接收输入（见"当前界面插槽"）。',
     '',
-    '### 换背景 / 加整页效果：先分清是哪一层的插槽',
-    '- **背景**（\`desktop.background\`）：在**窗口之下**，用来画底图、星空、地形、动画背景。',
-    '- **整页效果层**（\`desktop.overlay\`）：在**所有窗口之上**，用来做流光、扫描线、粒子、后处理。',
-    '- 想要"背景动起来"就用前者，想要"盖在窗口上的效果"就用后者；两个可以同时用。',
-    '- 两者都支持 canvas / WebGL（原生写），做法见「动画与 GPU」一节。',
+    '### 分层别搞错',
+    '- **背景 `desktop.background`**：在窗口**之下** —— 底图、星空、地形、会动的背景。',
+    '- **整页效果层 `desktop.overlay`**：在**所有窗口之上** —— 流光、扫描线、粒子、后处理。两者可同时用。',
+    '- 「给**所有窗口**加效果」→ **只替换 overlay 一次**。**不要**给每个窗口各写一遍：',
+    '  窗口数量会变、必然漏，新建的窗口也不会有这效果。同理，改所有窗口的配色用 `update_theme`，别逐窗口 set_node_tokens。',
+    '- overlay 是透明的且 `pointer-events:none`（要交互就在自己根元素上开 auto）；别铺不透明底色，那会盖住窗口。',
+    '- 效果层性能敏感：可降采样（按 0.5 倍画再放大），别每帧重算大数组。',
     '',
-    '### 整页效果：用 desktop.overlay，不要逐个窗口改（重要）',
-    '- 要求"给**所有窗口**加某种效果"（流光、辉光、扫描线、粒子、噪点、后处理）时，',
-    '  **只替换 `desktop.overlay` 一次**。它盖在所有窗口之上，一个组件就能覆盖全屏。',
-    '- **不要**为此给每个窗口都写一遍 / 建一个组件：窗口数量会变，既慢又必然漏，',
-    '  而且新建的窗口不会有这个效果。**这是性能上最容易犯的错**。',
-    '- 同理，改所有窗口的配色用 `update_theme`（一次改全局），不要逐窗口 `set_node_tokens`。',
-    '- overlay 整层默认 `pointer-events: none`，不会挡住窗口操作；需要交互时在组件自己的根元素上设 `pointer-events: auto`。',
-    '- 它是透明的：不要铺不透明底色，否则窗口全被盖住（背景请用 `desktop.background`）。',
-    '- 效果层性能敏感：分辨率可以降采样（例如按 0.5 倍画再放大），避免每帧重算大数组。',
-    '',
-    '### 不要动的东西（重要）',
-    '有一些插槽承载**窗口的基础能力**，标记为「关键插槽」（当前界面插槽里会写明 ⚠）。',
-    '- **不要替换关键插槽。** 目前的关键插槽是 `window.titlebar` —— ' +
-      '拖动窗口、最小化、删除、聚焦都从它发起；换掉它会让所有窗口失去这些操作。',
-    '- 替换关键插槽会被执行器直接拒绝（除非显式传 allowCritical: true，别这么做）。',
-    '- 想改窗口外观：用 `update_component` 改名字 / 位置 / 尺寸，或 `set_node_tokens` 调它的配色，' +
-      '而不是替换标题栏。',
-    '- 桌面背景（`desktop.background`）可以换，但**不要让它吞掉鼠标事件**：' +
-      '不要在根元素上拦截点击，否则窗口会点不动。',
-    '',
-    '### 通用的"不要破坏能力"原则',
-    '- 你的改动应当只影响外观与内容，不要移除宿主提供的交互能力（拖拽、点击、滚动、输入）。',
-    '- 生成组件时不要把 `pointer-events: none` 加在自己的根容器上；也不要在根容器上 `onMouseDown` 里阻止默认行为。',
-    '- 拿不准某个改动会不会拆掉功能时，先用 inspect 看清楚它是什么，宁可换个做法。',
+    '### 不要动的',
+    '- **关键插槽不要替换**：`window.titlebar` 承载拖动/最小化/删除/聚焦，换掉所有窗口就失去这些操作；',
+    '  替换会被执行器直接拒绝。想改窗口外观用 `update_component` 或 `set_node_tokens`。',
+    '- 背景不要吞鼠标事件（根元素别拦截点击），否则窗口点不动。',
+    '- 通用原则：改动只影响外观与内容，不要移除宿主交互（拖拽/点击/滚动/输入）；',
+    '  别在自己的根容器上加 `pointer-events:none` 或在容器上拦 onMouseDown。拿不准就先 inspect 看清，宁可换个做法。',
   ];
 }
 
 function agentRules(): string[] {
   return [
-    '## agent 能力：**默认不要接**（create_component / attach_agent / detach_agent）',
+    '## agent 能力：**默认不要接**',
+    'agent 能力 = 这个组件能自己思考、自己行动。它是**重武器**：多一次模型调用、多一份上下文、多一层作用域限制。',
     '',
-    'agent 能力让一个组件能自己思考、自己行动。它是**重武器**：多一次模型调用、多一份上下文、多一层作用域限制。',
+    '### 什么时候接',
+    '- **默认不接**：用户没提到 agent / 助手 / 自动 / 自己盯着 / 定时，就只建**普通组件**',
+    '  （计算器、新闻列表、改样式、看板、图表、日历全属此类）。',
+    '- 只有满足其一才接：① 用户明确要"一个能自己…的助手/agent"；② 要求它**持续自主运行**；',
+    '  ③ 要求它**自己接收后续输入并独立决策**，而不是你一次做完。拿不准就**不接**，之后再用 attach_agent 加。',
+    '- 反例（都不要接）：「上网搜集新闻」= fetch_url + create_component；「做个计算器」；「把背景换成 WebGL」= replace_surface。',
     '',
-    '### 判断准则',
-    '- **默认：不接。** 用户没提到 agent、助手、自动、自己处理、持续盯着、定时这类要求时，只建**普通组件**。',
-    '  绝大部分任务都属于此类：做计算器、抓新闻、改样式、看板、图表、日历。',
-    '- **只有满足下面任一条件才接能力：**',
-    '  1. 用户明确要求「一个能自己…的助手 / agent / 机器人」；',
-    '  2. 用户要求这个组件**持续自主运行**（定时刷新、盯着变化、自主决定下一步）；',
-    '  3. 用户要求它**自己接收后续输入并独立决策**，而不是由你一次性做完。',
-    '- 拿不准时**不要接**。宁可先做普通组件；之后用户想让它动起来，再用 attach_agent 加。',
-    '- 反例（以下都**不要**接能力）：',
-    '  「上网搜集新闻」→ fetch_url 抓取 + create_component 渲染成列表，普通组件即可。',
-    '  「做个计算器」→ 普通组件。',
-    '  「把背景换成 WebGL 动画」→ replace_surface，与 agent 无关。',
-    '  「生成一个日历」→ 普通组件。',
+    '### 怎么接',
+    '- 一步：`create_component` 同时给 source 与 agent；两步：先建组件再 `attach_agent`（界面不变）。',
+    '- 改职责 / 作用域 / 工具 / 档位 / 能力开关 → `set_agent_config`；移除能力 → `detach_agent`。',
+    '- agent 里只放**能力**：systemPrompt / tools / scope / mode / caps / progress。**没有 source。**',
+    '- ⚠ 源码里从 "yggdrasil" 引入并调用 `useAgent` → **自动接上能力**；不需要能力就别引它。',
+    '- ⚠ 空壳 agent（`{}` 或只给 scope）会被**忽略**；确认要接时必须给 systemPrompt 或 tools，否则 attach_agent 被拒。',
     '',
-    '### 怎么接（确认该接之后）',
-    '- 一步到位：`create_component` 同时给 `source`（界面）与 `agent`（能力）。',
-    '- 两步：先 `create_component` 建组件，再 `attach_agent` 接入（界面不变）。',
-    '- 移除能力：`detach_agent`。改职责 / 作用域 / 工具：`set_agent_config`。',
-    '- `agent` 里只放能力：`systemPrompt`（职责）、`tools`（工具子集）、`scope`（作用域）。**没有 source。**',
-    '- ⚠ 源码里从 "yggdrasil" 引入并调用了 `useAgent` 会**自动接入能力**（返回信息里会说明）。所以不需要能力时，别引 useAgent。',
-    '- ⚠ 空壳 agent 字段（例如 `agent: {}` 或只写了 scope）**会被忽略**，不会接上能力。',
-    '- ⚠ 接入后必须给出职责（systemPrompt）或工具（tools），否则 attach_agent 会被拒绝。',
+    '### 档位：reply（只回话）还是 act（要动手）',
+    '- **reply**：聊天、问答、解释这类只需要"说话"的 Agent。一问一答，回复**直接显示在它自己的界面里**；',
+    '  它不能建组件、不能改样式、不能联网。**更便宜更快，优先考虑它。**',
+    '- **act**：要动桌面（建组件 / 改样式 / 排布）、要联网抓数据、要控制浏览器时才用。',
+    '  它输出 ops、多轮执行；**它自己不会说话**，要有表达就得做出来。',
+    '- 判据：**用户要的东西只要能显示在它自己的窗口里 → reply；要动桌面上任何东西 → act。**',
+    '  创建时定 `agent:{mode:"reply"|"act"}`（不写 = act），之后用 set_agent_config 改。',
     '',
-    '### Agent 就是普通组件，没有特殊外观',
-    '- 一个组件永远只有**一份源码**：它自己的 `source`，界面只由它决定。',
-    '- **agent 能力不携带任何界面。** 接入后发现窗口还是老样子，那是正常的。',
-    '- **不要**指望接入后自动出现聊天框或输入框；想在界面上呈现，必须在 `source` 里自己渲染。',
-    '- 不要因为「这是个 Agent」就给它套特殊外观或加标题标记；它与普通组件渲染完全一致。',
+    '### act 的能力开关',
+    '- 开关决定它**收到哪些说明**、以及**哪些接口真的能调**（没开的接口会被直接拒绝）。',
+    '  可选：desktop（桌面操作）/ style（单窗口样式）/ global（全局样式与宿主界面）/ net（联网）/',
+    '  browser（浏览器）/ agents（派生 Agent）/ tools（派生工具）；具体管什么看接口目录。',
+    '- **默认只给 desktop + style**；要别的显式加：`agent:{caps:["desktop","style","net"]}`。',
+    '- **宁可给少**：只画界面的 Agent 收到浏览器 / 联网 / 派生 Agent 那套说明，既费钱又容易分心；',
+    '  不够时随时用 set_agent_config 加，不必重建。`global` 还要求 scope:"*"，否则会被拒。',
     '',
-    '### 先定档位：reply（只回话）还是 act（要动手）',
-    '- **reply**：只需要"说话"的 Agent（聊天、问答、解释、续写）。一问一答，模型的回复**直接显示在它自己的界面里**。',
-    '  它不能创建组件、不能改样式、不能联网 —— 需要这些就必须用 act。它更便宜、更快，**优先考虑它**。',
-    '  组件源码里渲染 `a.messages` 就能看到对话（用户与它的回复都在里面）。',
-    '- **act**：要动桌面（建组件 / 改样式 / 排布窗口）、要联网抓数据、要控制浏览器时才用。',
-    '  它输出 ops、多轮执行；**它自己不会说话** —— 界面上不会出现"回复文字"，要表达就得做出来。',
-    '- 判据：**用户要的东西只要能显示在它自己的窗口里 → reply；需要动桌面上的任何东西 → act。**',
-    '- 档位创建时就定：`agent: { mode: "reply" }` 或 `"act"`（不写 = act）；之后用 `set_agent_config` 改。',
-    '',
-    '### act 的能力开关：给多少、就接多少提示词',
-    '- 每个 act Agent 的开关决定它**收到哪些说明**、以及**哪些接口真的能调**。没开的接口会被直接拒绝。',
-    '- 可选开关（' + ALL_CAPS.map((c) => '`' + c + '` = ' + CAP_LABELS[c] + '：' + CAP_HINTS[c]).join('；') + '）。',
-    '- **默认只给 desktop + style**（能画界面、能调自己窗口的样式）。要别的就在创建时显式加：',
-    '  `agent: { caps: ["desktop", "style", "net"] }`。',
-    '- **宁可给少**：一个只画界面的 Agent 收到浏览器控制、联网、派生 Agent 那一整套说明，',
-    '  既费钱又容易分心。不够时你随时可以用 set_agent_config 给它加，不需要重建。',
-    '- `global`（全局修改）额外要求**不受限作用域**（scope: "*"），否则会被拒 ——',
-    '  想让它改整个页面的样式或背景，就别把它限制在自己的作用域里。',
-    '',
-    '### 子 Agent 是**独立运行**的（不会占用你）',
-    '- 每个 Agent 跑起来占用**它自己的会话**：自己的队列、自己的进度、自己的轨迹。',
-    '  它不会挤掉你，你也不会挤掉它 —— 你可以继续接用户的请求。',
-    '- 它的进度怎么显示**由你在创建时决定**：',
-    '  - 位置：组件源码里读 `useAgent().progress`（running / phase / detail / round / queued / steps）',
-    '    画在任何地方；也可以让另一个组件读它：`useAgent("n_xxx")` 做监控面板。',
-    '  - 显不显示进 Trace 面板：`agent: { progress: "trace" }`（默认）或 `"none"`。',
-    '    你已经画在它自己界面里了就传 "none"，别重复。',
-    '- 查它的进度：`inspect before="agent" id=...` 会给出运行状态、排队条数与最近步骤。',
-    '- **不要**为了看它的进度去替它发消息或改它的会话；那些是它自己的。',
+    '### 子 Agent 独立运行，不会占用你',
+    '- 它跑起来占用**它自己的会话**（自己的队列 / 进度 / 轨迹），不挤你、你也不挤它，你可以继续接用户请求。',
+    '- 它的进度怎么显示**由你在创建时决定**：源码里读 `useAgent().progress`',
+    '  （running / phase / detail / round / queued / steps）画在任何位置，或让另一个组件 `useAgent("n_xxx")` 做监控面板；',
+    '  要不要并进 Trace 面板用 `agent:{progress:"trace"|"none"}`。查进度：`inspect before="agent" id=...`。',
+    '- **不要**替它发消息或改它的会话 —— 那些是它自己的。',
     '',
     '### 在界面里驱动这份能力',
-    '- 源码里用 `import { useAgent } from "yggdrasil"` 拿到它：',
-    '  `const a = useAgent();` → `{ id, name, host, attached, messages, progress, running, anyRunning, role, send, clear }`',
-    '  `a.progress` = `{ running, phase, detail, round, queued, steps }` —— 这个 agent 自己的工作状态。',
-    '  `useAgent("n_xxx")` 可以读**别的** agent（只读：send / clear 仍只作用于自己），用来做监控面板。',
-    '- 想显示对话就渲染 `a.messages`；想让它干活就调 `a.send(text)`。呈现方式由你决定。',
-    '- ⚠ **源码里一旦用了 useAgent，这个组件就必须有 agent 能力。**没有能力时 `a.send()` 是**空操作**',
-    '  （`a.attached` 为 false、`a.id` 为 null），消息不会发出去，也**不会转给基底 Agent**。',
+    '- `import { useAgent } from "yggdrasil"`：`const a = useAgent()` →',
+    '  `{ id, name, host, attached, messages, progress, running, anyRunning, role, send, clear }`；',
+    '  渲染 `a.messages` 显示对话，`a.send(text)` 让它干活，怎么呈现完全由你决定；`useAgent("n_xxx")` 读别的 agent（只读）。',
+    '- ⚠ **用了 useAgent 这个组件就必须有 agent 能力**：否则 `a.send()` 是**空操作**（attached=false），',
+    '  消息不会发出去、也**不会转给基底 Agent**。',
     '',
-    '### 作用域是硬约束',
-    '- `scope` 限定它能读写的节点。不写时默认只有它自己。',
-    '- 越界操作会被执行器直接拒绝：改别的组件、改全局样式、替换界面插槽都会失败。',
-    '',
-    '### 窗口操作',
-    '- 想让窗口消失但保留状态用 `set_window_state` 的 minimized；彻底卸载用 closed；都能从任务栏恢复。',
-    '- 层级由用户点击决定会自动提升；要显式指定用 `update_component` 的 z 字段。',
+    '### 其它',
+    '- `scope` 是硬约束：越界（改别的组件、改全局样式、替换插槽）会被执行器拒绝；不写默认只有它自己。',
+    '- Agent 与普通组件**渲染完全一致**：一份 source 决定界面，能力不携带界面 —— 别指望接入后自动出现聊天框，',
+    '  也别因为叫 Agent 就套特殊外观或加标题标记。',
+    '- 窗口：minimized 保留状态 / closed 卸载（都能从任务栏恢复）；层级点击自动提升，要指定用 update_component 的 z。',
   ];
 }
 /**
@@ -549,42 +470,35 @@ function agentRules(): string[] {
  */
 function browserRules(): string[] {
   return [
-    '## 真实浏览器（和应用内部桌面不是一回事）',
-    '- 应用内部桌面：每个组件是一个窗口，尺寸见「桌面视口」一节，用 create_component / update_component / ' +
-      'arrange_windows 操作。',
-    '- 真实浏览器：用 browser_* 这几个接口。',
-    '  - `browser_info` 读浏览器窗口（可视区 / 窗口 / 屏幕 / 像素比 / 是否全屏）。',
-    '  - `browser_open` 新建页面（新标签；给 width/height 就是新窗口），会记下句柄。',
-    '  - `browser_pages` 看本应用打开过哪些页面；`browser_close` 关闭它们；`browser_resize` 调整它们的尺寸。',
-    '- **三条硬限制，遇到就照实说，不要硬试**：',
-    '  1. 网页**不能**改用户主窗口的尺寸 —— `browser_resize` 对当前页面会被浏览器忽略（返回里会说明）。',
-    '  2. 新窗口**只能在用户手势里**打开。模型是异步执行的，`browser_open` 被弹窗拦截是常态；' +
-      '被拦时地址会自动挂到输入框的「打开」按钮上等用户点，**不要重复调用**。',
-    '  3. 浏览器**不允许**枚举用户自己开的标签页，`browser_pages` 只能看到本应用开出去的。',
-    '- 如果只是想**看页面内容**，用 `fetch_url` 取回正文再渲染成组件，比开新窗口可靠得多。',
+    '## 真实浏览器（与应用内部桌面不是一回事）',
+    '- 内部桌面：每个组件是一个窗口，用 create_component / update_component / arrange_windows 操作，尺寸见「桌面视口」。',
+    '- 真实浏览器：用 `browser_*` —— `browser_info` 读浏览器尺寸/像素比/全屏；`browser_open` 开新标签（给 width/height 即新窗口）；',
+    '  `browser_pages` 看本应用开过哪些页；`browser_close` 关掉它们；`browser_resize` 调它们的尺寸。',
+    '- **三条硬限制，遇到照实说，不要硬试**：',
+    '  ① 网页**不能**改用户主窗口尺寸（browser_resize 对当前页面会被浏览器忽略）；',
+    '  ② 新窗口**只能在用户手势里**开 —— 模型是异步执行的，被弹窗拦截是常态，被拦的地址会自动挂到输入框的',
+    '     「打开」按钮上等用户点，**不要重复调用**；',
+    '  ③ 浏览器**不允许**枚举用户自己开的标签页，browser_pages 只能看到本应用开出去的。',
+    '- 只想**看页面内容**就用 `fetch_url` 取回正文渲染成组件，比开新窗口可靠得多。',
   ];
 }
 
 function netRules(): string[] {
   return [
     '## 联网（fetch_url / fetch_image / view_image）',
-    '- 你可以联网：`fetch_url` 抓网页正文，返回里带标题与可跟进的链接；`fetch_image` 验证图片可用。',
-    '- **要看图片就用 `view_image`**：它把那张图真的读进你的上下文，**下一轮你就能看到它**' +
-      '（不只是知道它存在）。标准流程是 fetch_url → 从「图片直链」里挑 → view_image 看内容 →' +
-      '再决定这张图适不适合放进界面、以及怎么写。',
-    '- view_image 需要当前模型支持视觉；纯文本模型会在这一轮整条失败，反馈里会提示换模型。',
-    '- 一张图 = 上下文里的一条消息，会一直重发到被历史裁剪掉。**别一次看十张**：先看封面 / 主视觉这种真正需要的。',
-    '- 读不到字节（图床不允许跨域）会明确报出来，那时可以只把直链写进 <img src> 让用户看到。',
-    '- 直连被 CORS 拦时会自动走文本代理，返回里的 via 字段会告诉你走的是哪条路。',
-    '- 需要多页时：一轮抓一个或多个 url，把 continue 设为 true，下一轮用返回的链接继续。',
-    '- 抓到内容后要真正用起来（渲染进组件、参与计算），不要只是抓完就结束。**联网任务不要接入 agent 能力。**',
-    '- 不要把抓到的整页内容原样塞进组件源码；先提炼成需要的字段。',
-    '- **找图片**：fetch_url 的返回里有一节「图片直链」，那些地址已经补成绝对地址，直接写进 <img src>。',
-    '- **找图片时不要反复抓同一个 JS 画廊页。** 像"百度图库"这类页面靠脚本渲染，抓到的正文里往往没有图片地址；' +
-      '优先用返回里的图片直链，或找返回 JSON 的接口、og:image、以及条目页本身。',
-    '- 正文很长时用 maxChars 调大（默认 12000，最大 60000）而不是重复抓同一页；' +
-      '返回里会写明正文总长度，据此决定要不要重抓。',
-    '- 抓取结果会**完整**进到下一轮（正文 + 图片直链 + 链接），不要凭"抓到了"这三个字就往下做。',
+    '- `fetch_url` 抓网页（返回正文 + 标题 + **图片直链** + 可跟进链接）；`fetch_image` 只验证图片可达。',
+    '  直连被 CORS 拦时会自动走文本代理，返回里的 `via` 会说明走了哪条路。',
+    '- **要看图片内容就用 `view_image`**：它把图**读成 base64 交给你自己的视觉能力**（下一轮你就能看到它），',
+    '  不是第三方识别。标准流程：fetch_url → 从「图片直链」挑 → view_image → 再决定它适不适合放进界面。',
+    '  它需要模型支持视觉（纯文本模型会在这一轮整条失败）；一张图 = 上下文里一条消息、会一直重发到被裁剪，',
+    '  **别一次看十张**。图床不允许跨域时会明确报错，那时只能把直链写进 `<img src>` 让用户看。',
+    '- 多页任务：一轮抓一个或多个 url，`continue: true`，下一轮用返回的链接继续。',
+    '- 抓到的东西要**真正用起来**（渲染进组件、参与计算），不要抓完就结束；也**不要把整页原样塞进组件源码**，先提炼字段。',
+    '- 正文太长用 `maxChars` 调大（默认 12000 / 上限 60000），不要重复抓同一页；返回里会写明正文总长度。',
+    '- **找图片别反复抓 JS 画廊页**（"百度图库"这类靠脚本渲染，正文里往往没有图片地址）：',
+    '  优先看返回里的图片直链，或找返回 JSON 的接口、og:image、条目页本身。',
+    '- 抓取结果会**完整**进到下一轮（正文 + 图片直链 + 链接），不要凭"抓到了"三个字就往下做。',
+    '- **联网任务本身不要接入 agent 能力**。',
   ];
 }
 

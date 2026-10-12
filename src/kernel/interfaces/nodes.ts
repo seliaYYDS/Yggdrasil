@@ -230,26 +230,17 @@ export function registerNodeInterfaces(): void {
     kind: 'create_component',
     label: '创建组件',
     description:
-      '**新建一个页面/窗口**：生成一个界面组件插入桌面。' +
-      '**这是默认也是唯一的创建入口**，绝大多数任务（计算器、列表、图表、看板、抓取结果展示）都到这里为止：' +
-      '给一个 source，产出一个普通组件。pos / size 可选，不给就落在空位。' +
-      '要**挂件**（没有标题栏、透明背景、靠 hover 按钮操控的一小块界面）就传 frame: "widget"。' +
-      'agent 字段是**可选的、默认不写**的重武器，只有用户明确要求"这个组件自己思考 / 自己行动 / 定时自主运行"时才附带；' +
-      '判据见提示词「agent 能力」一节。' +
-      'agent.progress 可选 "trace"（默认，进度并进 Trace 面板）或 "none"（你自己在组件界面里画进度时用）；' +
-      '子 agent 跑起来占用自己的会话，不占用你。',
+      '**新建页面/窗口**（唯一的创建入口）：给一个 source 就产出一个普通组件。pos / size 可选，不给就落空位。' +
+      '挂件传 frame: "widget"。agent 字段可选（默认不写）：要不要接、怎么接、什么档位与能力开关见「agent 能力」一节。',
     example: {
       kind: 'create_component',
       name: '计算器',
-      description: '一个普通计算器',
       size: { w: 320, h: 420 },
-      pos: { x: 200, y: 120 },
       source:
         'import * as React from "react";\n' +
-        'export default function Calc(){ const [v, setV] = React.useState("0");\n' +
-        '  return <div style={{ width: "100%", height: "100%", boxSizing: "border-box", overflow: "auto",' +
-        ' background: "var(--ygg-surface)", color: "var(--ygg-fg)", border: "1px solid var(--ygg-border)",' +
-        ' borderRadius: "var(--ygg-radius)" }}>{v}</div>; }',
+        'export default function Calc(){ const [v, setV] = React.useState("0"); ' +
+        'return <div style={{ width: "100%", height: "100%", background: "var(--ygg-surface)", ' +
+        'color: "var(--ygg-fg)" }}>{v}</div>; }',
     },
     mutates: true,
     cap: 'desktop',
@@ -260,12 +251,9 @@ export function registerNodeInterfaces(): void {
     kind: 'update_component',
     label: '修改组件',
     description:
-      '修改已有组件（这就是"调整窗口"）。未给出的字段不动。' +
-      '换源码 source；改标题 name；显隐 status = active / minimized / closed；覆写局部样式 tokens；' +
-      '层级 z 或 focus=true 置顶。' +
-      '**几何**：绝对 `pos {x,y}` / `size {w,h}`；相对 `dx` `dy` `dw` `dh`；' +
-      '或直接用视口算好的 `center=true`（居中）、`fill=true`（铺满）、`align`（left/right/top/bottom/center 贴边）。' +
-      '所有几何结果都会夹进视口，不会跑到屏幕外。',
+      '修改已有组件（= 调整窗口），未给的字段不动：source 换源码；name 改标题；status 显隐；' +
+      'tokens 局部样式；z 或 focus=true 置顶；frame 换窗口/挂件；fixed / locked 开关。' +
+      '**几何**：绝对 `pos/size`、相对 `dx dy dw dh`、或视口算好的 `center` / `fill` / `align`。结果都会夹进视口。',
     example: { kind: 'update_component', id: 'n_xxx', dx: 120, dy: 0, focus: true },
     mutates: true,
     cap: 'desktop',
@@ -402,15 +390,8 @@ export function registerNodeInterfaces(): void {
     kind: 'attach_agent',
     label: '接入 agent 能力',
     description:
-      '给一个已存在的组件**接入 agent 能力**。接入后这个组件就有自己的上下文、职责与作用域，' +
-      '可以自己思考并行动。' +
-      '**界面不变** —— 组件长什么样完全由它自己的 source 决定；' +
-      '要让它在界面上呈现消息或按钮，就在它的源码里用 import { useAgent } from "yggdrasil" 自行渲染。' +
-      '它跑起来**占用自己的会话**，不占你、也不占别的 agent；进度可以用 useAgent().progress 画在它自己的界面里，' +
-      'progress: "none" 表示不要额外并进 Trace 面板。' +
-      '这是"派生 Agent"的正解：Agent 是能力，不是另一种窗口。' +
-      '**默认不要用**：用户没明确要求"它自己思考 / 自己行动 / 定时自主运行"时，普通组件就够了。' +
-      '必须给出 systemPrompt（它的职责）或 tools，否则会被拒绝。',
+      '给已存在的组件**接入 agent 能力**（界面不变，还是它自己的 source）。' +
+      '必须给 systemPrompt 或 tools，否则被拒；**默认不要用** —— 判据与档位 / 能力开关见「agent 能力」一节。',
     example: {
       kind: 'attach_agent',
       id: 'n_xxx',

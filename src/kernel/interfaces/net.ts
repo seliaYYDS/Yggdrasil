@@ -14,10 +14,8 @@ export function registerNetInterfaces(): void {
     kind: 'fetch_url',
     label: '抓取网页',
     description:
-      '抓取一个网址，返回正文文本（HTML 会被剥标签）、页面里的**图片直链**与可跟进的链接。' +
-      '找图片时直接看返回里的「图片直链」一节，那些地址可以直接写进 <img src>，不需要再抓一遍。' +
-      '直连被 CORS 拦时会自动走渲染代理（代理回 markdown，链接与图片同样会被抽出来）。' +
-      'maxChars 可选，默认 12000，最大 60000；只裁正文，链接与图片不受影响。失败会返回原因。',
+      '抓取网址：返回正文（HTML 剥标签）+ 标题 + **图片直链** + 可跟进链接。看图片直接看返回里那一节，不用再抓。' +
+      '直连被 CORS 拦会自动走渲染代理。maxChars 默认 12000 / 上限 60000，只裁正文（链接与图片不受影响）。',
     example: { kind: 'fetch_url', url: 'https://example.com', maxChars: 4000 },
     cap: 'net',
     handler: async (op) => {
@@ -90,12 +88,10 @@ export function registerNetInterfaces(): void {
     kind: 'view_image',
     label: '看图',
     description:
-      '**把一张图片读进你的上下文**，这样你下一轮就能真正"看到"它（而不只是知道它存在）。' +
-      '这就是"网页里的图片"的正确用法：fetch_url 给出图片直链 → view_image 把图**读成 base64 交给你自己看** → ' +
-      '再决定怎么写组件。识别用的是你（当前模型）的视觉能力，不是第三方识别 API。' +
-      '需要当前模型支持视觉；纯文本模型会在这一轮报错并提示换模型。' +
-      '图片的字节**直连**读取；抓不到（图床不允许跨域）时，只有你在设置里填了图片中转地址才会走它。' +
-      '**识别由你自己的模型完成**，不经过任何识别服务。一张图对应上下文里的一条消息（会占空间，别一次看太多张）。',
+      '**把一张图片读进你的上下文**（抓字节 → base64 → 交给**你自己的视觉能力**，没有第三方识别）。' +
+      '用法：fetch_url 拿到图片直链 → view_image → 下一轮你就能看到它 → 再决定怎么写组件。' +
+      '需要模型支持视觉（纯文本模型这一轮会整条失败）；字节直连读取，图床不允许跨域时会报错。' +
+      '一张图 = 上下文里一条消息（会占空间，别一次看太多）。',
     example: { kind: 'view_image', url: 'https://example.com/a.png', note: '首页主视觉' },
     mutates: false,
     cap: 'net',
@@ -117,15 +113,23 @@ export function registerNetInterfaces(): void {
         const caption =
           '图片内容' + (note ? '（' + note + '）' : '') + '：' + img.finalUrl +
           '（' + img.contentType + '，' + img.bytes + ' 字节，来源 ' + img.via + '）';
-        // 取最新的 facet 再追加：抓图期间可能已经有别的消息进来。
-        const fresh = useDesktopStore.getState().nodes[ctx.originId];
-        if (!fresh || fresh.kind !== 'component' || !fresh.agent) {
-          return fail('发起者的 agent 能力在抓图期间消失了，图片没有进入上下文。');
+        /*
+         * 写进**这次运行所属的那个会话**的记忆：
+         * 基底 Agent 的对话按输入框分开（每个输入框一份），组件 Agent 用自己 facet 上的一份。
+         */
+        const store = useDesktopStore.getState();
+        if (ctx.originId === store.rootId) {
+          store.appendSessionMessage(ctx.sessionId, { role: 'user', content: caption, images: [dataUrl] });
+        } else {
+          const fresh = store.nodes[ctx.originId];
+          if (!fresh || fresh.kind !== 'component' || !fresh.agent) {
+            return fail('发起者的 agent 能力在抓图期间消失了，图片没有进入上下文。');
+          }
+          const next = [...fresh.agent.messages, { role: 'user' as const, content: caption, images: [dataUrl] }];
+          store.updateFacet(ctx.originId, {
+            messages: next.length > MAX_STORED_MESSAGES ? next.slice(-MAX_STORED_MESSAGES) : next,
+          });
         }
-        const next = [...fresh.agent.messages, { role: 'user' as const, content: caption, images: [dataUrl] }];
-        useDesktopStore.getState().updateFacet(ctx.originId, {
-          messages: next.length > MAX_STORED_MESSAGES ? next.slice(-MAX_STORED_MESSAGES) : next,
-        });
         return ok('已读取图片并放进上下文', {
           observation:
             caption + '\n这张图**已经进入你的上下文**，下一轮你就能看到它（包括下一轮以及之后的每一轮，' +

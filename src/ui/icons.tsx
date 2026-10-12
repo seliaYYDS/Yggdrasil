@@ -97,3 +97,115 @@ export function ResetIcon(props: SVGProps<SVGSVGElement>) {
     </Svg>
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* Nodes 面板与挂件操控用的小图标                                       */
+/* ------------------------------------------------------------------ */
+
+/** 源码：尖括号。 */
+export function CodeIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M6 4.5 2.5 8 6 11.5" />
+      <path d="M10 4.5 13.5 8 10 11.5" />
+    </Svg>
+  );
+}
+
+/** 改版：铅笔。 */
+export function EditIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M11.2 2.4 13.6 4.8 5.9 12.5 2.6 13.4 3.5 10.1z" />
+    </Svg>
+  );
+}
+
+/** 显示中：实心点。 */
+export function ActiveIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="4" fill="currentColor" stroke="none" />
+    </Svg>
+  );
+}
+
+/** 最小化：圆 + 底下的横线。 */
+export function MinimizedIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="4" />
+      <path d="M2.6 13.4h10.8" />
+    </Svg>
+  );
+}
+
+/** 已关闭：空心圆。 */
+export function ClosedIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <circle cx="8" cy="8" r="4" />
+    </Svg>
+  );
+}
+
+/** 锁定：闭合的锁。 */
+export function LockIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <rect x="3.4" y="7" width="9.2" height="7" rx="1.2" />
+      <path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0V7" />
+    </Svg>
+  );
+}
+
+/** 未锁定：锁梁翘起来。 */
+export function UnlockIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <rect x="3.4" y="7" width="9.2" height="7" rx="1.2" />
+      <path d="M5.6 7V5.2a2.4 2.4 0 0 1 4.8 0" />
+    </Svg>
+  );
+}
+
+/** 固定：图钉。 */
+export function PinIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M9.6 1.9 14.1 6.4l-2.2.6-2.3 2.3.3 2.8-1.2 1.2-3.3-3.3-3.2 3.2" />
+      <path d="M4.2 9.4 6.5 7.1l.6-2.2 4.5 4.5-2.2.6-2.3 2.3z" />
+    </Svg>
+  );
+}
+
+/** 移动：四向箭头。 */
+export function MoveIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M8 2v12M2 8h12" />
+      <path d="M8 2 6.3 3.9M8 2l1.7 1.9M8 14l-1.7-1.9M8 14l1.7-1.9" />
+      <path d="M2 8l1.9-1.7M2 8l1.9 1.7M14 8l-1.9-1.7M14 8l-1.9 1.7" />
+    </Svg>
+  );
+}
+
+/** 缩放：右下角拉伸。 */
+export function ScaleIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M3 13 13 3" />
+      <path d="M9.4 3H13v3.6" />
+      <path d="M3 9.4V13h3.6" />
+    </Svg>
+  );
+}
+
+/** 关闭：叉。 */
+export function CloseIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M4.5 4.5l7 7M11.5 4.5l-7 7" />
+    </Svg>
+  );
+}

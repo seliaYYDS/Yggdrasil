@@ -15,6 +15,14 @@ export interface OpResult {
 export interface OpContext {
   /** 发起本次派生的节点。 */
   originId: NodeId;
+  /**
+   * 这次运行属于哪个会话。
+   *
+   * 必要的原因：基底 Agent 的**对话记忆是按会话分开的**（每个输入框一份），
+   * 所以「读图进上下文」「清空上下文」这类操作必须知道自己在哪个会话里，
+   * 否则会写错地方。
+   */
+  sessionId: string;
   round: number;
   index: number;
   /** 上报一条子步骤（用于透明化：比如编译耗时、替换了哪个插槽）。 */

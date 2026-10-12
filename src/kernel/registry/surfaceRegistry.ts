@@ -76,7 +76,14 @@ export function importSurfaceStates(saved: Record<string, string> | undefined | 
  * 所以每一项都附上"怎么读它"的命令：`inspect before="surface" surface=...`。
  * 没有这条指引的话，Agent 会卡在"抓不到这个插槽的源码"上（背景换 WebGL 就是这么卡的）。
  */
-export function surfacesText(): string {
+/**
+ * 描述界面结构，供 LLM 阅读。
+ *
+ * `compact` 给系统提示用：只留 id / 名称 / 状态 / props，省掉那一句 description ——
+ * 插槽的语义、内置实现、注意事项在「界面插槽」那一节已经讲过了，这里重复一遍只是占地方。
+ * `inspect before="surface"` 与 `list_surfaces` 用完整版。
+ */
+export function surfacesText(compact = false): string {
   const list = listSurfaces();
   if (list.length === 0) return '（当前没有可替换的界面插槽）';
   return list
@@ -89,7 +96,8 @@ export function surfacesText(): string {
       const warn = s.critical
         ? `\n    ⚠ 关键插槽：承载窗口基础能力（${s.capabilityHint ?? '未知'}）。替换它会破坏这些能力，**不要动它**。`
         : '';
-      return `- id=${s.id} 「${s.label}」${state} — ${s.description}${hint}${warn}`;
+      const desc = compact ? '' : ` — ${s.description}`;
+      return `- id=${s.id} 「${s.label}」${state}${desc}${hint}${warn}`;
     })
     .join('\n');
 }

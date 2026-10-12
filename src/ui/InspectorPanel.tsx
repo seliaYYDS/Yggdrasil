@@ -5,6 +5,17 @@ import { buildComponentPatchPrompt, stripFence } from '../kernel/agent/agentRunt
 import { chatStream } from '../kernel/llm/client';
 import { compileComponent } from '../host/compile';
 import { PanelWindow } from './PanelWindow';
+import {
+  ActiveIcon,
+  CloseIcon,
+  ClosedIcon,
+  CodeIcon,
+  EditIcon,
+  LockIcon,
+  MinimizedIcon,
+  PinIcon,
+  UnlockIcon,
+} from './icons';
 
 const KIND_LABEL: Record<string, string> = { agent: 'agent', component: 'comp', tool: 'tool' };
 
@@ -111,7 +122,7 @@ export function InspectorPanel() {
                         setExpanded(expanded === node.id ? null : node.id);
                       }}
                     >
-                      {'</>'}
+                      <CodeIcon width={13} height={13} />
                     </button>
                   ) : null}
                   {node.kind === 'component' ? (
@@ -124,7 +135,7 @@ export function InspectorPanel() {
                         void patchComponent(node);
                       }}
                     >
-                      ✎
+                      <EditIcon width={13} height={13} />
                     </button>
                   ) : null}
                   {node.kind === 'component' ? (
@@ -136,7 +147,13 @@ export function InspectorPanel() {
                         cycleStatus(node);
                       }}
                     >
-                      {node.status === 'active' ? '◉' : node.status === 'minimized' ? '◌' : '○'}
+                      {node.status === 'active' ? (
+                        <ActiveIcon width={13} height={13} />
+                      ) : node.status === 'minimized' ? (
+                        <MinimizedIcon width={13} height={13} />
+                      ) : (
+                        <ClosedIcon width={13} height={13} />
+                      )}
                     </button>
                   ) : null}
                   {/* 固定：只有挂件才有意义（普通窗口本来就能随时拖）。固定后 hover 不再出操控按钮。 */}
@@ -153,7 +170,7 @@ export function InspectorPanel() {
                         updateNode(node.id, { fixed: !node.fixed });
                       }}
                     >
-                      {node.fixed ? '⚲' : '⚓'}
+                      <PinIcon width={13} height={13} />
                     </button>
                   ) : null}
                   {/* 锁定：所有组件都有。锁定后不可删除（用户与 Agent 都删不掉）。 */}
@@ -166,7 +183,11 @@ export function InspectorPanel() {
                         updateNode(node.id, { locked: !node.locked });
                       }}
                     >
-                      {node.locked ? '🔒' : '🔓'}
+                      {node.locked ? (
+                        <LockIcon width={13} height={13} />
+                      ) : (
+                        <UnlockIcon width={13} height={13} />
+                      )}
                     </button>
                   ) : null}
                   <button
@@ -178,7 +199,7 @@ export function InspectorPanel() {
                       removeNode(node.id);
                     }}
                   >
-                    ✕
+                    <CloseIcon width={13} height={13} />
                   </button>
                 </div>
                 {expanded === node.id && (node.kind === 'component' || node.kind === 'tool') ? (

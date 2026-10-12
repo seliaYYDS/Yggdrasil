@@ -134,6 +134,8 @@ function capViolation(op: DerivationOp, originId: NodeId): string | null {
 export interface ExecuteOptions {
   runId: string;
   round: number;
+  /** 这次运行属于哪个会话（基底 Agent 的对话按会话分开，op 需要知道）。 */
+  sessionId: string;
   /** 每一步开始时回调，用于实时更新进度面板。 */
   onStep?: (step: TraceStep) => void;
 }
@@ -189,6 +191,7 @@ export async function executeOps(
     } else {
       const ctx: OpContext = {
         originId: origin,
+        sessionId: options.sessionId,
         round: options.round,
         index,
         note: (text) => {

@@ -67,31 +67,50 @@ function stripFence(text: string): string {
  * 1. 同一句话连发两次时，会把上一次那条真实请求也从历史里删掉（历史被改写）；
  * 2. 旧快照与真实历史可能已经不一致。
  */
-function historyMessages(nodeId: NodeId, input: string): ChatMessage[] {
-  const node = useDesktopStore.getState().nodes[nodeId];
-  if (!isAgentic(node)) return [];
-  const list = node.agent.messages.slice(-MAX_HISTORY_MESSAGES);
+/**
+ * 这个会话的记忆该从哪读。
+ *
+ * - **基底 Agent**（root）：记忆在**输入框会话**上 —— 每个输入框一份，互不串台；
+ * - **组件 Agent**：记忆在它自己的 facet 上（一个组件就一个会话）。
+ *
+ * 共享的是工作环境（节点树、样式、账本），不是对话。
+ */
+function sessionMemory(originId: NodeId, sessionId: string): Message[] {
+  const store = useDesktopStore.getState();
+  if (originId === store.rootId) {
+    return store.sessions.find((s) => s.id === sessionId)?.messages ?? [];
+  }
+  const node = store.nodes[originId];
+  return isAgentic(node) ? node.agent.messages : [];
+}
+
+/** 把一条消息写进这个会话的记忆。 */
+function pushMemory(originId: NodeId, sessionId: string, message: Message): void {
+  const store = useDesktopStore.getState();
+  if (originId === store.rootId) {
+    store.appendSessionMessage(sessionId, message);
+    return;
+  }
+  const node = store.nodes[originId];
+  if (!isAgentic(node)) return;
+  const next = [...node.agent.messages, message];
+  store.updateFacet(originId, {
+    messages: next.length > MAX_STORED_MESSAGES ? next.slice(-MAX_STORED_MESSAGES) : next,
+  });
+}
+
+function historyMessages(nodeId: NodeId, sessionId: string, input: string): ChatMessage[] {
+  const list = sessionMemory(nodeId, sessionId).slice(-MAX_HISTORY_MESSAGES);
   if (list.length > 0 && list[list.length - 1].content === input) list.pop();
   return list
     .filter((m: Message) => m.role !== 'system')
     .map((m: Message) => ({ role: m.role, content: userContent(m.content, m.images) }));
 }
 
-function appendMessage(nodeId: NodeId, message: Message): void {
-  const store = useDesktopStore.getState();
-  const node = store.nodes[nodeId];
-  if (!isAgentic(node)) return;
-  /*
-   * 记忆也要有上限。识图会让消息里带 base64 图片（几十 KB 到几 MB），
-   * 不封顶的话一个长期运行的 Agent 能把 IndexedDB 撑爆，而且每轮请求都会重发。
-   * 只保留最近 MAX_STORED_MESSAGES 条 —— 比发送用的 MAX_HISTORY_MESSAGES 宽松，
-   * 但足以避免无限增长。
-   */
-  const next = [...node.agent.messages, message];
-  store.updateFacet(nodeId, {
-    messages: next.length > MAX_STORED_MESSAGES ? next.slice(-MAX_STORED_MESSAGES) : next,
-  });
-}
+/*
+ * 记忆写入统一走 pushMemory（见上）：基底写会话、组件写 facet，两处都封顶
+ * MAX_STORED_MESSAGES —— 识图会让消息带 base64，不封顶能把 IndexedDB 撑爆。
+ */
 
 export interface RunOptions {
   originId?: NodeId;
@@ -258,7 +277,7 @@ async function runReply(
     return { ok: false, added: 0, rounds: 0, okCount: 0, failCount: 1, error: '发起组件不存在。' };
   }
   const role = isAgentic(origin) ? origin.agent.systemPrompt : '';
-  const historyCount = isAgentic(origin) ? origin.agent.messages.length : 0;
+  const historyCount = sessionMemory(originId, sessionId).length;
 
   const step: TraceStep = {
     id: newId(),
@@ -277,7 +296,7 @@ async function runReply(
 
   const messages: ChatMessage[] = [
     { role: 'system', content: buildReplyPrompt({ originName: origin.name, rolePrompt: role, history: historyCount }) },
-    ...historyMessages(originId, input),
+    ...historyMessages(originId, sessionId, input),
     // 不加【本次请求】标记 —— 那是给 act 档多轮执行用的；这里就是普通的对话上下文。
     { role: 'user', content: userContent(input, images) },
   ];
@@ -311,7 +330,7 @@ async function runReply(
   if (!reply) return failReply('模型没有返回内容', '这次调用没有拿到任何文本。', '空内容');
 
   // 回复写进记忆：这就是"它说过的话"，组件从这里渲染。
-  appendMessage(originId, { role: 'assistant', content: reply });
+  pushMemory(originId, sessionId, { role: 'assistant', content: reply });
   store.upsertSessionStep(sessionId, {
     ...step,
     status: 'ok',
@@ -351,7 +370,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
   const runId = newId();
   store.beginSessionTrace(sessionId, runId);
   store.setSessionStatus(sessionId, { running: true, phase: '准备上下文', detail: '', round: 0, runId });
-  appendMessage(originId, { role: 'user', content: input, ...(images.length ? { images } : {}) });
+  pushMemory(originId, sessionId, { role: 'user', content: input, ...(images.length ? { images } : {}) });
 
   /*
    * 档位分流。
@@ -471,7 +490,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
 
         const messages: ChatMessage[] = [
           { role: 'system', content: systemPrompt },
-          ...historyMessages(originId, input),
+          ...historyMessages(originId, sessionId, input),
           // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
           // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
           { role: 'user', content: userContent(CURRENT_REQUEST_TAG + '\n' + input, images) },
@@ -599,6 +618,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         const result = await executeOps(plan.ops, originId, {
           runId,
           round,
+          sessionId,
           onStep: (step) => {
             pushStep(step);
             setRunStatus({

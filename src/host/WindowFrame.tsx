@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Surface } from './Surface';
 import { useDesktopStore } from '../store/desktopStore';
 import { snapCenterToGrid } from '../app/grid';
+import { CloseIcon, MoveIcon, ScaleIcon } from '../ui/icons';
 
 /** 任务栏锚点：左下角。窗口最小化时朝这里缩小并位移，"收进"任务栏。 */
 const TASKBAR_ANCHOR_X = 26;
@@ -321,14 +322,14 @@ export function WindowFrame({
             title="按住拖动可缩放"
             onPointerDown={startGrip('resize')}
           >
-            ⤡
+            <ScaleIcon width={12} height={12} />
           </button>
           <button className="ygg-widget-btn" title="按住拖动可移动" onPointerDown={startGrip('move')}>
-            ✥
+            <MoveIcon width={12} height={12} />
           </button>
           {onDelete ? (
             <button className="ygg-widget-btn danger" title="关闭（删除）" onClick={onDelete}>
-              ✕
+              <CloseIcon width={12} height={12} />
             </button>
           ) : null}
         </div>

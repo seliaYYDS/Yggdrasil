@@ -81,10 +81,20 @@ function agentDetailText(id: string): string {
     }
   }
 
-  lines.push('', '最近消息（共 ' + f.messages.length + ' 条，只列最近 ' + Math.min(10, f.messages.length) + ' 条）：');
-  if (f.messages.length === 0) lines.push('（空）');
+  // 基底 Agent 的历史在**输入框会话**上（每个输入框一份），不在 facet 上。
+  const baseSessions = node.root === true ? desktop().sessions : [];
+  if (baseSessions.length > 0) {
+    lines.push(
+      '',
+      '对话记忆：**按输入框分开**（基底的对话不共用），当前各输入框：' +
+        baseSessions.map((s) => s.title + ' ' + s.messages.length + ' 条').join('；'),
+    );
+  }
+  const own = baseSessions.length > 0 ? [] : f.messages;
+  lines.push('', '最近消息（共 ' + own.length + ' 条，只列最近 ' + Math.min(10, own.length) + ' 条）：');
+  if (own.length === 0) lines.push(baseSessions.length > 0 ? '（基底的历史在各自的输入框里，用上面的条数看）' : '（空）');
   else {
-    for (const m of f.messages.slice(-10)) {
+    for (const m of own.slice(-10)) {
       const text = m.content.length > 200 ? m.content.slice(0, 200) + '…' : m.content;
       lines.push('[' + m.role + '] ' + text + (m.images?.length ? '（含 ' + m.images.length + ' 张图片）' : ''));
     }
@@ -324,12 +334,9 @@ export function registerCoreInterfaces(): void {
     kind: 'inspect',
     label: '查看界面结构',
     description:
-      '查看当前界面结构（"看看页面上现在有什么"）。before 可选：' +
-      'windows（视口 + 全部窗口）/ component（**某一个页面的完整现状与源码**，需同时给 id）/ ' +
-      'tool（**某一个工具的源码**，需同时给 id）/ ' +
-      'agent（**某一个 Agent 的职责全文、账本与最近消息**，需同时给 id）/ ' +
-      'surface（**某一个插槽的当前源码与内置实现说明**，需同时给 surface）/ ' +
-      'logs（**应用日志，组件运行时报错就在这里**）/ agents / tree / tokens / surfaces / tools / all。',
+      '查看界面结构。before：windows（视口+全部窗口）/ component id=（某页面的完整现状**与源码**）/' +
+      'tool id=（工具源码）/ surface=（插槽现状、当前源码与内置实现）/ agent id=（职责全文、账本、最近消息）/' +
+      'logs（**运行时报错在这里**）/ agents / tree / tokens / surfaces / tools / all。',
     example: { kind: 'inspect', before: 'component', id: 'n_xxx' },
     cap: 'desktop',
     handler: (op) => {
@@ -429,13 +436,9 @@ export function registerCoreInterfaces(): void {
     kind: 'patch_source',
     label: '局部修改源码',
     description:
-      '在**已有源码**里做定点替换（修 bug / 加一小块功能）。' +
-      '目标二选一：给 `id` 改组件源码；给 `surface` 改插槽源码。' +
-      'edits 是 [{ find, replace, all? }]：find 必须**原样**来自当前源码且**唯一命中**；' +
-      '不唯一时把锚点写长一点（带上前后文），或传 all:true 表示全部替换。' +
-      '多个 edit 顺序生效。**全部替换先在内存里做完再编译，编译通过才写入** —— ' +
-      '失败就整体放弃，源码一个字都不会变。' +
-      '**修自己之前做的东西就用它**：不要用 create_component 重建，也不要整段重写 source。',
+      '在**已有源码**里做定点替换（修 bug / 加功能）。目标二选一：`id` 改组件、`surface` 改插槽。' +
+      'edits = [{ find, replace, all? }]：find **原样**来自当前源码且**唯一命中**（不唯一就把锚点写长，或传 all:true）。' +
+      '**先在内存里全部替换完再编译，编译通过才写入** —— 失败整体放弃、源码一个字不变。',
     example: {
       kind: 'patch_source',
       id: 'n_xxx',
@@ -694,12 +697,11 @@ export function registerCoreInterfaces(): void {
     kind: 'clear_agent_context',
     label: '清空 Agent 上下文',
     description:
-      '清空某个 Agent 的对话历史**与"已做过的事"账本**，让它从零开始。' +
-      '账本不清掉的话，它还会记得做过的组件，和"从零开始"是矛盾的。' +
-      '用 id 指定（Agent 就是带 agent 能力的组件）。',
+      '清空某个 Agent 的对话历史**与共享账本**（账本不清的话它还会记得做过的组件）。用 id 指定。' +
+      '**基底的对话按输入框分开**：id 给 root 时只清**当前这个输入框**的历史，别的输入框不受影响。',
     example: { kind: 'clear_agent_context', id: 'n_xxx' },
     cap: 'agents',
-    handler: (op) => {
+    handler: (op, ctx) => {
       const id = strOr(op.id, '');
       const all = Object.values(desktop().nodes);
       const found = id ? all.find((n) => n.id === id) : undefined;
@@ -707,9 +709,18 @@ export function registerCoreInterfaces(): void {
         return fail('找不到 Agent ' + (id || '') + '。');
       }
       const facet = found.agent;
-      const n = facet.messages.length;
       const l = facet.ledger.length;
-      useDesktopStore.getState().updateFacet(found.id, { messages: [], ledger: [] });
+      const store = useDesktopStore.getState();
+      // 基底：历史在会话上（只清当前这个输入框）；组件：历史在它自己的 facet 上。
+      if (found.root === true) {
+        const n = store.sessions.find((s) => s.id === ctx.sessionId)?.messages.length ?? 0;
+        store.clearSessionMessages(ctx.sessionId);
+        store.updateFacet(found.id, { ledger: [] });
+        desktop().log('op', 'agent clear ' + found.name + ' @' + ctx.sessionId, found.id);
+        return ok('已清空当前输入框的 ' + n + ' 条历史，以及共享的 ' + l + ' 条账本');
+      }
+      const n = facet.messages.length;
+      store.updateFacet(found.id, { messages: [], ledger: [] });
       desktop().log('op', 'agent clear ' + found.name, found.id);
       return ok('已清空「' + found.name + '」的 ' + n + ' 条历史与 ' + l + ' 条账本');
     },

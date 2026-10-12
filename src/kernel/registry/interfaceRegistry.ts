@@ -61,13 +61,28 @@ export function interfacesFor(caps: ActCap[] | undefined): AgentInterface[] {
   return listInterfaces().filter((d) => !d.cap || has.has(d.cap));
 }
 
+/**
+ * 只给这几个接口配 JSON 示例。
+ *
+ * 其余接口的字段与用法在 description 里已经写清了；全部配上示例会让系统提示多出上千字符，
+ * 而实测里多出来的部分几乎用不上 —— 常用的这几个形状才需要"照着抄"。
+ */
+const EXAMPLE_KINDS = new Set([
+  'create_component',
+  'update_component',
+  'patch_source',
+  'fetch_url',
+  'inspect',
+  'attach_agent',
+]);
+
 /** 生成提示词里的接口清单与示例（按能力裁剪）。 */
 export function interfaceCatalog(caps?: ActCap[]): { lines: string[]; examples: string } {
   const lines: string[] = [];
   const examples: string[] = [];
   interfacesFor(caps).forEach((def, i) => {
     lines.push(`${i + 1}. ${def.kind} —— ${def.description}`);
-    examples.push(`  ${JSON.stringify(def.example)}`);
+    if (EXAMPLE_KINDS.has(def.kind)) examples.push(`  ${JSON.stringify(def.example)}`);
   });
   return { lines, examples: `[\n${examples.join(',\n')}\n]` };
 }

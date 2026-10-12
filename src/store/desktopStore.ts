@@ -4,12 +4,14 @@ import type {
   ComponentNode,
   LogEntry,
   LogLevel,
+  Message,
   NodeId,
   RunFeedback,
   ThemeTokens,
   TraceStep,
   YggNode,
 } from '../kernel/types';
+import { MAX_STORED_MESSAGES } from '../kernel/agent/prompts';
 import { newNodeId } from '../kernel/ids';
 import type { StorageAdapter, StorageKind } from '../storage/adapter';
 import { initStorage } from '../storage/detect';
@@ -71,6 +73,14 @@ export interface InputSession {
   status: RunStatus;
   trace: TraceStep[];
   queue: QueuedInput[];
+  /**
+   * **这个输入框自己的对话记忆。**
+   *
+   * 每个输入框是一个独立会话：各自记着自己说过什么、基底答过什么，
+   * 所以"在 A 框聊的事"不会跑到 B 框的上下文里。
+   * 共享的只有**工作环境**（节点树、样式、账本），那是"这个桌面现在是什么样"。
+   */
+  messages: Message[];
 }
 
 /** 第一个输入框的 id，也是基底那一份"主会话"。 */
@@ -117,6 +127,7 @@ export function makeSession(n: number, base: PanelRect, viewW: number, viewH: nu
     status: emptyStatus(),
     trace: [],
     queue: [],
+    messages: [],
   };
 }
 
@@ -127,6 +138,8 @@ export interface PersistedSession {
   rect: PanelRect;
   z: number;
   minimized: boolean;
+  /** 会话自己的对话记忆，跟着会话一起存。 */
+  messages?: Message[];
 }
 
 interface PersistedRoot {
@@ -554,6 +567,10 @@ interface DesktopState {
   shiftQueued: (id: string) => QueuedInput | null;
   /** 会话 id -> 是否该会话还有排队项。 */
   clearQueue: (id: string) => void;
+  /** 追加一条消息到这个会话的记忆（基底 agent 的对话按会话分开）。 */
+  appendSessionMessage: (id: string, message: Message) => void;
+  /** 清空这个会话的记忆。 */
+  clearSessionMessages: (id: string) => void;
   /**
    * 这个会话 id 现在有效吗。
    * 输入框会话要求输入框存在；agent 会话要求目标组件还在（且带能力）。
@@ -646,13 +663,15 @@ function snapshot(): PersistedRoot {
       settings: s.settingsRect,
       trace: s.traceRect,
     },
-    // 会话只存几何与可见性；运行状态与排队项是瞬态，不落盘。
+    // 会话存几何、可见性，以及**它自己的对话记忆**；
+    // 运行状态与排队项是瞬态，不落盘。
     sessions: s.sessions.map((ses) => ({
       id: ses.id,
       title: ses.title,
       rect: ses.rect,
       z: ses.z,
       minimized: ses.minimized,
+      messages: ses.messages.slice(-MAX_STORED_MESSAGES),
     })),
     panelZ: s.panelZ,
     zCounter: s.zCounter,
@@ -805,11 +824,30 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
           status: emptyStatus(),
           trace: [],
           queue: [],
+          messages: Array.isArray(p.messages) ? (p.messages as Message[]) : [],
         });
       }
     } else {
       restored.push(makeSession(1, firstRect, viewW, viewH));
     }
+    /*
+     * 迁移：老版本里基底的对话存在 root 的 facet 上（所有输入框共用一份）。
+     * 现在改成"每个输入框自己一份"，所以把 old root 的那份**搬到第一个输入框**，
+     * 并清掉 root 上的旧数组 —— 不清的话它会一直是死数据，还每次都被持久化。
+     */
+    const rootNode = safeNodes.root;
+    const rootFacet = rootNode && rootNode.kind === 'component' ? rootNode.agent : undefined;
+    if (
+      restored[0] &&
+      restored[0].messages.length === 0 &&
+      rootFacet &&
+      rootFacet.messages.length > 0 &&
+      !restored.some((ses) => ses.messages.length > 0)
+    ) {
+      restored[0].messages = rootFacet.messages;
+      rootFacet.messages = [];
+    }
+
     const legacyZ = panelZ?.input;
     if (typeof legacyZ === 'number' && restored[0]) restored[0].z = legacyZ;
 
@@ -1207,6 +1245,23 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   clearQueue: (id) => {
     set((s) => mapRun(s, id, (run) => ({ ...run, queue: [] })));
+  },
+
+  appendSessionMessage: (id, message) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => {
+        if (ses.id !== id) return ses;
+        const next = [...ses.messages, message];
+        // 与 facet 记忆同一个上限：带图的消息是 base64，不封顶会无限涨。
+        return { ...ses, messages: next.length > MAX_STORED_MESSAGES ? next.slice(-MAX_STORED_MESSAGES) : next };
+      }),
+    }));
+    schedulePersist();
+  },
+
+  clearSessionMessages: (id) => {
+    set((s) => ({ sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, messages: [] } : ses)) }));
+    schedulePersist();
   },
 
   hasSession: (id) => {
