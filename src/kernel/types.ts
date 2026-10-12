@@ -118,12 +118,33 @@ export interface AgentFacet {
   caps?: ActCap[];
 }
 
+/**
+ * 窗口形态。
+ * - `'window'`（缺省）：有标题栏的普通窗口。
+ * - `'widget'`：**挂件** —— 不画标题栏、根容器透明无边框、不能被直接拖动；
+ *   鼠标移上去时右下角出现三个按钮（缩放 / 移动 / 关闭），按住"移动"或"缩放"才能改。
+ *   适合状态灯、悬浮计数器、装饰性小组件这类"只要那一小块"的东西。
+ */
+export type NodeFrame = 'window' | 'widget';
+
 export interface ComponentNode extends BaseNode {
   kind: 'component';
   source: string;
   size: Size2D;
   pos: Pos2D;
   z: number;
+  /** 窗口形态。缺省 'window'（普通窗口）。 */
+  frame?: NodeFrame;
+  /**
+   * 挂件专用：固定。
+   * 固定后 hover 不再显示操控按钮，位置与大小也就动不了。
+   */
+  fixed?: boolean;
+  /**
+   * 锁定：**不可被删除**。用户与 Agent 都删不掉 —— 用来保护已经满意的东西。
+   * 要先在 Nodes 里解锁才能删。
+   */
+  locked?: boolean;
   /** 带这个字段的组件就是一个 Agent。 */
   agent?: AgentFacet;
   /** 基底 Agent：它是 agent 组件，但不作为窗口渲染。 */

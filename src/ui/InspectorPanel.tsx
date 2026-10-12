@@ -96,6 +96,12 @@ export function InspectorPanel() {
                   <span className="kind">{KIND_LABEL[node.kind] ?? node.kind}</span>
                   <span className="name">{node.name}</span>
                   {isAgent ? <span className="kind" title="带 agent 能力">agent</span> : null}
+                  {node.kind === 'component' && node.frame === 'widget' ? (
+                    <span className="kind" title="挂件：没有标题栏，靠右下角按钮操控">挂件</span>
+                  ) : null}
+                  {node.kind === 'component' && node.locked ? (
+                    <span className="kind" title="已锁定：不可删除">已锁</span>
+                  ) : null}
                   {node.kind === 'component' || node.kind === 'tool' ? (
                     <button
                       className="ygg-winbtn"
@@ -133,10 +139,40 @@ export function InspectorPanel() {
                       {node.status === 'active' ? '◉' : node.status === 'minimized' ? '◌' : '○'}
                     </button>
                   ) : null}
+                  {/* 固定：只有挂件才有意义（普通窗口本来就能随时拖）。固定后 hover 不再出操控按钮。 */}
+                  {node.kind === 'component' && node.frame === 'widget' ? (
+                    <button
+                      className={'ygg-winbtn' + (node.fixed ? ' is-active' : '')}
+                      title={
+                        node.fixed
+                          ? '已固定：鼠标移上去不再显示操控按钮（点击取消）'
+                          : '固定：不再显示操控按钮（点击固定）'
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        updateNode(node.id, { fixed: !node.fixed });
+                      }}
+                    >
+                      {node.fixed ? '⚲' : '⚓'}
+                    </button>
+                  ) : null}
+                  {/* 锁定：所有组件都有。锁定后不可删除（用户与 Agent 都删不掉）。 */}
+                  {node.kind === 'component' ? (
+                    <button
+                      className={'ygg-winbtn' + (node.locked ? ' is-active' : '')}
+                      title={node.locked ? '已锁定：不可删除（点击解锁）' : '锁定：不可删除（点击锁定）'}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        updateNode(node.id, { locked: !node.locked });
+                      }}
+                    >
+                      {node.locked ? '🔒' : '🔓'}
+                    </button>
+                  ) : null}
                   <button
                     className="ygg-winbtn danger"
-                    title="删除"
-                    disabled={node.id === rootId}
+                    title={node.kind === 'component' && node.locked ? '已锁定，先解锁才能删除' : '删除'}
+                    disabled={node.id === rootId || (node.kind === 'component' && node.locked === true)}
                     onClick={(e) => {
                       e.stopPropagation();
                       removeNode(node.id);

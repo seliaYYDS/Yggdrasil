@@ -888,6 +888,18 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   removeNode: (id) => {
     const ids = get().cascadeIds(id);
+    /*
+     * 锁定是**硬拦截**：删掉锁定的节点等于把用户的保护措施拆了。
+     * 这里兜底，UI 与 remove_node 指令各自还有一道（它们能给出更好的说明）。
+     */
+    const lockedHit = ids.find((nid) => {
+      const n = get().nodes[nid];
+      return !!n && n.kind === 'component' && n.locked === true;
+    });
+    if (lockedHit) {
+      get().log('warn', '已锁定，未删除 ' + lockedHit, lockedHit);
+      return;
+    }
     set((s) => {
       const nodes = { ...s.nodes };
       for (const nid of ids) delete nodes[nid];

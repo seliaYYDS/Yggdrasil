@@ -5,6 +5,11 @@ import { surfacesText } from '../registry/surfaceRegistry';
 import { ALL_CAPS, capsAllow, CAP_HINTS, CAP_LABELS } from './caps';
 
 export const MAX_HISTORY_MESSAGES = 14;
+/**
+ * 记忆里最多留多少条消息（存下来的，不是每次发出去的）。
+ * 比 MAX_HISTORY_MESSAGES 宽松得多，目的是防止带图片的消息无限堆积。
+ */
+export const MAX_STORED_MESSAGES = 40;
 export const MAX_NODES = 80;
 
 export interface ToolCatalogEntry {
@@ -37,6 +42,8 @@ export function windowsText(nodes: Record<string, YggNode>): string {
       (n) =>
         '- id=' + n.id + ' 「' + n.name + '」 status=' + n.status +
         ' pos=' + n.pos.x + ',' + n.pos.y + ' size=' + n.size.w + 'x' + n.size.h + ' z=' + n.z +
+        (n.frame === 'widget' ? ' [挂件' + (n.fixed ? '·已固定' : '') + ']' : '') +
+        (n.locked ? ' [已锁定·不可删]' : '') +
         (n.agent ? ' [agent]' : ''),
     )
     .join('\n');
@@ -357,12 +364,22 @@ function windowRules(): string[] {
       '看某一个页面的**完整现状与源码**（改别人的组件之前先看这个，别凭猜）。',
     '- 页面报错 → `inspect before="logs"`：组件运行时抛出的错误只记在日志里，' +
       '不看日志就只能靠猜，靠猜的结果通常是"整段重写"（见「修复自己做过的东西」一节）。',
+    '- **挂件（widget）**：没有标题栏、根容器透明的一小块界面（状态灯、悬浮计数器、装饰）。' +
+      '建它用 `create_component` 的 `frame: "widget"`；它不能被直接拖动，' +
+      '用户靠 hover 出来的按钮移动 / 缩放。挂件里**要自己画背景**（宿主不给）——' +
+      '想透明就什么都不画，想要面板就在自己的根元素上涂色。' +
+      '普通窗口改挂件用 `update_component` 的 `frame: "widget"`。',
     '- 调整窗口 → `update_component`：绝对 `pos`/`size`、相对 `dx dy dw dh`、' +
       '`center` 居中、`fill` 铺满、`align` 贴边、`focus` 置顶、`z` 指定层级。',
     '- 批量排布 → `arrange_windows`：`grid` 网格 / `cascade` 斜向层叠 / `stack` 居中叠放。' +
       '要摆多个窗口时优先用它，比手算每个窗口的坐标可靠。',
     '- **坐标以「桌面视口」那一节的尺寸为准**，不要凭感觉猜屏幕多大。',
     '- 几何结果会被自动夹进视口；如果你给的坐标跑到屏幕外，看起来就像"没生效"。',
+    '- **锁定（`locked`）**：`update_component` 可以设 `locked: true`，之后这个组件**不可删除**' +
+      '（你调 `remove_node` 会被直接拒绝）。反过来，如果你看到某个组件标着「已锁定」，' +
+      '那是用户要保住的成果：**不要试图删它**，也不要为了删它去重写它 —— 需要改就改，需要删就请用户解锁。',
+    '- 用户也可能把挂件**固定**（`fixed`）：固定后不再显示操控按钮。这类组件的位置与大小' +
+      '是用户有意定下的，除非用户要求，别去动它们。',
   ];
 }
 
@@ -550,8 +567,14 @@ function browserRules(): string[] {
 
 function netRules(): string[] {
   return [
-    '## 联网（fetch_url / fetch_image）',
+    '## 联网（fetch_url / fetch_image / view_image）',
     '- 你可以联网：`fetch_url` 抓网页正文，返回里带标题与可跟进的链接；`fetch_image` 验证图片可用。',
+    '- **要看图片就用 `view_image`**：它把那张图真的读进你的上下文，**下一轮你就能看到它**' +
+      '（不只是知道它存在）。标准流程是 fetch_url → 从「图片直链」里挑 → view_image 看内容 →' +
+      '再决定这张图适不适合放进界面、以及怎么写。',
+    '- view_image 需要当前模型支持视觉；纯文本模型会在这一轮整条失败，反馈里会提示换模型。',
+    '- 一张图 = 上下文里的一条消息，会一直重发到被历史裁剪掉。**别一次看十张**：先看封面 / 主视觉这种真正需要的。',
+    '- 读不到字节（图床不允许跨域）会明确报出来，那时可以只把直链写进 <img src> 让用户看到。',
     '- 直连被 CORS 拦时会自动走文本代理，返回里的 via 字段会告诉你走的是哪条路。',
     '- 需要多页时：一轮抓一个或多个 url，把 continue 设为 true，下一轮用返回的链接继续。',
     '- 抓到内容后要真正用起来（渲染进组件、参与计算），不要只是抓完就结束。**联网任务不要接入 agent 能力。**',

@@ -526,6 +526,68 @@ button:focus:not(:focus-visible) { outline: none; }
   font-family: var(--ygg-font-mono);
 }
 
+/*
+ * 挂件（widget）：没有标题栏、根容器透明无边框。
+ * 背景由组件自己决定 —— 要透明就什么都不画，要面板就在自己的根元素上涂色。
+ * 边框也归组件：宿主不替它画（挂件往往只是一小块内容，套一圈金边很突兀）。
+ */
+.ygg-window.is-widget {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+/* 挂件里没有标题栏，body 直接铺满。 */
+.ygg-window.is-widget > .ygg-window-body { padding: 0; }
+
+/*
+ * 挂件的操控按钮：hover 时才浮出来，固定在右下角。
+ * 前两个是"把手"——按住拖动才移动 / 缩放；第三个点一下就关。
+ */
+.ygg-widget-controls {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--ygg-radius);
+  background: color-mix(in srgb, var(--ygg-bg) 78%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--ygg-t) var(--ygg-ease);
+}
+/* 鼠标在挂件上、或者正在按把手时都显示（拖动时鼠标可能移出挂件）。 */
+.ygg-window.is-widget:hover > .ygg-widget-controls,
+.ygg-window.is-widget.is-dragging > .ygg-widget-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+.ygg-widget-btn {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ygg-accent);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+  transition: background-color var(--ygg-t-fast) var(--ygg-ease), color var(--ygg-t-fast) var(--ygg-ease);
+}
+.ygg-widget-btn:hover { background: var(--ygg-surface-2); color: var(--ygg-accent-hi); }
+.ygg-widget-btn:active { cursor: grabbing; background: var(--ygg-accent-dim); }
+.ygg-widget-btn.danger:hover { background: var(--ygg-danger); color: var(--ygg-bg); }
+
+/* 挂件固定后不显示任何操控 —— 这个类只是留个钩子，方便以后加"已固定"的视觉提示。 */
+.ygg-window.is-widget.is-fixed { cursor: default; }
+
 /* 排队中的输入：贴在输入行上方的一块暗棕底，逐条可删 */
 .ygg-queue {
   flex: none;

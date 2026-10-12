@@ -106,6 +106,9 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
     size: { w: clampNumber(size.w, 380, 200, 1600), h: clampNumber(size.h, 300, 140, 1200) },
     pos: freeSpot(op.pos as { x?: unknown; y?: unknown }),
     z: store.zCounter + 1,
+    // 窗口形态：挂件（widget）没有标题栏、根容器透明，靠 hover 出来的按钮操控。
+    frame: op.frame === 'widget' ? 'widget' : 'window',
+    ...(op.locked === true ? { locked: true } : {}),
     createdAt: Date.now(),
   };
 
@@ -230,6 +233,7 @@ export function registerNodeInterfaces(): void {
       '**新建一个页面/窗口**：生成一个界面组件插入桌面。' +
       '**这是默认也是唯一的创建入口**，绝大多数任务（计算器、列表、图表、看板、抓取结果展示）都到这里为止：' +
       '给一个 source，产出一个普通组件。pos / size 可选，不给就落在空位。' +
+      '要**挂件**（没有标题栏、透明背景、靠 hover 按钮操控的一小块界面）就传 frame: "widget"。' +
       'agent 字段是**可选的、默认不写**的重武器，只有用户明确要求"这个组件自己思考 / 自己行动 / 定时自主运行"时才附带；' +
       '判据见提示词「agent 能力」一节。' +
       'agent.progress 可选 "trace"（默认，进度并进 Trace 面板）或 "none"（你自己在组件界面里画进度时用）；' +
@@ -297,6 +301,18 @@ export function registerNodeInterfaces(): void {
       if (typeof op.name === 'string' && op.name.trim()) {
         patch.name = op.name.trim();
         touched.push('标题');
+      }
+      if (op.frame === 'window' || op.frame === 'widget') {
+        patch.frame = op.frame;
+        touched.push(op.frame === 'widget' ? '改成挂件' : '改成普通窗口');
+      }
+      if (typeof op.fixed === 'boolean') {
+        patch.fixed = op.fixed;
+        touched.push(op.fixed ? '固定' : '取消固定');
+      }
+      if (typeof op.locked === 'boolean') {
+        patch.locked = op.locked;
+        touched.push(op.locked ? '锁定' : '解锁');
       }
       const pos = op.pos as { x?: unknown; y?: unknown } | undefined;
       if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
@@ -484,6 +500,17 @@ export function registerNodeInterfaces(): void {
       const id = strOr(op.id, '');
       if (RESERVED.has(id) || !desktop().nodes[id]) return fail('节点 ' + id + ' 不存在或不可删除。');
       const cascaded = desktop().cascadeIds(id);
+      // 锁定 = 用户明确要保住这些东西。删除被拒，并说清怎么解。
+      const lockedNames = cascaded
+        .map((nid) => desktop().nodes[nid])
+        .filter((n): n is ComponentNode => !!n && n.kind === 'component' && n.locked === true)
+        .map((n) => '「' + n.name + '」(' + n.id + ')');
+      if (lockedNames.length > 0) {
+        return fail(
+          lockedNames.join('、') + ' 已被**锁定**，不能删除。' +
+            '锁定是用户用来保护成果的；要删就先在 Nodes 面板里解锁（或让用户解锁），不要绕过它。',
+        );
+      }
       for (const cid of cascaded) unregisterTool(cid);
       useDesktopStore.getState().removeNode(id);
       desktop().log('op', '- ' + id);

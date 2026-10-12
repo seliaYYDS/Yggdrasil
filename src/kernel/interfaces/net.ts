@@ -1,6 +1,9 @@
 import { registerInterface } from '../registry/interfaceRegistry';
 import { fail, ok, strOr } from '../bus/opContext';
-import { fetchWebSmart, probeImage } from '../net/fetchWeb';
+import { fetchImageData, fetchWebSmart, probeImage } from '../net/fetchWeb';
+import { prepareImage } from '../../host/image';
+import { MAX_STORED_MESSAGES } from '../agent/prompts';
+import { useDesktopStore } from '../../store/desktopStore';
 
 /**
  * 联网接口。
@@ -79,6 +82,53 @@ export function registerNetInterfaces(): void {
         });
       } catch (e) {
         return fail('探测图片失败：' + (e as Error).message);
+      }
+    },
+  });
+
+  registerInterface({
+    kind: 'view_image',
+    label: '看图',
+    description:
+      '**把一张图片读进你的上下文**，这样你下一轮就能真正"看到"它（而不只是知道它存在）。' +
+      '这才是"网页里的图片"的正确用法：fetch_url 给出图片直链 → view_image 看内容 → 再决定怎么写组件。' +
+      '需要当前模型支持视觉；纯文本模型会在这一轮报错并提示换模型。' +
+      '直连被 CORS 拦时会自动走图片代理。一张图对应上下文里的一条消息（会占空间，别一次看太多张）。',
+    example: { kind: 'view_image', url: 'https://example.com/a.png', note: '首页主视觉' },
+    mutates: false,
+    cap: 'net',
+    handler: async (op, ctx) => {
+      const url = strOr(op.url, '');
+      if (!url) return fail('view_image 需要 url。');
+      const note = strOr(op.note, '');
+      const origin = useDesktopStore.getState().nodes[ctx.originId];
+      if (!origin || origin.kind !== 'component' || !origin.agent) {
+        return fail('view_image 需要一个带 agent 能力的发起者（图片只能进 Agent 自己的上下文）。');
+      }
+      try {
+        const img = await fetchImageData(url);
+        // 压一遍再进上下文：原图动辄几 MB，base64 之后更大，而且每轮都会重发。
+        const prepared = await prepareImage(img.blob);
+        const dataUrl = prepared?.dataUrl ?? img.dataUrl;
+        const caption =
+          '图片内容' + (note ? '（' + note + '）' : '') + '：' + img.finalUrl +
+          '（' + img.contentType + '，' + img.bytes + ' 字节，来源 ' + img.via + '）';
+        // 取最新的 facet 再追加：抓图期间可能已经有别的消息进来。
+        const fresh = useDesktopStore.getState().nodes[ctx.originId];
+        if (!fresh || fresh.kind !== 'component' || !fresh.agent) {
+          return fail('发起者的 agent 能力在抓图期间消失了，图片没有进入上下文。');
+        }
+        const next = [...fresh.agent.messages, { role: 'user' as const, content: caption, images: [dataUrl] }];
+        useDesktopStore.getState().updateFacet(ctx.originId, {
+          messages: next.length > MAX_STORED_MESSAGES ? next.slice(-MAX_STORED_MESSAGES) : next,
+        });
+        return ok('已读取图片并放进上下文', {
+          observation:
+            caption + '\n这张图**已经进入你的上下文**，下一轮你就能看到它（包括下一轮以及之后的每一轮，' +
+            '直到它被历史裁剪掉）。现在可以描述它、判断它是否适合放进界面，或者据此写组件。',
+        });
+      } catch (e) {
+        return fail('看图失败：' + (e as Error).message);
       }
     },
   });

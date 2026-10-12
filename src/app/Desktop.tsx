@@ -94,6 +94,8 @@ export function Desktop() {
           zIndex={node.z}
           focused={focusedId === node.id}
           tokens={node.tokens}
+          frame={node.frame}
+          fixed={node.fixed}
           onRect={(r) => updateNode(node.id, { pos: { x: r.x, y: r.y }, size: { w: r.w, h: r.h } })}
           onFocus={() => focus(node.id)}
           // 交给 store：先播"收进任务栏"动画，动画结束才真正变成 minimized。

@@ -35,6 +35,8 @@ function windowsText(): string {
       (n) =>
         '- id=' + n.id + ' 「' + n.name + '」 status=' + n.status +
         ' pos=' + n.pos.x + ',' + n.pos.y + ' size=' + n.size.w + 'x' + n.size.h + ' z=' + n.z +
+        (n.frame === 'widget' ? ' [挂件' + (n.fixed ? '·已固定' : '') + ']' : '') +
+        (n.locked ? ' [已锁定]' : '') +
         (n.agent ? ' [agent]' : ''),
     )
     .join('\n');
@@ -208,6 +210,10 @@ function nodeText(n: YggNode): string {
   const tokens = n.tokens ? Object.entries(n.tokens) : [];
   if (tokens.length > 0) lines.push('局部样式: ' + tokens.map(([k, v]) => k + '=' + v).join(' '));
   if (n.kind === 'component') {
+    if (n.frame === 'widget') {
+      lines.push('窗口形态: 挂件（无标题栏、透明背景、靠 hover 出来的按钮操控）' + (n.fixed ? '，**已固定**' : ''));
+    }
+    if (n.locked) lines.push('锁定: **是**（不可删除，要删先解锁）');
     lines.push(
       n.agent
         ? 'agent 能力: 已接入（职责：' + (n.agent.systemPrompt || '（空）') + '；工具：' +

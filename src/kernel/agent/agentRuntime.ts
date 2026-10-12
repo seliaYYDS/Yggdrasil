@@ -19,6 +19,7 @@ import {
   buildReplyPrompt,
   buildSystemPrompt,
   MAX_HISTORY_MESSAGES,
+  MAX_STORED_MESSAGES,
 } from './prompts';
 import { executeOps, formatOutcomes, rollback, type ExecuteResult } from '../bus/derivationBus';
 import { desktop, MAIN_SESSION, type RunStatus, useDesktopStore } from '../../store/desktopStore';
@@ -80,7 +81,16 @@ function appendMessage(nodeId: NodeId, message: Message): void {
   const store = useDesktopStore.getState();
   const node = store.nodes[nodeId];
   if (!isAgentic(node)) return;
-  store.updateFacet(nodeId, { messages: [...node.agent.messages, message] });
+  /*
+   * 记忆也要有上限。识图会让消息里带 base64 图片（几十 KB 到几 MB），
+   * 不封顶的话一个长期运行的 Agent 能把 IndexedDB 撑爆，而且每轮请求都会重发。
+   * 只保留最近 MAX_STORED_MESSAGES 条 —— 比发送用的 MAX_HISTORY_MESSAGES 宽松，
+   * 但足以避免无限增长。
+   */
+  const next = [...node.agent.messages, message];
+  store.updateFacet(nodeId, {
+    messages: next.length > MAX_STORED_MESSAGES ? next.slice(-MAX_STORED_MESSAGES) : next,
+  });
 }
 
 export interface RunOptions {

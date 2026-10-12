@@ -336,3 +336,93 @@ export async function probeImage(
     bytes: blob?.size ?? 0,
   };
 }
+
+/**
+ * 图片代理。
+ *
+ * 为什么要它：图片的字节只能用 fetch 读，而 fetch 跨域需要对方回 ACAO 头 ——
+ * 大部分图床不给。所以直连失败时走一个图片代理（它会替我们取图并加上 CORS 头）。
+ * 与文本代理（r.jina.ai）分开，因为文本代理回的是 markdown，拿不到图片字节。
+ */
+export const DEFAULT_IMAGE_PROXY = 'https://images.weserv.nl/?url=';
+
+export interface ImageDataResult {
+  url: string;
+  finalUrl: string;
+  contentType: string;
+  bytes: number;
+  /** data:image/...;base64,... —— 可以直接放进多模态消息。 */
+  dataUrl: string;
+  /** 原始字节。要给宿主做缩放时直接用，不必再解一遍 data URL。 */
+  blob: Blob;
+  via: 'direct' | 'proxy';
+}
+
+function blobToDataUrl(blob: Blob): Promise<string | null> {
+  // 浏览器里 FileReader 最省事。
+  if (typeof FileReader !== 'undefined') {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  }
+  // 没有 FileReader（Node / 测试环境）就自己拼 base64。
+  // 分块是为了别把大图一次性铺开成参数列表（大数据量下 spread 会爆栈）。
+  return blob
+    .arrayBuffer()
+    .then((ab) => {
+      const bytes = new Uint8Array(ab);
+      let binary = '';
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+      }
+      if (typeof btoa !== 'function') return null;
+      return 'data:' + (blob.type || 'application/octet-stream') + ';base64,' + btoa(binary);
+    })
+    .catch(() => null);
+}
+
+/**
+ * 把一张图片读成 data URL。
+ *
+ * 顺序：直连 → 图片代理。两边都失败就抛错（错误信息要能让 Agent 自己决定下一步）。
+ * **不在这里做缩放**：缩放要用 canvas，那是宿主环境的事（见 host/image.ts），
+ * 这一层只负责"把字节拿到手"。
+ */
+export async function fetchImageData(
+  rawUrl: string,
+  options: WebFetchOptions = {},
+): Promise<ImageDataResult> {
+  const url = absUrl(rawUrl);
+
+  const attempt = async (target: string, via: 'direct' | 'proxy'): Promise<ImageDataResult | null> => {
+    const res = await fetch(target, { method: 'GET', signal: options.signal });
+    if (!res.ok) return null;
+    const blob = await res.blob().catch(() => null);
+    if (!blob) return null;
+    const type = res.headers.get('content-type') ?? blob.type ?? '';
+    if (!/^image\//i.test(type)) return null;
+    const dataUrl = await blobToDataUrl(blob);
+    if (!dataUrl) return null;
+    return { url: url.href, finalUrl: target, contentType: type, bytes: blob.size, dataUrl, blob, via };
+  };
+
+  const direct = await attempt(url.href, 'direct').catch(() => null);
+  if (direct) return direct;
+
+  // 代理要去掉协议前缀（weserv 的约定是 ?url=host/path）。
+  const proxied = await attempt(
+    DEFAULT_IMAGE_PROXY + encodeURIComponent(url.href.replace(/^https?:\/\//, '')),
+    'proxy',
+  ).catch(() => null);
+  if (proxied) return proxied;
+
+  throw new Error(
+    '读不到这张图的字节：直连被 CORS 拦、图片代理也没成功。' +
+      '可以改用 fetch_image 确认它可达，把直链写进组件的 <img src> 让用户看到；' +
+      '或换一张允许跨域读取的图（很多图床 / wiki / github 的图都可以）。',
+  );
+}
