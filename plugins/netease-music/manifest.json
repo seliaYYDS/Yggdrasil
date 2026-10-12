@@ -1,10 +1,10 @@
 {
   "id": "netease-music",
   "name": "网易云音乐",
-  "version": "1.0",
+  "version": "2.0",
   "author": "Yggdrasil",
   "minAppVersion": "0.1",
-  "description": "通过你自建的 NeteaseCloudMusicApiEnhanced 服务搜歌、取播放直链与歌词。需要你填自己的 API 地址。",
+  "description": "通过你自建的 NeteaseCloudMusicApiEnhanced 服务使用网易云：搜索、播放、歌单、歌手、专辑、榜单、评论、MV 与账号。需要你填自己的 API 地址。",
   "hosts": [
     "{config:base_url}"
   ],
@@ -13,16 +13,16 @@
       "key": "base_url",
       "label": "API 地址",
       "type": "url",
+      "required": true,
       "placeholder": "http://localhost:3000",
       "hint": "你自建的 NeteaseCloudMusicApiEnhanced 地址（默认端口 3000）。一行 Docker 就能起：docker run -d -p 3000:3000 moefurina/ncm-api:latest —— 该服务默认允许跨域（CORS_ALLOW_ORIGIN=*）。",
-      "default": "",
-      "required": true
+      "default": ""
     },
     {
       "key": "cookie",
       "label": "Cookie（可选）",
       "secret": true,
-      "hint": "填了才能拿到 VIP / 高音质歌曲的播放直链。在浏览器登录 music.163.com 后复制 Cookie 里的 MUSIC_U=... 即可；留空时只能取到免费歌曲。",
+      "hint": "填了才能用需要登录的接口（每日推荐 / 听歌记录 / 用户歌单 / VIP 与高音质直链）。登录 music.163.com 后从浏览器复制 Cookie 里的 MUSIC_U=... 即可。",
       "default": ""
     }
   ],
@@ -30,9 +30,7 @@
     {
       "name": "search",
       "label": "搜歌",
-      "description": "Search songs. Give keywords; returns result.songCount and result.songs[] with id, name, dt (duration in ms), fee (0 free / 1 VIP / 4 paid album / 8 trial-only), ar[].name + ar[].id (artists), al.name + al.picUrl (album and cover). Take a song id from here and pass it to song_url to get a playable link.",
-      "method": "GET",
-      "url": "{config:base_url}/cloudsearch?keywords={keywords}&type=1&limit={limit}&cookie={config:cookie}",
+      "url": "{config:base_url}/search?keywords={keywords}&type=1&limit={limit}&offset={offset}&cookie={config:cookie}",
       "params": [
         {
           "name": "keywords",
@@ -41,8 +39,13 @@
         },
         {
           "name": "limit",
-          "description": "how many songs (1-30)",
-          "default": "5"
+          "description": "how many songs (1-100)",
+          "default": "10"
+        },
+        {
+          "name": "offset",
+          "description": "skip this many (paging)",
+          "default": "0"
         }
       ],
       "pick": [
@@ -57,8 +60,8 @@
         "result.songs[].al.name",
         "result.songs[].al.picUrl"
       ],
-      "maxChars": 14000,
-      "emptyHint": "songCount is 0 or code is not 200: either nothing matched, or the API address / cookie is not set up in the plugin panel. Try a shorter keyword (or the artist name), then check the plugin panel fields. Two attempts is the budget — after that, tell the user what you searched and what came back.",
+      "description": "Search songs by keyword. Returns result.songCount and result.songs[] with id, name, dt (ms), fee (0 free / 1 VIP / 4 paid album / 8 trial), ar[].name + ar[].id (artists), al.name + al.picUrl (album + cover). Take an id to song_url_v1 to get a playable link.",
+      "emptyHint": "songCount is 0: nothing matched. Try a shorter keyword or the artist name, then stop and tell the user what you searched. If code is not 200, the API address or cookie is not set up — check the plugin panel.",
       "example": {
         "kind": "netease-music.search",
         "keywords": "稻香 周杰伦",
@@ -66,20 +69,159 @@
       }
     },
     {
-      "name": "song_url",
+      "name": "search_album",
+      "label": "搜专辑",
+      "url": "{config:base_url}/search?keywords={keywords}&type=10&limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "keywords",
+          "description": "album or artist name",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many albums",
+          "default": "10"
+        }
+      ],
+      "pick": [
+        "code",
+        "result.albumCount",
+        "result.albums[].id",
+        "result.albums[].name",
+        "result.albums[].picUrl",
+        "result.albums[].size",
+        "result.albums[].artist.name",
+        "result.albums[].publishTime"
+      ],
+      "description": "Search albums. Returns result.albums[] with id, name, picUrl, size (track count), artist.name, publishTime (ms)."
+    },
+    {
+      "name": "search_artist",
+      "label": "搜歌手",
+      "url": "{config:base_url}/search?keywords={keywords}&type=100&limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "keywords",
+          "description": "artist name",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many artists",
+          "default": "10"
+        }
+      ],
+      "pick": [
+        "code",
+        "result.artistCount",
+        "result.artists[].id",
+        "result.artists[].name",
+        "result.artists[].picUrl",
+        "result.artists[].albumSize",
+        "result.artists[].musicSize"
+      ],
+      "description": "Search artists. Returns result.artists[] with id, name, picUrl, albumSize, musicSize. The id feeds artists / artist_top_song / artist_album."
+    },
+    {
+      "name": "search_playlist",
+      "label": "搜歌单",
+      "url": "{config:base_url}/search?keywords={keywords}&type=1000&limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "keywords",
+          "description": "playlist name",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many playlists",
+          "default": "10"
+        }
+      ],
+      "pick": [
+        "code",
+        "result.playlistCount",
+        "result.playlists[].id",
+        "result.playlists[].name",
+        "result.playlists[].coverImgUrl",
+        "result.playlists[].trackCount",
+        "result.playlists[].playCount",
+        "result.playlists[].creator.nickname"
+      ],
+      "description": "Search playlists. Returns result.playlists[] with id, name, coverImgUrl, trackCount, playCount, creator.nickname. The id feeds playlist_detail / playlist_track_all."
+    },
+    {
+      "name": "search_hot",
+      "label": "热搜榜",
+      "url": "{config:base_url}/search/hot",
+      "params": [],
+      "pick": [
+        "code",
+        "result.hots[].first",
+        "result.hots[].second"
+      ],
+      "description": "The current hot search list. Returns result.hots[] with first (keyword) and second (a related term). Useful when the user does not know what to search for."
+    },
+    {
+      "name": "search_suggest",
+      "label": "搜索建议",
+      "url": "{config:base_url}/search/suggest?keywords={keywords}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "keywords",
+          "description": "what the user typed (partial ok)",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "result.allMatch[].keyword",
+        "result.songs[].name",
+        "result.songs[].id",
+        "result.artists[].name",
+        "result.albums[].name",
+        "result.playlists[].name"
+      ],
+      "description": "Autocomplete / suggestion for a partial keyword. Returns result.allMatch[].keyword plus matching songs, artists, albums and playlists when available."
+    },
+    {
+      "name": "song_detail",
+      "label": "歌曲详情",
+      "url": "{config:base_url}/song/detail?ids={ids}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "ids",
+          "description": "one song id, or several separated by commas (e.g. 186016,347230)",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "songs[].id",
+        "songs[].name",
+        "songs[].dt",
+        "songs[].fee",
+        "songs[].ar[].name",
+        "songs[].al.name",
+        "songs[].al.picUrl",
+        "songs[].publishTime"
+      ],
+      "description": "Full metadata for up to a few hundred songs at once, by id (comma separated). Returns songs[] with name, dt, fee, ar[], al[], publishTime. Use it to refresh what a search returned."
+    },
+    {
+      "name": "song_url_v1",
       "label": "取播放直链",
-      "description": "Get the playable audio URL of one song by id. Returns data[0].url (put it in an <audio> element), plus br, size, level and type. **url is null when the track needs VIP or is unavailable in this region** — in that case say so instead of inventing a link. A cookie with a logged-in account raises the quality and unlocks more songs.",
-      "method": "GET",
       "url": "{config:base_url}/song/url/v1?id={id}&level={level}&cookie={config:cookie}",
       "params": [
         {
           "name": "id",
-          "description": "song id from search",
+          "description": "song id from search / song_detail",
           "required": true
         },
         {
           "name": "level",
-          "description": "audio quality: standard, higher, exhigh, lossless, hires, jyeffect, sky, jymaster",
+          "description": "standard, higher, exhigh, lossless, hires, jyeffect, sky, jymaster",
           "default": "exhigh"
         }
       ],
@@ -93,24 +235,174 @@
         "data[].type",
         "data[].freeTrialInfo"
       ],
-      "maxChars": 8000,
-      "emptyHint": "url is null: this song needs a VIP account, is region-restricted, or the level asked for is above what the account allows. Fill the Cookie field in the plugin panel (or lower level to standard) and try once more — then report the limitation to the user instead of retrying.",
+      "description": "The playable audio URL of one song. Put data[0].url into an <audio> element. url is null when the track needs VIP, is region-locked, or the level is above what the account allows.",
+      "emptyHint": "url is null: this track needs a VIP account, is region-locked, or the requested level is too high. Fill the Cookie field in the plugin panel (or lower level to standard) and try once more — then report the limitation instead of retrying.",
       "example": {
-        "kind": "netease-music.song_url",
+        "kind": "netease-music.song_url_v1",
         "id": "186016",
         "level": "exhigh"
       }
     },
     {
-      "name": "artist_top_songs",
-      "label": "歌手热门歌",
-      "description": "List an artist top 50 songs by artist id (take ar[].id from a search result). Returns songs[] with the same field shape as search. Use it for \"more songs by this artist\" or when the user picked an artist from a search hit.",
-      "method": "GET",
-      "url": "{config:base_url}/artist/top/song?id={artist_id}&cookie={config:cookie}",
+      "name": "lyric",
+      "label": "取歌词",
+      "url": "{config:base_url}/lyric?id={id}&cookie={config:cookie}",
       "params": [
         {
-          "name": "artist_id",
-          "description": "artist id from search (ar[].id)",
+          "name": "id",
+          "description": "song id",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "lrc.lyric",
+        "tlyric.lyric",
+        "yrc.lyric"
+      ],
+      "description": "Lyrics of a song. lrc.lyric is LRC text with [mm:ss.xx] tags (strip them for a plain panel), tlyric.lyric is the translation (often empty), yrc.lyric is word-by-word (often null).",
+      "emptyHint": "No lyrics in the response: this track has none, or the id is not a song. Show the track without lyrics and say so.",
+      "example": {
+        "kind": "netease-music.lyric",
+        "id": "186016"
+      }
+    },
+    {
+      "name": "check_music",
+      "label": "检查可播放性",
+      "url": "{config:base_url}/check/music?id={id}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "song id",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "success",
+        "message"
+      ],
+      "description": "Whether a song is playable for this account. Returns success (true/false) and message. Check it when a url comes back null and you want to distinguish \"no rights\" from \"wrong id\"."
+    },
+    {
+      "name": "simi_song",
+      "label": "相似歌曲",
+      "url": "{config:base_url}/simi/song?id={id}&limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "song id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many",
+          "default": "10"
+        }
+      ],
+      "pick": [
+        "code",
+        "songs[].id",
+        "songs[].name",
+        "songs[].artists[].name",
+        "songs[].album.name",
+        "songs[].duration",
+        "songs[].ar[].name",
+        "songs[].al.name"
+      ],
+      "description": "Similar songs to a given one. Returns songs[] with id, name, artists[].name, album.name. Good for \"play something like this\"."
+    },
+    {
+      "name": "album",
+      "label": "专辑详情",
+      "url": "{config:base_url}/album?id={id}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "album id from search_album",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "album.id",
+        "album.name",
+        "album.picUrl",
+        "album.publishTime",
+        "album.size",
+        "album.company",
+        "album.artists[].name",
+        "songs[].id",
+        "songs[].name",
+        "songs[].dt",
+        "songs[].ar[].name"
+      ],
+      "description": "One album: album.name / picUrl / publishTime / size / company / artists[], plus the full songs[] track list.",
+      "example": {
+        "kind": "netease-music.album",
+        "id": "32311"
+      }
+    },
+    {
+      "name": "album_new",
+      "label": "新碟上架",
+      "url": "{config:base_url}/album/new?limit={limit}&area={area}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "limit",
+          "description": "how many albums",
+          "default": "10"
+        },
+        {
+          "name": "area",
+          "description": "region: ALL, ZH, EA, KR, JP",
+          "default": "ALL"
+        }
+      ],
+      "pick": [
+        "code",
+        "albums[].id",
+        "albums[].name",
+        "albums[].picUrl",
+        "albums[].artist.name",
+        "albums[].publishTime"
+      ],
+      "description": "Newly released albums. Returns albums[] with id, name, picUrl, artist.name, publishTime."
+    },
+    {
+      "name": "artists",
+      "label": "歌手详情",
+      "url": "{config:base_url}/artists?id={id}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "artist id from search_artist",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "artist.id",
+        "artist.name",
+        "artist.picUrl",
+        "artist.albumSize",
+        "artist.musicSize",
+        "artist.briefDesc",
+        "hotSongs[].id",
+        "hotSongs[].name",
+        "hotSongs[].ar[].name"
+      ],
+      "description": "One artist: artist.name / picUrl / albumSize / musicSize / briefDesc, plus hotSongs[] (their top tracks)."
+    },
+    {
+      "name": "artist_top_song",
+      "label": "歌手热门歌",
+      "url": "{config:base_url}/artist/top/song?id={id}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "artist id",
           "required": true
         }
       ],
@@ -123,37 +415,554 @@
         "songs[].al.name",
         "songs[].al.picUrl"
       ],
-      "maxChars": 14000,
-      "example": {
-        "kind": "netease-music.artist_top_songs",
-        "artist_id": "6452"
-      }
+      "description": "An artist top 50 songs. Returns songs[] in the same shape as search. Use it for \"more songs by this artist\"."
     },
     {
-      "name": "lyric",
-      "label": "取歌词",
-      "description": "Get the lyrics of a song by id. Returns lrc.lyric (LRC text with [mm:ss.xx] time tags), tlyric.lyric (translation, may be empty) and yrc.lyric (word-by-word, may be null). For a plain lyric panel, strip the time tags.",
-      "method": "GET",
-      "url": "{config:base_url}/lyric?id={id}&cookie={config:cookie}",
+      "name": "artist_album",
+      "label": "歌手专辑",
+      "url": "{config:base_url}/artist/album?id={id}&limit={limit}&cookie={config:cookie}",
       "params": [
         {
           "name": "id",
-          "description": "song id from search",
+          "description": "artist id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many albums",
+          "default": "20"
+        }
+      ],
+      "pick": [
+        "code",
+        "hotAlbums[].id",
+        "hotAlbums[].name",
+        "hotAlbums[].picUrl",
+        "hotAlbums[].publishTime",
+        "hotAlbums[].size"
+      ],
+      "description": "Albums of one artist. Returns hotAlbums[] with id, name, picUrl, publishTime, size."
+    },
+    {
+      "name": "artist_songs",
+      "label": "歌手全部歌曲",
+      "url": "{config:base_url}/artist/songs?id={id}&order={order}&limit={limit}&offset={offset}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "artist id",
+          "required": true
+        },
+        {
+          "name": "order",
+          "description": "time (newest first) or hot",
+          "default": "hot"
+        },
+        {
+          "name": "limit",
+          "description": "how many",
+          "default": "50"
+        },
+        {
+          "name": "offset",
+          "description": "skip this many",
+          "default": "0"
+        }
+      ],
+      "pick": [
+        "code",
+        "songs[].id",
+        "songs[].name",
+        "songs[].dt",
+        "songs[].al.name"
+      ],
+      "description": "Songs by an artist with paging (order=hot or time). Returns songs[]. Use it when top 50 is not enough."
+    },
+    {
+      "name": "simi_artist",
+      "label": "相似歌手",
+      "url": "{config:base_url}/simi/artist?id={id}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "artist id",
           "required": true
         }
       ],
       "pick": [
         "code",
-        "lrc.lyric",
-        "tlyric.lyric",
-        "yrc.lyric"
+        "artists[].id",
+        "artists[].name",
+        "artists[].picUrl"
       ],
-      "maxChars": 16000,
-      "emptyHint": "No lyrics in the response: this song has none, or the id is not a song. Do not retry the same id — show the track without lyrics and say so.",
+      "description": "Artists similar to a given one. Returns artists[] with id, name, picUrl."
+    },
+    {
+      "name": "artist_list",
+      "label": "歌手分类列表",
+      "url": "{config:base_url}/artist/list?area={area}&type={type}&initial={initial}&limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "area",
+          "description": "region code: -1 all, 7 Chinese, 96 non-Chinese…",
+          "default": "-1"
+        },
+        {
+          "name": "type",
+          "description": "genre code: -1 all, 1 male, 2 female, 3 band",
+          "default": "-1"
+        },
+        {
+          "name": "initial",
+          "description": "first letter a-z, or empty for hot",
+          "default": ""
+        },
+        {
+          "name": "limit",
+          "description": "how many",
+          "default": "30"
+        }
+      ],
+      "pick": [
+        "code",
+        "artists[].id",
+        "artists[].name",
+        "artists[].picUrl",
+        "artists[].albumSize"
+      ],
+      "description": "Browse artists by region / genre / initial letter. Returns artists[] with id, name, picUrl, albumSize."
+    },
+    {
+      "name": "playlist_detail",
+      "label": "歌单详情",
+      "url": "{config:base_url}/playlist/detail?id={id}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "playlist id (from search_playlist / user_playlist / personalized)",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "playlist.id",
+        "playlist.name",
+        "playlist.coverImgUrl",
+        "playlist.trackCount",
+        "playlist.playCount",
+        "playlist.description",
+        "playlist.creator.nickname",
+        "playlist.tracks[].id",
+        "playlist.tracks[].name",
+        "playlist.tracks[].ar[].name",
+        "playlist.tracks[].artists[].name",
+        "playlist.tracks[].album.name"
+      ],
+      "description": "One playlist: playlist.name / coverImgUrl / trackCount / playCount / description / creator.nickname, plus **the full tracks[]** (the server asks for up to 100000). Use playlist_track_all only when you want a page of a very large playlist.",
       "example": {
-        "kind": "netease-music.lyric",
-        "id": "186016"
+        "kind": "netease-music.playlist_detail",
+        "id": "2884035"
       }
+    },
+    {
+      "name": "playlist_track_all",
+      "label": "歌单全部歌曲",
+      "url": "{config:base_url}/playlist/track/all?id={id}&limit={limit}&offset={offset}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "playlist id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many tracks (max 1000)",
+          "default": "50"
+        },
+        {
+          "name": "offset",
+          "description": "skip this many",
+          "default": "0"
+        }
+      ],
+      "pick": [
+        "code",
+        "songs[].id",
+        "songs[].name",
+        "songs[].dt",
+        "songs[].ar[].name",
+        "songs[].al.name",
+        "songs[].al.picUrl",
+        "songs[].artists[].name",
+        "songs[].album.name"
+      ],
+      "description": "Every song in a playlist, with paging. Returns songs[]. This is how you turn \"play this playlist\" into concrete song ids.",
+      "example": {
+        "kind": "netease-music.playlist_track_all",
+        "id": "2884035",
+        "limit": "20"
+      }
+    },
+    {
+      "name": "top_playlist",
+      "label": "排行榜歌单",
+      "url": "{config:base_url}/top/playlist?cat={cat}&order={order}&limit={limit}&offset={offset}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "cat",
+          "description": "category name, e.g. 华语 / 欧美 / 古风 / 电子; use playlist_catlist to see them",
+          "default": "全部"
+        },
+        {
+          "name": "order",
+          "description": "hot (most played) or new (newest)",
+          "default": "hot"
+        },
+        {
+          "name": "limit",
+          "description": "how many",
+          "default": "20"
+        },
+        {
+          "name": "offset",
+          "description": "skip this many",
+          "default": "0"
+        }
+      ],
+      "pick": [
+        "code",
+        "playlists[].id",
+        "playlists[].name",
+        "playlists[].coverImgUrl",
+        "playlists[].trackCount",
+        "playlists[].playCount",
+        "playlists[].creator.nickname"
+      ],
+      "description": "The playlist leaderboard, filterable by category and sorted by hot or new. Returns playlists[]."
+    },
+    {
+      "name": "playlist_catlist",
+      "label": "歌单分类",
+      "url": "{config:base_url}/playlist/catlist",
+      "params": [],
+      "pick": [
+        "code",
+        "sub[].name",
+        "sub[].categories",
+        "categories"
+      ],
+      "description": "All playlist categories: sub[] (name + categories) and categories (the top-level grouping). Use it to pick a valid cat for top_playlist."
+    },
+    {
+      "name": "personalized",
+      "label": "推荐歌单",
+      "url": "{config:base_url}/personalized?limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "limit",
+          "description": "how many",
+          "default": "12"
+        }
+      ],
+      "pick": [
+        "code",
+        "result[].id",
+        "result[].name",
+        "result[].picUrl",
+        "result[].playCount",
+        "result[].trackCount"
+      ],
+      "description": "Personalized (recommended) playlists. Returns result[] with id, name, picUrl, playCount, trackCount."
+    },
+    {
+      "name": "toplist",
+      "label": "排行榜列表",
+      "url": "{config:base_url}/toplist",
+      "params": [],
+      "pick": [
+        "code",
+        "list[].id",
+        "list[].name",
+        "list[].coverImgUrl",
+        "list[].updateFrequency",
+        "list[].trackCount"
+      ],
+      "description": "The official charts (飙升榜, 新歌榜, 热歌榜…). Returns list[] with id, name, coverImgUrl, updateFrequency. A list id can be passed to playlist_detail.",
+      "example": {
+        "kind": "netease-music.toplist"
+      }
+    },
+    {
+      "name": "recommend_songs",
+      "label": "每日推荐",
+      "url": "{config:base_url}/recommend/songs?cookie={config:cookie}",
+      "params": [],
+      "pick": [
+        "code",
+        "data.dailySongs[].id",
+        "data.dailySongs[].name",
+        "data.dailySongs[].ar[].name",
+        "data.dailySongs[].al.name",
+        "data.dailySongs[].fee",
+        "data.recommendReasons[].reason"
+      ],
+      "description": "The daily recommended songs for the logged-in account (needs a cookie). Returns data.dailySongs[] with the usual song fields.",
+      "emptyHint": "Empty or code not 200: this endpoint needs a logged-in cookie. Tell the user to fill the Cookie field in the plugin panel.",
+      "example": {
+        "kind": "netease-music.recommend_songs"
+      }
+    },
+    {
+      "name": "personalized_newsong",
+      "label": "推荐新歌",
+      "url": "{config:base_url}/personalized/newsong?limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "limit",
+          "description": "how many",
+          "default": "10"
+        }
+      ],
+      "pick": [
+        "code",
+        "result[].id",
+        "result[].name",
+        "result[].picUrl",
+        "result[].song.id",
+        "result[].song.name",
+        "result[].song.artists[].name",
+        "result[].song.ar[].name",
+        "result[].song.album.name"
+      ],
+      "description": "Recommended new songs. Returns result[] with id, name, picUrl and a nested song object (the playable id is result[].song.id)."
+    },
+    {
+      "name": "record_recent_song",
+      "label": "听歌记录",
+      "url": "{config:base_url}/record/recent/song?limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "limit",
+          "description": "how many",
+          "default": "20"
+        }
+      ],
+      "pick": [
+        "code",
+        "data.list[].playCount",
+        "data.list[].data.id",
+        "data.list[].data.name",
+        "data.list[].data.ar[].name"
+      ],
+      "description": "Recently played songs of the logged-in account (needs a cookie). Returns data.list[] where the song is under .data (id, name, ar[].name) and .playCount is how often it was played."
+    },
+    {
+      "name": "comment_music",
+      "label": "歌曲评论",
+      "url": "{config:base_url}/comment/music?id={id}&limit={limit}&offset={offset}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "song id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many comments",
+          "default": "20"
+        },
+        {
+          "name": "offset",
+          "description": "skip this many (paging back)",
+          "default": "0"
+        }
+      ],
+      "pick": [
+        "code",
+        "total",
+        "hotComments[].user.nickname",
+        "hotComments[].content",
+        "hotComments[].likedCount",
+        "comments[].user.nickname",
+        "comments[].content",
+        "comments[].likedCount",
+        "comments[].time"
+      ],
+      "description": "Comments on a song: hotComments[] (the highlighted ones) and comments[] (by time), each with user.nickname, content, likedCount, time (ms).",
+      "example": {
+        "kind": "netease-music.comment_music",
+        "id": "186016",
+        "limit": "10"
+      }
+    },
+    {
+      "name": "comment_playlist",
+      "label": "歌单评论",
+      "url": "{config:base_url}/comment/playlist?id={id}&limit={limit}&offset={offset}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "playlist id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many",
+          "default": "20"
+        },
+        {
+          "name": "offset",
+          "description": "skip this many",
+          "default": "0"
+        }
+      ],
+      "pick": [
+        "code",
+        "total",
+        "hotComments[].user.nickname",
+        "hotComments[].content",
+        "hotComments[].likedCount",
+        "comments[].user.nickname",
+        "comments[].content"
+      ],
+      "description": "Comments on a playlist. Same shape as comment_music."
+    },
+    {
+      "name": "mv_url",
+      "label": "MV 地址",
+      "url": "{config:base_url}/mv/url?id={id}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "mv id (from a song or a search)",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "data.id",
+        "data.url",
+        "data.br",
+        "data.size"
+      ],
+      "description": "The playable video URL of an MV. Returns data.url — put it in a <video controls> element."
+    },
+    {
+      "name": "mv_detail",
+      "label": "MV 详情",
+      "url": "{config:base_url}/mv/detail?mvid={mvid}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "mvid",
+          "description": "mv id",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "data.id",
+        "data.name",
+        "data.artistName",
+        "data.cover",
+        "data.playCount",
+        "data.duration",
+        "data.desc"
+      ],
+      "description": "One MV: data.name / artistName / cover / playCount / duration / desc."
+    },
+    {
+      "name": "login_status",
+      "label": "登录状态",
+      "url": "{config:base_url}/login/status?cookie={config:cookie}",
+      "params": [],
+      "pick": [
+        "code",
+        "data.account.id",
+        "data.profile.nickname",
+        "data.profile.userId",
+        "data.profile.vipType"
+      ],
+      "description": "Whether the cookie in the plugin panel is logged in, and who it is. Call it first when something that needs an account returns empty.",
+      "example": {
+        "kind": "netease-music.login_status"
+      }
+    },
+    {
+      "name": "user_detail",
+      "label": "用户详情",
+      "url": "{config:base_url}/user/detail?uid={uid}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "uid",
+          "description": "user id (from login_status or a playlist creator)",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "profile.nickname",
+        "profile.userId",
+        "profile.avatarUrl",
+        "profile.follows",
+        "profile.followeds",
+        "profile.playlistCount",
+        "profile.level"
+      ],
+      "description": "A user profile: nickname, userId, avatarUrl, follows, followeds, playlistCount, level."
+    },
+    {
+      "name": "user_playlist",
+      "label": "用户歌单",
+      "url": "{config:base_url}/user/playlist?uid={uid}&limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "uid",
+          "description": "user id",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many playlists",
+          "default": "30"
+        }
+      ],
+      "pick": [
+        "code",
+        "playlist[].id",
+        "playlist[].name",
+        "playlist[].coverImgUrl",
+        "playlist[].trackCount",
+        "playlist[].playCount",
+        "playlist[].creator.nickname"
+      ],
+      "description": "Playlists owned or collected by a user. Returns playlist[] with id, name, coverImgUrl, trackCount, playCount."
+    },
+    {
+      "name": "user_record",
+      "label": "用户听歌排行",
+      "url": "{config:base_url}/user/record?uid={uid}&type={type}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "uid",
+          "description": "user id",
+          "required": true
+        },
+        {
+          "name": "type",
+          "description": "0 = all time, 1 = last week",
+          "default": "1"
+        }
+      ],
+      "pick": [
+        "code",
+        "weekData[].playCount",
+        "weekData[].song.id",
+        "weekData[].song.name",
+        "weekData[].song.ar[].name",
+        "allData[].playCount",
+        "allData[].song.name"
+      ],
+      "description": "A user listening ranking: weekData[] (last week) or allData[] (all time) — each has playCount and song (id, name, ar[].name)."
     }
   ]
 }

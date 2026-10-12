@@ -33,7 +33,14 @@ const HOST_RE = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/i;
 const CAPS: (ActCap | null)[] = ['desktop', 'style', 'global', 'net', 'browser', 'agents', 'tools', null];
 
 /** 提示词预算：一个插件的端点太多，说明它该拆包，或者该等 js 工具。 */
-export const MAX_ENDPOINTS = 20;
+/**
+ * 一个插件最多多少端点。
+ *
+ * 原先是 20，被真实插件（网易云）顶到了上限：这个 API 有 436 个接口，
+ * "做一个完整插件"很容易超过 20。放开到 60，仍然要有上限 ——
+ * 因为端点会进提示词，无上限等于把提示词交给插件作者随意撑大。
+ */
+export const MAX_ENDPOINTS = 60;
 
 function versionAtLeast(a: string, b: string): boolean {
   const pa = a.split('.').map((n) => parseInt(n, 10) || 0);
@@ -134,7 +141,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
 
   const epsRaw = Array.isArray(m.endpoints) ? m.endpoints : [];
   if (epsRaw.length === 0) return bad('至少要有一个 endpoint，否则装它没有意义。');
-  if (epsRaw.length > MAX_ENDPOINTS) return bad('endpoint 太多（' + epsRaw.length + ' 个，上限 ' + MAX_ENDPOINTS + '）。');
+  if (epsRaw.length > MAX_ENDPOINTS) return bad('endpoint 太多（' + epsRaw.length + ' 个，上限 ' + MAX_ENDPOINTS + '）。拆成两个插件，或只保留常用的。');
   const endpoints: PluginEndpoint[] = [];
   for (const e of epsRaw) {
     if (!e || typeof e !== 'object') return bad('endpoints 里有一项不是对象。');

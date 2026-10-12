@@ -245,6 +245,16 @@ export async function httpCall(
       const picked = pickPaths(JSON.parse(body), e.pick);
       shown = JSON.stringify(picked, null, 1);
       pickedNote = '\n(picked fields; the full response was ' + body.length + ' chars)';
+      /*
+       * 最难查的一类失败：**挑的路径一个都没命中**，但正文其实很大。
+       * 这时回读看起来像"没有结果"，模型会得出错误结论（"没搜到"而不是"插件写错了"）。
+       * 所以明确区分这两种情况。
+       */
+      const values = Object.values(picked);
+      const allEmpty = values.length > 0 && values.every((v) => (Array.isArray(v) ? v.length === 0 : v === null || v === undefined));
+      if (allEmpty && body.length > 200) {
+        pickedNote += '\n⚠ 正文有内容但挑出来的字段全是空的：多半是响应结构与插件里写的 pick 路径不一致（不是"没搜到"）。请把这条如实告诉用户。';
+      }
     } catch {
       shown = body;
     }
