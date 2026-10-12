@@ -1,8 +1,9 @@
-import type { DerivationOp, NodeId, ThemeTokens, TraceStep } from '../types';
+import type { ActCap, DerivationOp, NodeId, ThemeTokens, TraceStep } from '../types';
 import { newId } from '../ids';
 import { desktop, useDesktopStore } from '../../store/desktopStore';
 import { unregisterTool } from '../registry/toolRegistry';
-import { getInterface, knownKinds } from '../registry/interfaceRegistry';
+import { capOf, getInterface, interfacesFor } from '../registry/interfaceRegistry';
+import { CAP_LABELS } from '../agent/caps';
 import { fail, ok, type OpContext, type OpResult } from './opContext';
 import { MAX_NODES } from '../agent/prompts';
 
@@ -103,6 +104,33 @@ function scopeViolation(op: DerivationOp, originId: NodeId): string | null {
   return null;
 }
 
+/**
+ * 检查这条 op 需要的"能力开关"这个 Agent 有没有。
+ *
+ * 提示词已经按能力裁过了（没能力的接口根本不会出现在它的接口目录里），
+ * 但**光裁提示词不算数** —— 模型可能从历史、从别处见过这个 kind，猜着调。
+ * 所以执行面再拦一道：没能力就明确拒绝，并告诉它缺哪个开关、该找谁加。
+ *
+ * `caps === undefined` 表示全开（基底 Agent 与老数据都走这条）。
+ */
+function capsOf(originId: NodeId): ActCap[] | undefined {
+  const node = desktop().nodes[originId];
+  return node && node.kind === 'component' ? node.agent?.caps : undefined;
+}
+
+function capViolation(op: DerivationOp, originId: NodeId): string | null {
+  const caps = capsOf(originId);
+  if (!caps) return null;
+  const need = capOf(op.kind);
+  if (!need) return null;
+  if (caps.includes(need)) return null;
+  return (
+    '你**没有「' + (CAP_LABELS[need] ?? need) + '」能力**，因此 ' + op.kind + ' 被拒绝。' +
+    '需要的话让创建你的 Agent 用 set_agent_config 给你加上 caps: ["' + need + '"]；' +
+    '你现在能做的是：' + (caps.length ? caps.map((c) => CAP_LABELS[c] ?? c).join('、') : '（无）') + '。'
+  );
+}
+
 export interface ExecuteOptions {
   runId: string;
   round: number;
@@ -143,11 +171,19 @@ export async function executeOps(
 
     let result: OpResult;
     const violation = def ? scopeViolation(op, origin) : null;
+    const capMiss = def && !violation ? capViolation(op, origin) : null;
     if (!def) {
-      result = fail('未知接口「' + op.kind + '」。可用 kind：' + knownKinds().join(', ') + '。');
+      // 只列出**它自己能用**的 kind：列全套会诱导它去调没能力的接口。
+      result = fail(
+        '未知接口「' + op.kind + '」。你这个 Agent 可用的 kind：' +
+          interfacesFor(capsOf(origin)).map((d) => d.kind).join(', ') + '。',
+      );
     } else if (violation) {
       desktop().log('warn', 'scope \u2715 ' + op.kind + ' ' + violation);
       result = fail(violation);
+    } else if (capMiss) {
+      desktop().log('warn', 'cap \u2715 ' + op.kind + ' ' + originId);
+      result = fail(capMiss);
     } else if (def.mutates && nodeCount() >= MAX_NODES) {
       result = fail('节点总数已达上限 ' + MAX_NODES + '，本指令被跳过。');
     } else {

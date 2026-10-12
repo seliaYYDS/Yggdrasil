@@ -33,6 +33,7 @@ export function registerBrowserInterfaces(): void {
       '像素比、是否全屏、标签页是否可见，以及当前地址与标题。' +
       '注意这是浏览器窗口，不是应用内部桌面 —— 内部桌面尺寸见系统提示词的「桌面视口」一节。',
     example: { kind: 'browser_info' },
+    cap: 'browser',
     handler: () => {
       const info = viewportInfo();
       const inner = info.inner as { w: number; h: number };
@@ -53,6 +54,7 @@ export function registerBrowserInterfaces(): void {
       'fullscreen 可申请/退出全屏（需要用户手势，失败会说明原因）。',
     example: { kind: 'browser_resize', target: 'self', fullscreen: true },
     mutates: true,
+    cap: 'browser',
     handler: async (op) => {
       const target = typeof op.target === 'string' && op.target.trim() ? op.target.trim() : undefined;
 
@@ -108,6 +110,7 @@ export function registerBrowserInterfaces(): void {
       '被拦时不会失败 —— 会把地址放进输入框里的「打开」按钮，等用户点一下即可。',
     example: { kind: 'browser_open', url: 'https://example.com', width: 1100, height: 800 },
     mutates: true,
+    cap: 'browser',
     handler: (op) => {
       const url = strOr(op.url, '');
       if (!url) return fail('browser_open 需要 url。');
@@ -152,6 +155,7 @@ export function registerBrowserInterfaces(): void {
       '列出由本应用打开的浏览器页面（id / 名字 / 地址 / 尺寸），以及当前页面自身的地址与可视区。' +
       '注意：浏览器不允许网页枚举用户自己打开的标签页，所以这里只能看到**本应用开出去的**那些。',
     example: { kind: 'browser_pages' },
+    cap: 'browser',
     handler: () => {
       const list = listPages();
       const info = viewportInfo();
@@ -175,6 +179,7 @@ export function registerBrowserInterfaces(): void {
       '只能关自己打开的窗口 —— 用户自己开的标签页关不掉。',
     example: { kind: 'browser_close', target: 'all' },
     mutates: true,
+    cap: 'browser',
     handler: (op) => {
       const target = strOr(op.target, '');
       if (!target) return fail('browser_close 需要 target（页面 id、名字，或 all）。');

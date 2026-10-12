@@ -22,6 +22,7 @@ export function registerWindowInterfaces(): void {
       '只处理当前显示中的窗口，最小化或关闭的不动。坐标由服务端按视口算，比你手算每个窗口的坐标可靠。',
     example: { kind: 'arrange_windows', mode: 'grid' },
     mutates: true,
+    cap: 'desktop',
     handler: (op) => {
       const mode = strOr(op.mode, 'grid');
       const store = desktop();

@@ -16,6 +16,7 @@ export function registerNetInterfaces(): void {
       '直连被 CORS 拦时会自动走渲染代理（代理回 markdown，链接与图片同样会被抽出来）。' +
       'maxChars 可选，默认 12000，最大 60000；只裁正文，链接与图片不受影响。失败会返回原因。',
     example: { kind: 'fetch_url', url: 'https://example.com', maxChars: 4000 },
+    cap: 'net',
     handler: async (op) => {
       const url = strOr(op.url, '');
       if (!url) return fail('fetch_url 需要 url。');
@@ -59,6 +60,7 @@ export function registerNetInterfaces(): void {
       '检查一个图片网址是否可达（先 HEAD，不下载正文），返回状态、content-type 与字节数。' +
       '配合 fetch_url 返回的「图片直链」使用：先确认能用，再写进组件。',
     example: { kind: 'fetch_image', url: 'https://example.com/a.png' },
+    cap: 'net',
     handler: async (op) => {
       const url = strOr(op.url, '');
       if (!url) return fail('fetch_image 需要 url。');

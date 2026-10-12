@@ -61,6 +61,22 @@ export interface BaseNode {
  * 隔离保证：每个 facet 的 messages / ledger / scope 互不相通；
  * 且 scope 之外的操作会被 executeOps 在代码层拒绝（不只是提示词约束）。
  */
+/**
+ * 一个 act 档 Agent 的**能力开关**。
+ *
+ * 一个开关同时决定三件事，而且它们是**同一份声明**（接口注册时就标好了归属）：
+ * 1. 它的系统提示里有没有对应的那一段；
+ * 2. 接口目录里出不出现对应的 op；
+ * 3. 执行时那些 op 让不让它调（没能力直接拒绝，而不是靠它没看见）。
+ *
+ * 这么做是为了让子 Agent 的提示词跟它真正要干的事成正比 ——
+ * 一个只负责画界面的 Agent 不该收到浏览器控制、联网、派生 Agent 那一整套说明。
+ *
+ * 注意：这是**注意力与执行面的管理**，不是安全边界
+ * （一个带 agents 能力的 Agent 本来就能派生别的 Agent）。
+ */
+export type ActCap = 'desktop' | 'style' | 'global' | 'net' | 'browser' | 'agents' | 'tools';
+
 export interface AgentFacet {
   /** 它的专项职责，进入它自己的系统提示。 */
   systemPrompt: string;
@@ -84,6 +100,22 @@ export interface AgentFacet {
    * 所以"显不显示"在**创建时**由创建者决定。
    */
   progress?: 'trace' | 'none';
+  /**
+   * 运行档位。
+   * - `'act'`（缺省）：完整派生管线 —— 输出 ops、多轮、观察回灌。
+   * - `'reply'`：一问一答。只发一段小提示词，模型的**文本回复**直接落进 messages，
+   *   组件渲染出来即可。没有 ops、没有 JSON、没有轮次、没有账本与作用域。
+   *
+   * 缺省是 `'act'`，老数据不受影响。
+   */
+  mode?: 'reply' | 'act';
+  /**
+   * act 档的能力开关。**缺省 = 全开**（老数据兼容：没存 caps 的 agent 行为不变）。
+   *
+   * 新建时由创建者给定；给多少就只接多少提示词。
+   * reply 档没有 ops，这个字段无意义（会被忽略）。
+   */
+  caps?: ActCap[];
 }
 
 export interface ComponentNode extends BaseNode {

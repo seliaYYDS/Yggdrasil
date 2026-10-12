@@ -14,6 +14,7 @@ import {
   surfacesText,
 } from '../registry/surfaceRegistry';
 import { MAX_NODES, themeText, toolCatalogText, treeText } from '../agent/prompts';
+import { capScopeConflict, capSummary, DEFAULT_ACT_CAPS, parseCaps } from '../agent/caps';
 import { newNodeId } from '../ids';
 import { isAgentNode } from '../types';
 import type { ComponentNode, JsonSchema, YggNode } from '../types';
@@ -234,6 +235,7 @@ export function registerCoreInterfaces(): void {
       source: 'export default function (args) { return args.a + args.b; }',
     },
     mutates: true,
+    cap: 'tools',
     handler: (op, ctx) => {
       const name = strOr(op.name, 'unnamed_tool');
       const description = strOr(op.description, '');
@@ -272,6 +274,7 @@ export function registerCoreInterfaces(): void {
     label: '调用工具',
     description: '调用一个已有工具。用 id，或者用 name 按名字找。',
     example: { kind: 'call_tool', name: 'sum', args: { a: 1, b: 2 } },
+    cap: 'tools',
     handler: async (op) => {
       const id = strOr(op.id, '');
       const name = strOr(op.name, '');
@@ -300,6 +303,7 @@ export function registerCoreInterfaces(): void {
       '改写全局 CSS 变量。这是唯一的全局样式接口：不产生节点、不出现在任何界面上，随时可再次调用覆盖。',
     example: { kind: 'update_theme', tokens: { '--ygg-bg': '#07071A', '--ygg-accent': '#00E5FF' } },
     mutates: true,
+    cap: 'global',
     handler: (op) => {
       const tokens = sanitizeTokens(tokensOf(op.tokens));
       const keys = Object.keys(tokens);
@@ -321,6 +325,7 @@ export function registerCoreInterfaces(): void {
       'surface（**某一个插槽的当前源码与内置实现说明**，需同时给 surface）/ ' +
       'logs（**应用日志，组件运行时报错就在这里**）/ agents / tree / tokens / surfaces / tools / all。',
     example: { kind: 'inspect', before: 'component', id: 'n_xxx' },
+    cap: 'desktop',
     handler: (op) => {
       const s = desktop();
       const part = strOr(op.before, 'all');
@@ -431,6 +436,7 @@ export function registerCoreInterfaces(): void {
       edits: [{ find: 'const [v, setV] = React.useState("0")', replace: 'const [v, setV] = React.useState("")' }],
     },
     mutates: true,
+    cap: 'desktop',
     handler: (op) => {
       const id = strOr(op.id, '');
       const surface = strOr(op.surface, '');
@@ -549,6 +555,7 @@ export function registerCoreInterfaces(): void {
     label: '查看界面插槽',
     description: '列出界面上所有可被替换的插槽、它们当前是否已被覆写，以及各自的可用 props。',
     example: { kind: 'list_surfaces' },
+    cap: 'global',
     handler: () => ok('共 ' + listSurfaces().length + ' 个插槽', { observation: surfacesText() }),
   });
 
@@ -564,6 +571,7 @@ export function registerCoreInterfaces(): void {
       source: 'export default function Titlebar({ title }){ ... }',
     },
     mutates: true,
+    cap: 'global',
     handler: (op) => {
       const surface = strOr(op.surface, '');
       const def = listSurfaces().find((s) => s.id === surface);
@@ -617,6 +625,7 @@ export function registerCoreInterfaces(): void {
       '修改某个 Agent 的名字、职责、作用域、工具子集，或它的进度显不显示（progress: "trace" / "none"）。' +
       '用 id 指定（Agent 就是带 agent 能力的组件）。这不会清空它的对话历史。',
     example: { kind: 'set_agent_config', id: 'n_xxx', systemPrompt: '你专注于数据分析' },
+    cap: 'agents',
     handler: (op) => {
       const id = strOr(op.id, '');
       const all = Object.values(desktop().nodes);
@@ -648,8 +657,24 @@ export function registerCoreInterfaces(): void {
         facetPatch.progress = op.progress;
         touched.push(op.progress === 'none' ? '不显示进度' : '显示进度');
       }
+      if (op.mode === 'reply' || op.mode === 'act') {
+        facetPatch.mode = op.mode;
+        touched.push(op.mode === 'reply' ? '档位=reply（只回话）' : '档位=act（要动手）');
+      }
+      if (Array.isArray(op.caps)) {
+        const next = parseCaps(op.caps) ?? DEFAULT_ACT_CAPS;
+        // 没同时给 scope 就按它现有的作用域判（agent.kind 收窄后才能取 facet）。
+        const curFacet = agent.kind === 'component' ? agent.agent : undefined;
+        const nextScope = Array.isArray(op.scope)
+          ? op.scope.filter((x): x is string => typeof x === 'string')
+          : curFacet?.scope;
+        const conflict = capScopeConflict(next, nextScope);
+        if (conflict) return fail('能力开关与作用域冲突：' + conflict);
+        facetPatch.caps = next;
+        touched.push('能力开关=' + capSummary(next));
+      }
       if (touched.length === 0) {
-        return fail('set_agent_config 需要 name / systemPrompt / scope / tools / progress 之一。');
+        return fail('set_agent_config 需要 name / systemPrompt / scope / tools / progress / mode / caps 之一。');
       }
       const store = useDesktopStore.getState();
       if (Object.keys(nodePatch).length) store.updateNode(agent.id, nodePatch as Partial<YggNode>);
@@ -667,6 +692,7 @@ export function registerCoreInterfaces(): void {
       '账本不清掉的话，它还会记得做过的组件，和"从零开始"是矛盾的。' +
       '用 id 指定（Agent 就是带 agent 能力的组件）。',
     example: { kind: 'clear_agent_context', id: 'n_xxx' },
+    cap: 'agents',
     handler: (op) => {
       const id = strOr(op.id, '');
       const all = Object.values(desktop().nodes);

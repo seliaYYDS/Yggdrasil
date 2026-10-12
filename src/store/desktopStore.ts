@@ -298,6 +298,10 @@ export function makeFacet(partial: Partial<AgentFacet> = {}): AgentFacet {
     ledger: partial.ledger ?? [],
     scope: partial.scope ?? '*',
     progress: partial.progress ?? 'trace',
+    // 缺省 act：老数据、基底、以及手写的 facet 都走完整工作流（行为不变）。
+    // caps 刻意**不给默认**：undefined = 全开，只有创建/接入指令才会写明确的开关。
+    mode: partial.mode ?? 'act',
+    ...(partial.caps ? { caps: partial.caps } : {}),
   };
 }
 

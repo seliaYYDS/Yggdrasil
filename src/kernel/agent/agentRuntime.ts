@@ -16,6 +16,7 @@ import type { ChatMessage, ContentPart } from '../llm/types';
 import { parsePlan } from './parse';
 import {
   buildObservationPrompt,
+  buildReplyPrompt,
   buildSystemPrompt,
   MAX_HISTORY_MESSAGES,
 } from './prompts';
@@ -224,6 +225,96 @@ async function chatWithRetry(
   return { ok: false, error: lastError };
 }
 
+/**
+ * reply 档：一问一答。
+ *
+ * 与 act 档（runDerivation）的区别**只在管线**：
+ * 提示词只有几百字符、模型直接输出文本、一次调用、没有 ops / JSON / 轮次 / 账本 / 作用域。
+ * 会话、进度、轨迹、记忆这些机制完全一样 —— 所以它照样不占基底，进度照样能查。
+ *
+ * 回复会作为 **assistant 消息**写进这个 Agent 的 messages，
+ * 组件渲染 a.messages 就能看到（这是 act 档没有的：act 的产出是 ops，不是话）。
+ */
+async function runReply(
+  input: string,
+  originId: NodeId,
+  sessionId: string,
+  runId: string,
+  images: string[],
+): Promise<RunSummary> {
+  const store = useDesktopStore.getState();
+  const origin = store.nodes[originId];
+  if (!origin || origin.kind !== 'component') {
+    return { ok: false, added: 0, rounds: 0, okCount: 0, failCount: 1, error: '发起组件不存在。' };
+  }
+  const role = isAgentic(origin) ? origin.agent.systemPrompt : '';
+  const historyCount = isAgentic(origin) ? origin.agent.messages.length : 0;
+
+  const step: TraceStep = {
+    id: newId(),
+    runId,
+    round: 0,
+    index: -1,
+    kind: 'llm',
+    label: '模型回复',
+    summary: '回复',
+    status: 'running',
+    message: '等待模型返回…',
+    startedAt: Date.now(),
+  };
+  store.upsertSessionStep(sessionId, step);
+  store.setSessionStatus(sessionId, { running: true, phase: '模型回复中', detail: '', round: 0, runId });
+
+  const messages: ChatMessage[] = [
+    { role: 'system', content: buildReplyPrompt({ originName: origin.name, rolePrompt: role, history: historyCount }) },
+    ...historyMessages(originId, input),
+    // 不加【本次请求】标记 —— 那是给 act 档多轮执行用的；这里就是普通的对话上下文。
+    { role: 'user', content: userContent(input, images) },
+  ];
+
+  let text = '';
+  let thinking = '';
+  const call = await chatWithRetry(store.settings, messages, {
+    onDelta: (chunk) => {
+      text += chunk;
+    },
+    onThinking: (chunk) => {
+      thinking += chunk;
+    },
+    // 重试必须清空缓冲，否则会把上一次的半截回复和新回复拼起来。
+    onAttempt: () => {
+      text = '';
+      thinking = '';
+    },
+  });
+
+  const failReply = (title: string, detail: string, err: string): RunSummary => {
+    store.upsertSessionStep(sessionId, { ...step, status: 'fail', message: err, endedAt: Date.now() });
+    store.setSessionStatus(sessionId, { running: false, phase: '失败', detail: err, round: 0 });
+    store.setFeedback(mkFeedback('fail', title, detail + visionHint(images, detail)));
+    store.log('warn', 'reply ✕ ' + err.slice(0, 120));
+    return { ok: false, added: 0, rounds: 0, okCount: 0, failCount: 1, error: err };
+  };
+
+  if (!call.ok) return failReply('模型回复失败', call.error, call.error);
+  const reply = call.text.trim();
+  if (!reply) return failReply('模型没有返回内容', '这次调用没有拿到任何文本。', '空内容');
+
+  // 回复写进记忆：这就是"它说过的话"，组件从这里渲染。
+  appendMessage(originId, { role: 'assistant', content: reply });
+  store.upsertSessionStep(sessionId, {
+    ...step,
+    status: 'ok',
+    message: reply.slice(0, 2000),
+    thinking: thinking ? thinking.slice(0, MAX_THINK_CHARS) : undefined,
+    raw: call.text.slice(0, MAX_RAW_CHARS),
+    endedAt: Date.now(),
+  });
+  store.setSessionStatus(sessionId, { running: false, phase: '完成', detail: '', round: 0 });
+  store.log('llm', 'reply ' + reply.slice(0, 60));
+  return { ok: true, added: 0, rounds: 0, okCount: 1, failCount: 0 };
+}
+
 export async function runDerivation(input: string, options: RunOptions = {}): Promise<RunSummary> {
   const store = useDesktopStore.getState();
   const settings = store.settings;
@@ -251,6 +342,16 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
   store.beginSessionTrace(sessionId, runId);
   store.setSessionStatus(sessionId, { running: true, phase: '准备上下文', detail: '', round: 0, runId });
   appendMessage(originId, { role: 'user', content: input, ...(images.length ? { images } : {}) });
+
+  /*
+   * 档位分流。
+   *
+   * reply 档到此为止：一句小提示词 + 一次调用，回复落进 messages。
+   * act 档才需要下面那一整套（接口目录、JSON 解析、多轮、观察回灌、账本、作用域）。
+   */
+  if (isAgentic(origin) && origin.agent.mode === 'reply') {
+    return runReply(input, originId, sessionId, runId, images);
+  }
 
   const pushStep = (step: TraceStep) => useDesktopStore.getState().upsertSessionStep(sessionId, step);
   const setRunStatus = (patch: Partial<RunStatus>): void =>
@@ -354,6 +455,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           rolePrompt: isAgentic(origin) ? origin.agent.systemPrompt : '',
           ledger: currentLedger(originId),
           scope: isAgentic(origin) ? origin.agent.scope : undefined,
+          // 能力开关：没开的接口不会出现在接口目录里，提示词也少一大截。
+          caps: isAgentic(origin) ? origin.agent.caps : undefined,
         });
 
         const messages: ChatMessage[] = [

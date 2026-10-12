@@ -1,4 +1,4 @@
-import type { DerivationOp } from '../types';
+import type { ActCap, DerivationOp } from '../types';
 import type { OpContext, OpResult } from '../bus/opContext';
 
 /**
@@ -18,6 +18,13 @@ export interface AgentInterface {
   example: Record<string, unknown>;
   /** 该接口是否会在界面上产生可见变化（用于反馈措辞）。 */
   mutates?: boolean;
+  /**
+   * 它属于哪个能力开关。**不写 = 基础能力**（act 档最低配就有）。
+   *
+   * 这是"能力开关"的唯一事实来源：接口目录按它过滤、提示词按它裁剪、
+   * 执行时按它拒绝。三处读同一份声明，不会各写一份而走偏。
+   */
+  cap?: ActCap;
   handler: (op: DerivationOp, ctx: OpContext) => Promise<OpResult> | OpResult;
 }
 
@@ -39,11 +46,26 @@ export function knownKinds(): string[] {
   return [...registry.keys()];
 }
 
-/** 生成提示词里的接口清单与示例。 */
-export function interfaceCatalog(): { lines: string[]; examples: string } {
+/** 这个接口需要哪个能力开关（基础接口返回 undefined）。 */
+export function capOf(kind: string): ActCap | undefined {
+  return registry.get(kind)?.cap;
+}
+
+/**
+ * 按能力过滤接口。
+ * `caps === undefined` 表示**全开**（老数据兼容）——这也是基底 Agent 的情形。
+ */
+export function interfacesFor(caps: ActCap[] | undefined): AgentInterface[] {
+  if (!caps) return listInterfaces();
+  const has = new Set<ActCap>(caps);
+  return listInterfaces().filter((d) => !d.cap || has.has(d.cap));
+}
+
+/** 生成提示词里的接口清单与示例（按能力裁剪）。 */
+export function interfaceCatalog(caps?: ActCap[]): { lines: string[]; examples: string } {
   const lines: string[] = [];
   const examples: string[] = [];
-  listInterfaces().forEach((def, i) => {
+  interfacesFor(caps).forEach((def, i) => {
     lines.push(`${i + 1}. ${def.kind} —— ${def.description}`);
     examples.push(`  ${JSON.stringify(def.example)}`);
   });

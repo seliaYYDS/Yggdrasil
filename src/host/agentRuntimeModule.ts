@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react';
 import { agentSessionId, EMPTY_RUN, useDesktopStore } from '../store/desktopStore';
 import { submitInput } from '../kernel/agent/scheduler';
-import type { ComponentNode, Message, NodeId, TraceStep, YggNode } from '../kernel/types';
+import type { ActCap, ComponentNode, Message, NodeId, TraceStep, YggNode } from '../kernel/types';
 
 /**
  * Agent 能力运行时。
@@ -51,8 +51,16 @@ export interface AgentApi {
   host: YggNode | undefined;
   /** 这个组件是否真的接入了 agent 能力。 */
   attached: boolean;
-  /** 这份能力自己的对话历史。 */
+  /** 这份能力自己的对话历史（reply 档里 assistant 的回复也在里面）。 */
   messages: Message[];
+  /**
+   * 运行档位。
+   * - `'reply'`：一问一答，`messages` 里有它的回复 —— 渲染出来就是聊天框。
+   * - `'act'`：输出 ops 去动桌面；它**不会说话**，界面上不该期待出现回复文字。
+   */
+  mode: 'reply' | 'act';
+  /** act 档的能力开关（reply 档为 undefined）。 */
+  caps: ActCap[] | undefined;
   /** 这个 agent 自己的工作状态（不含别人）。 */
   progress: AgentProgress;
   /** 兼容旧写法：等于 progress.running。 */
@@ -110,6 +118,8 @@ export function useAgent(explicitId?: string): AgentApi {
     host: comp,
     attached,
     messages: facet?.messages ?? [],
+    mode: facet?.mode ?? 'act',
+    caps: facet?.caps,
     progress,
     running: progress.running,
     anyRunning,

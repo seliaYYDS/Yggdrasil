@@ -1,7 +1,8 @@
-import type { ComponentNode, JsonSchema, ThemeTokens, YggNode } from '../types';
+import type { ActCap, ComponentNode, JsonSchema, ThemeTokens, YggNode } from '../types';
 import { isAgentNode } from '../types';
 import { interfaceCatalog } from '../registry/interfaceRegistry';
 import { surfacesText } from '../registry/surfaceRegistry';
+import { ALL_CAPS, capsAllow, CAP_HINTS, CAP_LABELS } from './caps';
 
 export const MAX_HISTORY_MESSAGES = 14;
 export const MAX_NODES = 80;
@@ -89,9 +90,39 @@ export interface SystemPromptInput {
   ledger?: string[];
   /** 该 Agent 的作用域。'*' 表示不受限（基底），数组表示只限这些节点。 */
   scope?: string[] | '*';
+  /**
+   * 该 Agent 的能力开关（只对 act 档有意义）。
+   * `undefined` = 全开：基底 Agent 与"没存过 caps 的老数据"都走这条。
+   */
+  caps?: ActCap[];
   /** 桌面视口尺寸。窗口坐标都基于它，模型算位置时必须知道。 */
   viewW?: number;
   viewH?: number;
+}
+
+/**
+ * reply 档的系统提示。
+ *
+ * **刻意只有几百字符**：这个 Agent 不需要知道桌面、接口、JSON 格式、账本、作用域 ——
+ * 它只需要知道自己是谁、以及"直接说人话就行"。
+ * 组件自己负责把 messages 渲染出来（包括 assistant 的回复）。
+ */
+export function buildReplyPrompt(input: { originName: string; rolePrompt?: string; history?: number }): string {
+  const who = input.rolePrompt?.trim()
+    ? input.rolePrompt.trim()
+    : '你是一个聊天助手。';
+  return [
+    '你叫「' + input.originName + '」，运行在用户桌面的一个组件窗口里。',
+    '',
+    '## 你的职责',
+    who,
+    '',
+    '## 怎么回答',
+    '- **直接输出你要说的话**，用中文。不要输出 JSON、不要输出代码块包裹的指令、不要描述"我将要做什么"。',
+    '- 你看不到也改不了桌面上的别的东西 —— 那是别的 Agent 的事。你只负责把话说清楚。',
+    '- 需要多轮才可以完成的事，先问清楚再答；不确定的信息不要编。',
+    '- 前面的对话就是上下文' + (input.history ? '（已带上最近 ' + input.history + ' 条）' : '') + '，接着聊即可。',
+  ].join('\n');
 }
 
 /** 按 scope 收窄要展示给模型的节点集合。scope='*' 表示不受限。 */
@@ -108,8 +139,17 @@ function scopeNodes(nodes: Record<string, YggNode>, scope?: string[] | '*'): Rec
 }
 
 export function buildSystemPrompt(input: SystemPromptInput): string {
-  const { lines, examples } = interfaceCatalog();
+  /*
+   * 能力开关裁剪。
+   *
+   * 受限作用域的 Agent 拿不到"全局修改"那几段 —— 因为执行面本来就会拒绝它
+   * （全局改动超出作用域，见 derivationBus 的 scopeViolation）。
+   * 提示词与执行面必须一致：不能讲一件它做不了的事。
+   */
   const unrestricted = !input.scope || input.scope === '*';
+  const caps = input.caps && !unrestricted ? input.caps.filter((c) => c !== 'global') : input.caps;
+  const on = (cap: ActCap): boolean => capsAllow(caps, cap);
+  const { lines, examples } = interfaceCatalog(caps);
   const scoped = scopeNodes(input.nodes, input.scope);
   const identity = unrestricted
     ? `你是 Yggdrasil 的基底 Agent「${input.originName}」，掌管整个桌面。`
@@ -124,6 +164,11 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     '',
     '## 可用接口（ops 的 kind 只能取这些值）',
     ...lines,
+    // 能力摘要：让它清楚自己有哪些、没有哪些，而不是试了才知道被拒。
+    caps
+      ? '**你的能力开关**：' + caps.map((c) => CAP_LABELS[c] + '（' + CAP_HINTS[c] + '）').join('；') +
+        '。没列出的接口你调不动 —— 调了会被直接拒绝，不要浪费一轮去试；确实需要就请创建你的 Agent 给你加。'
+      : '',
     '',
     '## 输出格式（必须严格遵守）',
     '只输出一个 JSON 对象，不要输出解释、不要用 markdown 代码块包裹：',
@@ -149,13 +194,14 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     '- **下面"当前窗口 / 当前 Agent"是实时快照，是唯一事实来源。** 对话历史里可能残留旧状态的描述，' +
       '一律以后面的快照为准。要确认某个组件是否还在，看快照，不要凭记忆。',
     '',
-    ...componentRules(),
+    ...componentRules(on('net')),
     ...windowRules(),
-    ...styleRules(),
-    ...surfaceRules(),
-    ...agentRules(),
-    ...browserRules(),
-    ...netRules(),
+    on('style') ? styleRules() : [],
+    on('global') ? globalRules() : [],
+    on('global') ? surfaceRules() : [],
+    on('agents') ? agentRules() : [],
+    on('browser') ? browserRules() : [],
+    on('net') ? netRules() : [],
     '',
     ...ledgerRules(input.ledger, input.nodes),
     '',
@@ -169,14 +215,15 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     '## 当前 Agent（实时快照）',
     agentsText(scoped),
     '',
-    '## 当前样式变量',
-    themeText(input.tokens),
+    // 快照也按能力给：没开样式开关就不必把它整份样式表塞进上下文。
+    on('style') || on('global') ? '## 当前样式变量' : '',
+    on('style') || on('global') ? themeText(input.tokens) : '',
     '',
-    '## 当前界面插槽',
-    surfacesText(),
+    on('global') ? '## 当前界面插槽' : '',
+    on('global') ? surfacesText() : '',
     '',
-    '## 可用工具',
-    toolCatalogText(input.tools),
+    on('tools') ? '## 可用工具' : '',
+    on('tools') ? toolCatalogText(input.tools) : '',
     '',
     input.rolePrompt ? '## 你的专项职责\n' + input.rolePrompt : '',
   ]
@@ -241,14 +288,17 @@ function ledgerRules(ledger?: string[], nodes?: Record<string, YggNode>): string
   ];
 }
 
-function componentRules(): string[] {
+function componentRules(onNet: boolean): string[] {
   return [
     '## 组件源码规则（create_component.source / update_component.source / replace_surface.source）',
     '- 必须是 TypeScript + JSX（TSX）源码。',
     '- 必须用 `export default function 组件名(props) { ... }` 导出一个 React 组件。',
     '- 可以 `import * as React from "react"` 或 `import { useState } from "react"`。',
     '- 只能 import "react"、"react-dom"、"react-dom/client"，其他模块一律不可用。',
-    '- 组件里**不能**直接 fetch 网络（会被 CORS 拦），要联网就先在同一轮用 fetch_url 抓取，再把结果作为常量写进源码。',
+    // 这句只对"能联网"的 Agent 有意义：没开 net 时它调不动 fetch_url，讲了反而是误导。
+    onNet
+      ? '- 组件里**不能**直接 fetch 网络（会被 CORS 拦），要联网就先在同一轮用 fetch_url 抓取，再把结果作为常量写进源码。'
+      : '- 组件里**不能**直接 fetch 网络（会被 CORS 拦）；你也**没有联网能力**，所以组件只能展示你已有的数据。',
     '- 不要写 CSS 文件的 import，样式必须写成行内 style 对象。',
     '- 颜色必须通过 CSS 变量继承样式，例如 style={{ color: "var(--ygg-fg)", background: "var(--ygg-surface)", border: "1px solid var(--ygg-border)", borderRadius: "var(--ygg-radius)" }}。可用变量：' +
       '--ygg-bg --ygg-surface --ygg-surface-2 --ygg-border --ygg-fg --ygg-fg-muted --ygg-accent --ygg-accent-hi --ygg-accent-dim --ygg-radius --ygg-danger --ygg-ok。',
@@ -316,16 +366,30 @@ function windowRules(): string[] {
   ];
 }
 
+/** 局部样式：只影响一个组件自己（style 开关）。 */
 function styleRules(): string[] {
   return [
-    '## 样式接口（update_theme.tokens / set_node_tokens.tokens）',
+    '## 样式接口（set_node_tokens.tokens）',
     '- tokens 是 CSS 变量到值的映射，只需要写要改的变量，未写的保持原值；重复调用会逐次覆盖。',
     '- 只允许白名单内的 --ygg- 变量，其他变量会被拒绝。',
-    '- update_theme 改全局；只想改一个窗口就用 set_node_tokens，并给出该窗口 id。',
-    '- 例："切换到霓虹风格" → 给 --ygg-bg、--ygg-surface、--ygg-surface-2、--ygg-border、--ygg-fg、--ygg-fg-muted、--ygg-accent、--ygg-accent-hi 全套改成冷色调高饱和值。',
+    '- set_node_tokens 只改**一个组件自己**，必须给出该窗口 id。改整套全局样式是另一个开关（见"全局修改"）。',
+    '- 例："把这个看板改成冷色调" → 给它的 --ygg-surface、--ygg-border、--ygg-accent 写值。',
     '- 默认是扁平化：--ygg-glow 与 --ygg-shadow 都是 none。只有用户明确要求发光/霓虹/立体感时才给这两个令牌写值。',
     '- 没有"当前主题"这种东西，也没有主题名。改样式就是给这组变量赋值，不要在 ops 里给主题起名字。',
     '- 改样式时不要重复创建组件，也不要删除用户的组件。',
+  ];
+}
+
+/** 全局修改：整套样式 + 宿主界面插槽（global 开关，且要求不受限作用域）。 */
+function globalRules(): string[] {
+  return [
+    '## 全局修改（update_theme / replace_surface）',
+    '- update_theme 改**整个页面**的样式变量，一次改全套；',
+    '  例："切换到霓虹风格" → 给 --ygg-bg、--ygg-surface、--ygg-surface-2、--ygg-border、--ygg-fg、--ygg-fg-muted、--ygg-accent、--ygg-accent-hi 全套改成冷色调高饱和值。',
+    '- replace_surface 改**宿主界面插槽**（背景 / 标题栏 / 整页效果层）；插槽不是窗口，',
+    '  用 inspect before="surface" 看它的现状与当前源码。',
+    '- 这两种操作影响所有窗口，所以要谨慎：只在用户确实要求"整体换风格 / 换背景"时做。',
+    '- 只改某一个窗口的配色用 set_node_tokens，不要动全局。',
   ];
 }
 
@@ -413,6 +477,25 @@ function agentRules(): string[] {
     '- **agent 能力不携带任何界面。** 接入后发现窗口还是老样子，那是正常的。',
     '- **不要**指望接入后自动出现聊天框或输入框；想在界面上呈现，必须在 `source` 里自己渲染。',
     '- 不要因为「这是个 Agent」就给它套特殊外观或加标题标记；它与普通组件渲染完全一致。',
+    '',
+    '### 先定档位：reply（只回话）还是 act（要动手）',
+    '- **reply**：只需要"说话"的 Agent（聊天、问答、解释、续写）。一问一答，模型的回复**直接显示在它自己的界面里**。',
+    '  它不能创建组件、不能改样式、不能联网 —— 需要这些就必须用 act。它更便宜、更快，**优先考虑它**。',
+    '  组件源码里渲染 `a.messages` 就能看到对话（用户与它的回复都在里面）。',
+    '- **act**：要动桌面（建组件 / 改样式 / 排布窗口）、要联网抓数据、要控制浏览器时才用。',
+    '  它输出 ops、多轮执行；**它自己不会说话** —— 界面上不会出现"回复文字"，要表达就得做出来。',
+    '- 判据：**用户要的东西只要能显示在它自己的窗口里 → reply；需要动桌面上的任何东西 → act。**',
+    '- 档位创建时就定：`agent: { mode: "reply" }` 或 `"act"`（不写 = act）；之后用 `set_agent_config` 改。',
+    '',
+    '### act 的能力开关：给多少、就接多少提示词',
+    '- 每个 act Agent 的开关决定它**收到哪些说明**、以及**哪些接口真的能调**。没开的接口会被直接拒绝。',
+    '- 可选开关（' + ALL_CAPS.map((c) => '`' + c + '` = ' + CAP_LABELS[c] + '：' + CAP_HINTS[c]).join('；') + '）。',
+    '- **默认只给 desktop + style**（能画界面、能调自己窗口的样式）。要别的就在创建时显式加：',
+    '  `agent: { caps: ["desktop", "style", "net"] }`。',
+    '- **宁可给少**：一个只画界面的 Agent 收到浏览器控制、联网、派生 Agent 那一整套说明，',
+    '  既费钱又容易分心。不够时你随时可以用 set_agent_config 给它加，不需要重建。',
+    '- `global`（全局修改）额外要求**不受限作用域**（scope: "*"），否则会被拒 ——',
+    '  想让它改整个页面的样式或背景，就别把它限制在自己的作用域里。',
     '',
     '### 子 Agent 是**独立运行**的（不会占用你）',
     '- 每个 Agent 跑起来占用**它自己的会话**：自己的队列、自己的进度、自己的轨迹。',

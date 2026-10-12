@@ -4,9 +4,10 @@ import { compileComponent } from '../../host/compile';
 import { desktop, makeFacet, useDesktopStore } from '../../store/desktopStore';
 import { unregisterTool } from '../registry/toolRegistry';
 import { sanitizeTokens } from '../../theme/engine';
-import type { ComponentNode, DerivationOp, YggNode } from '../types';
+import type { ActCap, ComponentNode, DerivationOp, YggNode } from '../types';
 import { newNodeId } from '../ids';
 import { alignRect, centerRect, clampRect, fillRect, type Rect } from './layout';
+import { capScopeConflict, capSummary, DEFAULT_ACT_CAPS, parseCaps } from '../agent/caps';
 
 const RESERVED = new Set(['root']);
 
@@ -108,9 +109,26 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
     createdAt: Date.now(),
   };
 
+  // 这三个要带出 if 块：下面的返回说明里要用到。
+  let mode: 'reply' | 'act' = 'act';
+  let caps: ActCap[] | undefined;
+  let ignoredForReply = false;
   if (wantAgent) {
     // agent 只贡献"能力"：职责、工具子集、作用域、上下文。
     const rawScope = agentRaw?.scope !== undefined ? agentRaw.scope : op.scope;
+    mode = parseMode(agentRaw?.mode ?? op.mode);
+    const scope = parseScope(rawScope, id);
+    /*
+     * reply 档没有 ops，所以"能力开关"和"工具子集"对它没有意义 ——
+     * 显式传了就明说被忽略，别让人以为给了却在生效。
+     */
+    const givenCaps = agentRaw?.caps ?? op.caps;
+    const givenTools = pickToolIds(agentRaw?.tools ?? op.tools);
+    ignoredForReply = mode === 'reply' && (!!givenCaps || givenTools.length > 0);
+    // 能力开关：给了用给的，没给就默认最小集（不是全开）。
+    caps = mode === 'reply' ? undefined : parseCaps(givenCaps) ?? DEFAULT_ACT_CAPS;
+    const conflict = mode === 'reply' ? null : capScopeConflict(caps, scope);
+    if (conflict) return fail('「' + name + '」的能力开关与作用域冲突：' + conflict);
     node.agent = makeFacet({
       systemPrompt:
         agentRaw && typeof agentRaw.systemPrompt === 'string'
@@ -121,9 +139,12 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
       toolIds: pickToolIds(agentRaw?.tools ?? op.tools),
       messages: [],
       ledger: [],
-      scope: parseScope(rawScope, id),
+      scope,
       // 创建时就能决定它的进度显不显示（'trace' 默认 / 'none' 不并进 Trace）。
       progress: parseProgress(agentRaw?.progress ?? op.progress),
+      mode,
+      // act 档的能力开关：给了就用给的，没给就只给默认那两项（desktop + style）。
+      caps: mode === 'reply' ? undefined : caps,
     });
   }
 
@@ -135,7 +156,11 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
   const scopeText =
     node.agent && node.agent.scope !== '*' ? (node.agent.scope as string[]).join(', ') : '全部';
   const capNote = wantAgent
-    ? '它已具备 agent 能力（作用域 ' + scopeText +
+    ? '它已具备 agent 能力（档位 ' + mode + '；作用域 ' + scopeText +
+      (mode === 'reply'
+        ? '；一问一答，回复直接显示在它自己的界面里，没有能力开关' +
+          (ignoredForReply ? '（reply 档已忽略你给的 caps/tools）' : '')
+        : '；能力开关 ' + capSummary(caps ?? [])) +
       (autoAttached ? '，检测到源码用了 useAgent 已自动接入' : '') +
       '），可在自己的界面里用 useAgent() 驱动它。'
     : '它目前是普通组件（默认如此）；只有当用户明确要求它自己思考、自己行动时，才用 attach_agent 接入 agent 能力（界面不变）。' +
@@ -146,6 +171,13 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string }) {
     observation: '组件 id=' + id + ' name=' + name + ' 已插入桌面。' + capNote,
   });
 }
+/**
+ * 解析 Agent 档位。认不出来一律按 act —— 缺省就是 act，这样老数据与老写法都不受影响。
+ */
+function parseMode(raw: unknown): 'reply' | 'act' {
+  return raw === 'reply' ? 'reply' : 'act';
+}
+
 /** 取工具 id 列表。 */
 function pickToolIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
@@ -216,6 +248,7 @@ export function registerNodeInterfaces(): void {
         ' borderRadius: "var(--ygg-radius)" }}>{v}</div>; }',
     },
     mutates: true,
+    cap: 'desktop',
     handler: (op, ctx) => createComponentNode(op, ctx),
   });
 
@@ -231,6 +264,7 @@ export function registerNodeInterfaces(): void {
       '所有几何结果都会夹进视口，不会跑到屏幕外。',
     example: { kind: 'update_component', id: 'n_xxx', dx: 120, dy: 0, focus: true },
     mutates: true,
+    cap: 'desktop',
     handler: (op) => {
       const id = strOr(op.id, '');
       const node = findComponent(id);
@@ -368,6 +402,7 @@ export function registerNodeInterfaces(): void {
       scope: ['self'],
     },
     mutates: true,
+    cap: 'agents',
     handler: (op) => {
       const id = strOr(op.id, '');
       const node = desktop().nodes[id];
@@ -388,19 +423,31 @@ export function registerNodeInterfaces(): void {
       const rawScope = op.scope;
       // 必须用 setFacet 而不是 updateFacet：后者只在 facet 已存在时才生效，
       // 而"接入能力"恰恰是给还没有 facet 的组件装上它。
+      const attachMode = parseMode(op.mode);
+      const attachScope = parseScope(rawScope, id);
+      const attachCaps =
+        attachMode === 'reply' ? undefined : parseCaps(op.caps) ?? DEFAULT_ACT_CAPS;
+      const attachConflict = attachMode === 'reply' ? null : capScopeConflict(attachCaps, attachScope);
+      if (attachConflict) return fail('能力开关与作用域冲突：' + attachConflict);
       useDesktopStore.getState().setFacet(id, makeFacet({
         systemPrompt: typeof op.systemPrompt === 'string' ? op.systemPrompt : '',
         toolIds: pickToolIds(op.tools),
         messages: [],
         ledger: [],
-        scope: parseScope(rawScope, id),
+        scope: attachScope,
         progress: parseProgress(op.progress),
+        mode: attachMode,
+        caps: attachCaps,
       }));
       desktop().log('op', 'attach agent ' + node.name, id);
       return ok('已给「' + node.name + '」接入 agent 能力', {
         observation:
-          'id=' + id + ' 现在是一个 Agent。它的界面不变（还是它自己的 source）；' +
-          '要让它在界面上呈现上下文，在源码里用 import { useAgent } from "yggdrasil"。',
+          'id=' + id + ' 现在是一个 Agent（档位 ' + attachMode + '）。它的界面不变（还是它自己的 source）；' +
+          '要让它在界面上呈现上下文，在源码里用 import { useAgent } from "yggdrasil"。' +
+          (attachMode === 'reply'
+            ? 'reply 档：一问一答，模型的回复会作为 assistant 消息进 messages，渲染 a.messages 就能看到。'
+            : 'act 档的能力开关：' + capSummary(attachCaps ?? []) +
+              '。不够用就再调 attach_agent 之前用 set_agent_config 加。'),
       });
     },
   });
@@ -412,6 +459,7 @@ export function registerNodeInterfaces(): void {
       '移除一个组件的 agent 能力，它会退回成普通组件（界面不变，上下文与作用域信息丢弃）。',
     example: { kind: 'detach_agent', id: 'n_xxx' },
     mutates: true,
+    cap: 'agents',
     handler: (op) => {
       const id = strOr(op.id, '');
       const node = desktop().nodes[id];
@@ -431,6 +479,7 @@ export function registerNodeInterfaces(): void {
     description: '删除某个节点，会级联删除其全部子节点与派生工具。',
     example: { kind: 'remove_node', id: 'n_xxx' },
     mutates: true,
+    cap: 'desktop',
     handler: (op) => {
       const id = strOr(op.id, '');
       if (RESERVED.has(id) || !desktop().nodes[id]) return fail('节点 ' + id + ' 不存在或不可删除。');
@@ -452,6 +501,7 @@ export function registerNodeInterfaces(): void {
       '设置组件的窗口状态：active 显示 / minimized 最小化 / closed 关闭（保留节点，可从桌面左下任务栏恢复）。按名字或 id 指定。',
     example: { kind: 'set_window_state', name: '计算器', state: 'minimized' },
     mutates: true,
+    cap: 'desktop',
     handler: (op) => {
       const state = strOr(op.state, '');
       if (!['active', 'minimized', 'closed'].includes(state)) {
@@ -491,6 +541,7 @@ export function registerNodeInterfaces(): void {
       '只改写某一个节点的局部样式变量，影响该窗口及其内部元素，不动全局。适合"把那个计算器变红"这类要求。',
     example: { kind: 'set_node_tokens', id: 'n_xxx', tokens: { '--ygg-accent': '#FF3D7F' } },
     mutates: true,
+    cap: 'style',
     handler: (op) => {
       const id = strOr(op.id, '');
       const node = desktop().nodes[id];
@@ -512,6 +563,7 @@ export function registerNodeInterfaces(): void {
     description:
       '按名字或类型查找节点，返回 id、类型、位置、状态、是否挂了 Agent。比 inspect 更轻，适合只是想知道"那个窗口叫什么 id"。',
     example: { kind: 'list_nodes', query: '计算器' },
+    cap: 'desktop',
     handler: (op) => {
       const query = strOr(op.query, '').toLowerCase();
       const kind = strOr(op.type, '');
