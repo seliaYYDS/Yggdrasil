@@ -306,35 +306,71 @@ export async function fetchWebSmart(rawUrl: string, options: WebFetchOptions = {
 }
 
 /**
+ * 一个 URL 的**取图目标链**：先直连，只有调用方给了中转地址才追加它。
+ *
+ * 抽出来是为了让「探测」与「读字节」走**同一条链**：以前 probeImage 只直连、
+ * fetchImageData 会用中转，于是会出现"探测说不可用、看图却能读到"的自相矛盾。
+ *
+ * 为什么必须有中转这条路：跨域读取是**浏览器的硬规则**，页面内没有任何开关能绕过
+ * （no-cors 只能发不能读；画进 canvas 会污染，toDataURL 直接抛）。
+ * 想让图片"一定能读"，只能让页面之外的一方替你取字节 —— 也就是这里的 relay。
+ */
+export function imageTargets(url: URL, relay?: string): { target: string; via: 'direct' | 'relay' }[] {
+  const list: { target: string; via: 'direct' | 'relay' }[] = [{ target: url.href, via: 'direct' }];
+  const trimmed = (relay ?? '').trim();
+  if (trimmed) {
+    // {url} 占位符会被替换成编码后的地址；没写占位符就拼在末尾。
+    const target = trimmed.includes('{url}')
+      ? trimmed.replace('{url}', encodeURIComponent(url.href))
+      : trimmed + encodeURIComponent(url.href);
+    list.push({ target, via: 'relay' });
+  }
+  return list;
+}
+
+/**
  * 抓图片：只验证可达性与尺寸，不把二进制塞进上下文。
- * 先试 HEAD（不下载正文），拿不到 content-type 再退回 GET。
+ * 先试 HEAD（不下载正文），拿不到 content-type 再退回 GET；直连失败/被跨域挡住时走中转。
  */
 export async function probeImage(
   rawUrl: string,
-  options: WebFetchOptions = {},
-): Promise<{ url: string; status: number; contentType: string; bytes: number }> {
+  options: WebFetchOptions & { relay?: string } = {},
+): Promise<{ url: string; status: number; contentType: string; bytes: number; via: 'direct' | 'relay' }> {
   const url = absUrl(rawUrl);
+  let last: { url: string; status: number; contentType: string; bytes: number; via: 'direct' | 'relay' } | null =
+    null;
 
-  const head = await fetch(url.href, { method: 'HEAD', signal: options.signal }).catch(() => null);
-  const headType = head?.headers.get('content-type') ?? '';
-  if (head && head.ok && headType) {
-    const len = Number(head.headers.get('content-length') ?? '0');
-    return {
-      url: url.href,
-      status: head.status,
-      contentType: headType,
-      bytes: Number.isFinite(len) && len > 0 ? len : 0,
-    };
+  for (const { target, via } of imageTargets(url, options.relay)) {
+    try {
+      const head = await fetch(target, { method: 'HEAD', signal: options.signal }).catch(() => null);
+      const headType = head?.headers.get('content-type') ?? '';
+      if (head && head.ok && headType) {
+        const len = Number(head.headers.get('content-length') ?? '0');
+        return {
+          url: url.href,
+          status: head.status,
+          contentType: headType,
+          bytes: Number.isFinite(len) && len > 0 ? len : 0,
+          via,
+        };
+      }
+      const res = await fetch(target, { method: 'GET', signal: options.signal });
+      const blob = await res.blob().catch(() => null);
+      last = {
+        url: url.href,
+        status: res.status,
+        contentType: res.headers.get('content-type') ?? blob?.type ?? '',
+        bytes: blob?.size ?? 0,
+        via,
+      };
+      // 拿到了 image/* 就收工；否则继续试下一条（中转）。
+      if (res.ok && /^image\//i.test(last.contentType)) return last;
+    } catch {
+      /* 这一条被跨域挡住或网络失败 → 试下一条 */
+    }
   }
-
-  const res = await fetch(url.href, { method: 'GET', signal: options.signal });
-  const blob = await res.blob().catch(() => null);
-  return {
-    url: url.href,
-    status: res.status,
-    contentType: res.headers.get('content-type') ?? blob?.type ?? '',
-    bytes: blob?.size ?? 0,
-  };
+  if (last) return last;
+  throw new Error('No image target could be reached.');
 }
 
 export interface ImageDataResult {

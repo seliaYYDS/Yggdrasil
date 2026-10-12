@@ -64,7 +64,9 @@ export function registerNetInterfaces(): void {
       const url = strOr(op.url, '');
       if (!url) return fail('fetch_image needs a url.');
       try {
-        const r = await probeImage(url);
+        // 和 view_image 走同一条链：设置里填了中转就用它兜底，别出现"探测说不可用、看图却能读"。
+        const relay = (useDesktopStore.getState().settings.imageRelay ?? '').trim() || undefined;
+        const r = await probeImage(url, { relay });
         if (r.status < 200 || r.status >= 400) return fail('Image ' + url + ' returned ' + r.status + '.');
         // 网页或 JSON 说明这不是直链（常见于图床的中间页 / 防盗链拦截页）。
         if (/^(text\/|application\/(json|xml))/i.test(r.contentType)) {
@@ -73,9 +75,11 @@ export function registerNetInterfaces(): void {
               'Use a URL that ends in an image extension and whose content-type is image/*.',
           );
         }
-        return ok('Image is usable: ' + r.contentType + ' ' + (r.bytes || 'unknown') + 'B', {
-          observation: JSON.stringify(r),
-        });
+        return ok(
+          'Image is usable: ' + r.contentType + ' ' + (r.bytes || 'unknown') + 'B' +
+            (r.via === 'relay' ? ' (read through the image relay)' : ''),
+          { observation: JSON.stringify(r) },
+        );
       } catch (e) {
         return fail('Probing the image failed: ' + (e as Error).message);
       }
@@ -86,7 +90,7 @@ export function registerNetInterfaces(): void {
     kind: 'view_image',
     label: '看图',
     description:
-      '**Read an image into your context** (fetch bytes → base64 → **your own vision**; no third-party recognition). Usage: get a direct image link with fetch_url → view_image → you can see it next round → then decide how to write the component. Requires a vision-capable model (a text-only model fails the whole round); bytes are read directly and an image host that disallows cross-origin reads reports an error. One image = one message in the context (it takes space, so do not look at many at once).',
+      '**Read an image into your context** (fetch bytes → base64 → **your own vision**; no third-party recognition). Usage: get a direct image link with fetch_url → view_image → you can see it next round → then decide how to write the component. Requires a vision-capable model (a text-only model fails the whole round); bytes are read directly and an image host that disallows cross-origin reads falls back to the image relay configured in settings (that relay only forwards bytes, it does no recognition). One image = one message in the context (it takes space, so do not look at many at once).',
     example: { kind: 'view_image', url: 'https://example.com/a.png', note: 'homepage hero' },
     mutates: false,
     cap: 'net',

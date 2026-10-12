@@ -77,9 +77,15 @@ export function SettingsPanel() {
                 spellCheck={false}
               />
               <div className="ygg-hint">
-                识图本身不经过任何第三方：抓到字节 → base64 → 直接用当前模型看图。
-                但浏览器读跨域图片要求对方允许，很多图床不允许 —— 只有在直连失败时才会用到这个地址，
-                它只负责把字节递过来。地址里可以写 {'{url}'}，会被替换成编码后的图片地址；不写就拼在末尾。
+                跨域读图是浏览器的硬规则，页面里绕不过 —— 只有在直连失败时才会用到这个地址，
+                它只负责把字节递过来（不识别、不存储）。识别始终是"base64 交给当前模型"。
+                地址里可以写 {'{url}'}，会被替换成编码后的图片地址；不写就拼在末尾。
+              </div>
+              <div className="ygg-hint">
+                想完全解决：自己起一个中转（仓库里带了现成的 <code>tools/image-relay-worker.js</code>，
+                粘到 Cloudflare Worker 就能用），把地址填这里，例如
+                <code>https://你的域名/?url={'{url}'}</code>。
+                用第三方公共代理也行，但它能看到你取的每一张图。
               </div>
             </div>
             <div className="ygg-field">
