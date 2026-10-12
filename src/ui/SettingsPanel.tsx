@@ -38,6 +38,21 @@ export function SettingsPanel() {
           />
         </div>
         <div className="ygg-field">
+          <label className="ygg-label">图片中转（可选）</label>
+          <input
+            className="ygg-input"
+            value={settings.imageRelay ?? ''}
+            placeholder="留空 = 不中转，只直连读取"
+            onChange={(e) => setSettings({ imageRelay: e.target.value })}
+            spellCheck={false}
+          />
+          <div className="ygg-hint">
+            Agent 读图片时：抓到字节 → base64 → **直接用当前模型看图**，识别不经过任何第三方。
+            但浏览器读跨域图片要求对方允许，很多图床不允许 —— 只有在直连失败时才会用到这个地址。
+            地址里可以写 {'{url}'}，它会被替换成编码后的图片地址；不写就拼在末尾。
+          </div>
+        </div>
+        <div className="ygg-field">
           <label className="ygg-label">Model</label>
           <input
             className="ygg-input"

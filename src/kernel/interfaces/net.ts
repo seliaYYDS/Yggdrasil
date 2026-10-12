@@ -91,9 +91,11 @@ export function registerNetInterfaces(): void {
     label: '看图',
     description:
       '**把一张图片读进你的上下文**，这样你下一轮就能真正"看到"它（而不只是知道它存在）。' +
-      '这才是"网页里的图片"的正确用法：fetch_url 给出图片直链 → view_image 看内容 → 再决定怎么写组件。' +
+      '这就是"网页里的图片"的正确用法：fetch_url 给出图片直链 → view_image 把图**读成 base64 交给你自己看** → ' +
+      '再决定怎么写组件。识别用的是你（当前模型）的视觉能力，不是第三方识别 API。' +
       '需要当前模型支持视觉；纯文本模型会在这一轮报错并提示换模型。' +
-      '直连被 CORS 拦时会自动走图片代理。一张图对应上下文里的一条消息（会占空间，别一次看太多张）。',
+      '图片的字节**直连**读取；抓不到（图床不允许跨域）时，只有你在设置里填了图片中转地址才会走它。' +
+      '**识别由你自己的模型完成**，不经过任何识别服务。一张图对应上下文里的一条消息（会占空间，别一次看太多张）。',
     example: { kind: 'view_image', url: 'https://example.com/a.png', note: '首页主视觉' },
     mutates: false,
     cap: 'net',
@@ -106,7 +108,9 @@ export function registerNetInterfaces(): void {
         return fail('view_image 需要一个带 agent 能力的发起者（图片只能进 Agent 自己的上下文）。');
       }
       try {
-        const img = await fetchImageData(url);
+        // 中转地址来自设置（默认空 = 不中转）。识图本身始终是"base64 交给当前模型"。
+        const relay = (useDesktopStore.getState().settings.imageRelay ?? '').trim() || undefined;
+        const img = await fetchImageData(url, { relay });
         // 压一遍再进上下文：原图动辄几 MB，base64 之后更大，而且每轮都会重发。
         const prepared = await prepareImage(img.blob);
         const dataUrl = prepared?.dataUrl ?? img.dataUrl;

@@ -337,15 +337,6 @@ export async function probeImage(
   };
 }
 
-/**
- * 图片代理。
- *
- * 为什么要它：图片的字节只能用 fetch 读，而 fetch 跨域需要对方回 ACAO 头 ——
- * 大部分图床不给。所以直连失败时走一个图片代理（它会替我们取图并加上 CORS 头）。
- * 与文本代理（r.jina.ai）分开，因为文本代理回的是 markdown，拿不到图片字节。
- */
-export const DEFAULT_IMAGE_PROXY = 'https://images.weserv.nl/?url=';
-
 export interface ImageDataResult {
   url: string;
   finalUrl: string;
@@ -355,7 +346,8 @@ export interface ImageDataResult {
   dataUrl: string;
   /** 原始字节。要给宿主做缩放时直接用，不必再解一遍 data URL。 */
   blob: Blob;
-  via: 'direct' | 'proxy';
+  /** direct = 直接读到的；relay = 经用户配置的中转地址读到的。 */
+  via: 'direct' | 'relay';
 }
 
 function blobToDataUrl(blob: Blob): Promise<string | null> {
@@ -386,19 +378,22 @@ function blobToDataUrl(blob: Blob): Promise<string | null> {
 }
 
 /**
- * 把一张图片读成 data URL。
+ * 把一张图片读成 data URL —— **识图链路的第一步，只负责"把字节拿到手"**。
  *
- * 顺序：直连 → 图片代理。两边都失败就抛错（错误信息要能让 Agent 自己决定下一步）。
- * **不在这里做缩放**：缩放要用 canvas，那是宿主环境的事（见 host/image.ts），
- * 这一层只负责"把字节拿到手"。
+ * 拿到之后直接 base64 交给当前模型（多模态消息），**识别是模型自己做的**，
+ * 这里不调用任何识别服务。
+ *
+ * 顺序：**直连优先**；只有调用方显式给了 `relay`（用户在设置里填的中转地址）
+ * 才在直连失败后走它。默认没有任何第三方参与。
+ * **不在这里做缩放**：缩放要用 canvas，那是宿主环境的事（见 host/image.ts）。
  */
 export async function fetchImageData(
   rawUrl: string,
-  options: WebFetchOptions = {},
+  options: WebFetchOptions & { relay?: string } = {},
 ): Promise<ImageDataResult> {
   const url = absUrl(rawUrl);
 
-  const attempt = async (target: string, via: 'direct' | 'proxy'): Promise<ImageDataResult | null> => {
+  const attempt = async (target: string, via: 'direct' | 'relay'): Promise<ImageDataResult | null> => {
     const res = await fetch(target, { method: 'GET', signal: options.signal });
     if (!res.ok) return null;
     const blob = await res.blob().catch(() => null);
@@ -413,16 +408,23 @@ export async function fetchImageData(
   const direct = await attempt(url.href, 'direct').catch(() => null);
   if (direct) return direct;
 
-  // 代理要去掉协议前缀（weserv 的约定是 ?url=host/path）。
-  const proxied = await attempt(
-    DEFAULT_IMAGE_PROXY + encodeURIComponent(url.href.replace(/^https?:\/\//, '')),
-    'proxy',
-  ).catch(() => null);
-  if (proxied) return proxied;
+  // 直连失败基本就是 CORS。只有用户**自己配了**中转地址才走它 —— 默认不碰第三方。
+  const relay = (options.relay ?? '').trim();
+  if (relay) {
+    const target = relay.includes('{url}')
+      ? relay.replace('{url}', encodeURIComponent(url.href))
+      : relay + encodeURIComponent(url.href);
+    const via = await attempt(target, 'relay').catch(() => null);
+    if (via) return via;
+  }
 
   throw new Error(
-    '读不到这张图的字节：直连被 CORS 拦、图片代理也没成功。' +
-      '可以改用 fetch_image 确认它可达，把直链写进组件的 <img src> 让用户看到；' +
-      '或换一张允许跨域读取的图（很多图床 / wiki / github 的图都可以）。',
+    '读不到这张图的字节：这张图不允许跨域读取（CORS），浏览器里拿不到它的内容。' +
+      (relay
+        ? '你配的图片中转地址也没能取到它。'
+        : '（读图片必须用 fetch，而 fetch 跨域要求图床允许 —— 大部分图床不允许。' +
+          '想要能读，可以在设置里填一个图片中转地址；那只是一个把字节递过来的中转，不做识别。）') +
+      '退而求其次：用 fetch_image 确认它可达，把直链写进组件的 <img src> 让用户看到；' +
+      '或者换一张允许跨域的图（很多 wiki / github / 常见图床的图可以）。',
   );
 }
