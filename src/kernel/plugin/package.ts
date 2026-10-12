@@ -85,7 +85,14 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
   const hostsRaw = Array.isArray(m.hosts) ? m.hosts : [];
   const hosts: string[] = [];
   for (const h of hostsRaw) {
-    if (typeof h !== 'string' || !HOST_RE.test(h)) return bad('hosts 里有不合法的域名：' + String(h));
+    if (typeof h !== 'string') return bad('hosts 里有不合法的域名：' + String(h));
+    // 用户配置的主机：自建服务的地址只能由用户填，不可能写死在清单里。
+    const ref = h.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}$/);
+    if (ref) {
+      hosts.push(h);
+      continue;
+    }
+    if (!HOST_RE.test(h)) return bad('hosts 里有不合法的域名：' + String(h));
     hosts.push(h.toLowerCase());
   }
 
@@ -100,14 +107,29 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     if (typeof o.key !== 'string' || !FIELD_RE.test(o.key)) return bad('fields[].key 不合法：' + String(o.key));
     if (fields.some((x) => x.key === o.key)) return bad('fields 里 key 重复：' + o.key);
     if (typeof o.label !== 'string' || !o.label.trim()) return bad('fields[' + o.key + '] 缺少 label。');
+    if (o.type !== undefined && o.type !== 'text' && o.type !== 'url') {
+      return bad('fields[' + o.key + '] 的 type 只支持 text 或 url（现在是 ' + String(o.type) + '）。');
+    }
     fields.push({
       key: o.key,
       label: o.label,
       hint: typeof o.hint === 'string' ? o.hint : undefined,
       placeholder: typeof o.placeholder === 'string' ? o.placeholder : undefined,
+      // type / required 必须带下去：hosts 与 url 插值都读它，漏了就会出现"字段明明写了 url 却说它不是"。
+      type: o.type === 'url' ? 'url' : undefined,
+      required: o.required === true,
       secret: o.secret === true,
       default: typeof o.default === 'string' ? o.default : undefined,
     });
+  }
+
+  // 被 hosts 引用的字段必须存在，而且必须是 url 类型（否则用户填个"北京"也能进白名单）。
+  for (const h of hosts) {
+    const ref = h.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}$/);
+    if (!ref) continue;
+    const f = fields.find((x) => x.key === ref[1]);
+    if (!f) return bad('hosts 里的 {config:' + ref[1] + '} 没有对应的字段。');
+    if (f.type !== 'url') return bad('字段 ' + ref[1] + ' 被 hosts 引用了，它必须是 type: "url"。');
   }
 
   const epsRaw = Array.isArray(m.endpoints) ? m.endpoints : [];
@@ -125,15 +147,35 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     const desc = typeof o.description === 'string' && o.description.trim() ? o.description.trim() : '';
     if (!desc) return bad('endpoint ' + en + ' 缺少 description（模型靠它决定怎么用）。');
     const url = typeof o.url === 'string' ? o.url.trim() : '';
-    if (!/^https?:\/\//i.test(url)) return bad('endpoint ' + en + ' 的 url 必须是 http(s) 绝对地址。');
-    let host = '';
-    try {
-      host = new URL(url.replace(/\{[^}]+\}/g, 'x')).hostname;
-    } catch {
-      return bad('endpoint ' + en + ' 的 url 解析不了：' + url);
-    }
-    if (!hostAllowed(host, hosts)) {
-      return bad('endpoint ' + en + ' 请求 ' + host + '，但它不在 hosts 白名单里（' + (hosts.join(', ') || '空') + '）。');
+    /*
+     * 地址有两种开头：写死的 http(s)://，或者 {config:某地址字段}。
+     * 后者是"自建服务"必需的形式 —— 地址由用户填，清单里查不到主机，
+     * 所以这里只检查它引用的字段对不对，真正的主机校验留到执行时（对着用户填的值查）。
+     */
+    const cfgPrefix = url.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}/);
+    if (cfgPrefix) {
+      const f = fields.find((x) => x.key === cfgPrefix[1]);
+      if (!f) return bad('endpoint ' + en + ' 的 url 里的 {config:' + cfgPrefix[1] + '} 没有对应的字段。');
+      if (f.type !== 'url') {
+        return bad('endpoint ' + en + ' 的 url 用 ' + cfgPrefix[1] + ' 当地址前缀，它必须是 type: "url"。');
+      }
+    } else {
+      if (!/^https?:\/\//i.test(url)) {
+        return bad('endpoint ' + en + ' 的 url 必须是 http(s) 绝对地址，或以 {config:地址字段} 开头。');
+      }
+      let host = '';
+      try {
+        host = new URL(url.replace(/\{[^}]+\}/g, 'x')).hostname;
+      } catch {
+        return bad('endpoint ' + en + ' 的 url 解析不了：' + url);
+      }
+      const templated = hosts.filter((h) => h.startsWith('{config:'));
+      if (!hostAllowed(host, hosts)) {
+        return bad(
+          'endpoint ' + en + ' 请求 ' + host + '，但它不在 hosts 白名单里（' + (hosts.join(', ') || '空') + '）。' +
+            (templated.length ? '要走用户配置的主机，地址得写成 ' + templated.join('/') + ' 开头。' : ''),
+        );
+      }
     }
     const method = o.method === 'POST' ? 'POST' : 'GET';
     const cap = o.cap === undefined ? 'net' : (o.cap as ActCap | null);
@@ -300,7 +342,17 @@ export function packPlugin(manifest: PluginManifest, guide: string): Uint8Array 
 export function describeManifest(m: PluginManifest): string[] {
   const lines = [m.name + ' v' + m.version + (m.author ? ' · ' + m.author : '')];
   lines.push(m.description);
-  lines.push('可访问的主机：' + m.hosts.join('、'));
+  lines.push(
+    '可访问的主机：' +
+      m.hosts
+        .map((h) => {
+          const ref = h.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}$/);
+          if (!ref) return h;
+          const f = (m.fields ?? []).find((x) => x.key === ref[1]);
+          return '你在插件面板里填的「' + (f?.label ?? ref[1]) + '」';
+        })
+        .join('、'),
+  );
   lines.push('提供的操作：' + m.endpoints.map((e) => e.name).join('、'));
   const secrets = (m.fields ?? []).filter((f) => f.secret);
   if (secrets.length) lines.push('需要你填的密钥：' + secrets.map((f) => f.label).join('、'));

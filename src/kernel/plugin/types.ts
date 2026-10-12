@@ -16,6 +16,18 @@ export interface PluginField {
   label: string;
   hint?: string;
   placeholder?: string;
+  /**
+   * text（默认）会 URL 编码后插入；**url 会原样插入**。
+   *
+   * 存在的理由：像"自建 API 地址"这种值，编码进模板就废了（~~http://x~~ 变成 ~~http%3A%2F%2Fx~~）；
+   * 而且地址这种值还必须能**出现在 hosts 白名单里** —— 见 hosts 的说明。
+   */
+  type?: 'text' | 'url';
+  /**
+   * 必填。**只有标了 required 的字段为空时才会拦住调用** ——
+   * 否则"可选的 Cookie"会因为没填而让整个插件不能用。
+   */
+  required?: boolean;
   /** 密钥类字段（界面上遮住输入，也不写进日志/场景）。 */
   secret?: boolean;
   /** 没填时用它。 */
@@ -82,6 +94,10 @@ export interface PluginManifest {
   /**
    * 允许访问的主机名白名单（精确域名或后缀）。
    * **这是插件的出口墙**：执行时按最终地址校验，不在名单里直接拒绝。
+   *
+   * 条目可以写 ~~"{config:base_url}"~~ —— 表示"主机由用户填的字段决定"。
+   * 这是给"自建服务"这类插件的：地址是用户自己起的，不可能写死在清单里。
+   * 被引用的字段必须是 type: "url"。
    */
   hosts: string[];
   /** 用户可以填的字段（密钥或配置）。 */

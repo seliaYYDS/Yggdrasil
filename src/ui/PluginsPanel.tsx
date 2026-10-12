@@ -139,7 +139,7 @@ export function PluginsPanel() {
                     <label className="ygg-label">{f.label}</label>
                     <input
                       className="ygg-input"
-                      type={f.secret ? 'password' : 'text'}
+                      type={f.secret ? 'password' : f.type === 'url' ? 'url' : 'text'}
                       value={p.values[f.key] ?? ''}
                       placeholder={f.placeholder ?? (f.secret ? '只存在本地，不会进提示词' : '')}
                       spellCheck={false}

@@ -46,6 +46,45 @@ function endpointsOf(pluginId: string): PluginEndpoint[] {
   return current.find((p) => p.id === pluginId)?.endpoints ?? [];
 }
 
+/**
+ * 生效的主机白名单 = 清单里的静态条目 + 用户填的地址解析出来的主机。
+ *
+ * 自建服务这类插件的主机只能来自用户："http://127.0.0.1:3000" 只在这一刻才知道。
+ * 注意：这仍然是**用户自己填的值**，插件改不了它，所以出口墙没有被拆掉。
+ */
+export function effectiveHosts(plugin: InstalledPlugin): string[] {
+  const out: string[] = [];
+  for (const h of plugin.hosts) {
+    const ref = h.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}$/);
+    if (!ref) { out.push(h); continue; }
+    const field = plugin.fields.find((x) => x.key === ref[1]);
+    const raw = (plugin.values[ref[1]] ?? field?.default ?? '').trim();
+    if (!raw) continue;
+    try {
+      // 可以是完整地址，也可以只写主机名。
+      out.push(new URL(raw.includes('://') ? raw : 'http://' + raw).hostname.toLowerCase());
+    } catch {
+      /* 填得不成形就当它没有 —— 下面的缺失字段检查会把它报出来 */
+    }
+  }
+  return out;
+}
+
+/** 模板里引用了、但用户还没填的字段（要给出"去面板里填 XXX"这种能照做的错误）。 */
+function missingFields(plugin: InstalledPlugin, e: PluginEndpoint): string[] {
+  const texts = [e.url, ...Object.values(e.headers ?? {})].join(' ');
+  const keys = [...texts.matchAll(/\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}/g)].map((m) => m[1]);
+  const missing: string[] = [];
+  for (const key of new Set(keys)) {
+    const field = plugin.fields.find((x) => x.key === key);
+    // 只拦"必填但没填"的。可选的字段（例如 Cookie）留空是正常用法，不该挡住调用。
+    if (!field?.required) continue;
+    const value = (plugin.values[key] ?? field.default ?? '').trim();
+    if (!value) missing.push(field.label);
+  }
+  return missing;
+}
+
 /** 用清单里的字段模板渲染字符串（url / headers 里的 {config:key}）。 */
 function renderTemplate(
   text: string,
@@ -70,6 +109,12 @@ function renderTemplate(
         const f = plugin.fields.find((x) => x.key === field);
         value = plugin.values[field] ?? f?.default ?? '';
       }
+      /*
+       * url 类型的字段**原样插入**：把 http://localhost:3000 编码成 http%3A%2F%2F... 就废了。
+       * 顺手去掉结尾斜杠，这样模板里写 {config:base_url}/search 不会变成 //search。
+       */
+      const asUrl = plugin.fields.find((x) => x.key === key.slice(7))?.type === 'url';
+      if (asUrl) return value.trim().replace(/\/+$/, '');
     } else {
       value = params[key] ?? '';
     }
@@ -143,6 +188,11 @@ export async function httpCall(
   op: DerivationOp,
   fetchImpl: typeof fetch = fetch,
 ): Promise<OpResult> {
+  const missing = missingFields(plugin, e);
+  if (missing.length) {
+    // 报"去插件面板填 XXX"，而不是让它以一个莫名其妙的 URL 报错。
+    return fail('这个插件还没配好：请在插件面板里填写「' + missing.join('」「') + '」。');
+  }
   const collected = collectParams(e, op);
   if (!collected.ok) return fail(collected.error);
   const params = collected.params;
@@ -154,9 +204,12 @@ export async function httpCall(
   } catch {
     return fail('插件 ' + plugin.id + ' 的地址模板渲染后不是合法地址：' + urlText);
   }
-  if (!hostAllowed(url.hostname, plugin.hosts)) {
+  if (!hostAllowed(url.hostname, effectiveHosts(plugin))) {
     // 正常走不到这里（清单校验时已经查过），但执行时再查一次：清单是数据，数据可能被改过。
-    return fail('插件 ' + plugin.id + ' 不允许访问 ' + url.hostname + '（白名单：' + plugin.hosts.join(', ') + '）。');
+    return fail(
+      '插件 ' + plugin.id + ' 不允许访问 ' + url.hostname +
+        '（白名单：' + (effectiveHosts(plugin).join(', ') || '空 —— 去插件面板填写 API 地址') + '）。',
+    );
   }
 
   const headers: Record<string, string> = { accept: 'application/json, text/plain;q=0.9, */*;q=0.8' };

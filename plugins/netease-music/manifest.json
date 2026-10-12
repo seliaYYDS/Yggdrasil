@@ -1,0 +1,159 @@
+{
+  "id": "netease-music",
+  "name": "网易云音乐",
+  "version": "1.0",
+  "author": "Yggdrasil",
+  "minAppVersion": "0.1",
+  "description": "通过你自建的 NeteaseCloudMusicApiEnhanced 服务搜歌、取播放直链与歌词。需要你填自己的 API 地址。",
+  "hosts": [
+    "{config:base_url}"
+  ],
+  "fields": [
+    {
+      "key": "base_url",
+      "label": "API 地址",
+      "type": "url",
+      "placeholder": "http://localhost:3000",
+      "hint": "你自建的 NeteaseCloudMusicApiEnhanced 地址（默认端口 3000）。一行 Docker 就能起：docker run -d -p 3000:3000 moefurina/ncm-api:latest —— 该服务默认允许跨域（CORS_ALLOW_ORIGIN=*）。",
+      "default": "",
+      "required": true
+    },
+    {
+      "key": "cookie",
+      "label": "Cookie（可选）",
+      "secret": true,
+      "hint": "填了才能拿到 VIP / 高音质歌曲的播放直链。在浏览器登录 music.163.com 后复制 Cookie 里的 MUSIC_U=... 即可；留空时只能取到免费歌曲。",
+      "default": ""
+    }
+  ],
+  "endpoints": [
+    {
+      "name": "search",
+      "label": "搜歌",
+      "description": "Search songs. Give keywords; returns result.songCount and result.songs[] with id, name, dt (duration in ms), fee (0 free / 1 VIP / 4 paid album / 8 trial-only), ar[].name + ar[].id (artists), al.name + al.picUrl (album and cover). Take a song id from here and pass it to song_url to get a playable link.",
+      "method": "GET",
+      "url": "{config:base_url}/cloudsearch?keywords={keywords}&type=1&limit={limit}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "keywords",
+          "description": "search words (song, artist or album)",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "description": "how many songs (1-30)",
+          "default": "5"
+        }
+      ],
+      "pick": [
+        "code",
+        "result.songCount",
+        "result.songs[].id",
+        "result.songs[].name",
+        "result.songs[].dt",
+        "result.songs[].fee",
+        "result.songs[].ar[].name",
+        "result.songs[].ar[].id",
+        "result.songs[].al.name",
+        "result.songs[].al.picUrl"
+      ],
+      "maxChars": 14000,
+      "emptyHint": "songCount is 0 or code is not 200: either nothing matched, or the API address / cookie is not set up in the plugin panel. Try a shorter keyword (or the artist name), then check the plugin panel fields. Two attempts is the budget — after that, tell the user what you searched and what came back.",
+      "example": {
+        "kind": "netease-music.search",
+        "keywords": "稻香 周杰伦",
+        "limit": "5"
+      }
+    },
+    {
+      "name": "song_url",
+      "label": "取播放直链",
+      "description": "Get the playable audio URL of one song by id. Returns data[0].url (put it in an <audio> element), plus br, size, level and type. **url is null when the track needs VIP or is unavailable in this region** — in that case say so instead of inventing a link. A cookie with a logged-in account raises the quality and unlocks more songs.",
+      "method": "GET",
+      "url": "{config:base_url}/song/url/v1?id={id}&level={level}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "song id from search",
+          "required": true
+        },
+        {
+          "name": "level",
+          "description": "audio quality: standard, higher, exhigh, lossless, hires, jyeffect, sky, jymaster",
+          "default": "exhigh"
+        }
+      ],
+      "pick": [
+        "code",
+        "data[].id",
+        "data[].url",
+        "data[].br",
+        "data[].size",
+        "data[].level",
+        "data[].type",
+        "data[].freeTrialInfo"
+      ],
+      "maxChars": 8000,
+      "emptyHint": "url is null: this song needs a VIP account, is region-restricted, or the level asked for is above what the account allows. Fill the Cookie field in the plugin panel (or lower level to standard) and try once more — then report the limitation to the user instead of retrying.",
+      "example": {
+        "kind": "netease-music.song_url",
+        "id": "186016",
+        "level": "exhigh"
+      }
+    },
+    {
+      "name": "artist_top_songs",
+      "label": "歌手热门歌",
+      "description": "List an artist top 50 songs by artist id (take ar[].id from a search result). Returns songs[] with the same field shape as search. Use it for \"more songs by this artist\" or when the user picked an artist from a search hit.",
+      "method": "GET",
+      "url": "{config:base_url}/artist/top/song?id={artist_id}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "artist_id",
+          "description": "artist id from search (ar[].id)",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "songs[].id",
+        "songs[].name",
+        "songs[].dt",
+        "songs[].fee",
+        "songs[].al.name",
+        "songs[].al.picUrl"
+      ],
+      "maxChars": 14000,
+      "example": {
+        "kind": "netease-music.artist_top_songs",
+        "artist_id": "6452"
+      }
+    },
+    {
+      "name": "lyric",
+      "label": "取歌词",
+      "description": "Get the lyrics of a song by id. Returns lrc.lyric (LRC text with [mm:ss.xx] time tags), tlyric.lyric (translation, may be empty) and yrc.lyric (word-by-word, may be null). For a plain lyric panel, strip the time tags.",
+      "method": "GET",
+      "url": "{config:base_url}/lyric?id={id}&cookie={config:cookie}",
+      "params": [
+        {
+          "name": "id",
+          "description": "song id from search",
+          "required": true
+        }
+      ],
+      "pick": [
+        "code",
+        "lrc.lyric",
+        "tlyric.lyric",
+        "yrc.lyric"
+      ],
+      "maxChars": 16000,
+      "emptyHint": "No lyrics in the response: this song has none, or the id is not a song. Do not retry the same id — show the track without lyrics and say so.",
+      "example": {
+        "kind": "netease-music.lyric",
+        "id": "186016"
+      }
+    }
+  ]
+}
