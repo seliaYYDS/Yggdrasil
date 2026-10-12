@@ -50,10 +50,10 @@ export function registerWindowInterfaces(): void {
       const list = ordered
         .map((n, i) => '- ' + n.name + '(' + n.id + ') → ' + rects[i].x + ',' + rects[i].y + ' ' + rects[i].w + 'x' + rects[i].h)
         .join('\n');
-      return ok('已按 ' + mode + ' 排布 ' + ordered.length + ' 个窗口', {
+      return ok('Arranged ' + ordered.length + ' windows with mode ' + mode, {
         observation:
-          '视口 ' + store.viewW + 'x' + store.viewH + '，排布结果：\n' + list +
-          (skipped > 0 ? '\n（另有 ' + skipped + ' 个窗口未显示，没有动）' : ''),
+          'Viewport ' + store.viewW + 'x' + store.viewH + '; result:\n' + list +
+          (skipped > 0 ? '\n(' + skipped + ' more windows are hidden and were left alone)' : ''),
       });
     },
   });

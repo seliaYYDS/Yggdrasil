@@ -101,7 +101,7 @@ export interface OpenResult {
 /** 打开一个新页面（新标签或新窗口）。 */
 export function openPage(url: string, options: OpenOptions = {}): OpenResult {
   const id = newId();
-  if (!canOpen()) return { ok: false, url, reason: '当前环境不支持 window.open。' };
+  if (!canOpen()) return { ok: false, url, reason: 'window.open is not supported in this environment.' };
 
   const name = options.name?.trim() || id;
   const sized =
@@ -128,7 +128,7 @@ export function openPage(url: string, options: OpenOptions = {}): OpenResult {
       ok: false,
       url,
       blocked: true,
-      reason: '浏览器拦截了新窗口：网页只能在"用户手势"里打开新窗口，而这条指令是模型异步执行的。',
+      reason: 'The browser blocked the new window: a page can only open one inside a user gesture, and this instruction runs asynchronously from the model.',
     };
   }
 
@@ -233,10 +233,10 @@ export interface ResizeResult {
 export function resizePage(target: string | undefined, o: ResizeOptions): ResizeResult {
   const isSelf = !target || target === 'self' || target === 'this';
   const handle: Window | null = isSelf ? window : findEntry(target ?? '')?.handle ?? null;
-  const label = isSelf ? '当前页面' : target ?? '';
+  const label = isSelf ? 'the current page' : target ?? '';
 
   if (!handle) {
-    return { attempted: false, handledBy: label, before: null, after: null, size: null, reason: '找不到这个页面。' };
+    return { attempted: false, handledBy: label, before: null, after: null, size: null, reason: 'No such page.' };
   }
 
   const before = isSelf
@@ -269,7 +269,7 @@ export function resizePage(target: string | undefined, o: ResizeOptions): Resize
     : readGeometry(handle).size;
   const reason =
     before && after && before.w === after.w && before.h === after.h
-      ? '浏览器忽略了 resizeTo：网页不能改变主窗口尺寸（只有脚本打开的窗口才能）。'
+      ? 'The browser ignored resizeTo: a page cannot resize the main window (only windows the script opened can be resized).'
       : undefined;
   return { attempted: true, handledBy: label, before, after, size: after, reason };
 }

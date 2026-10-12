@@ -303,7 +303,7 @@ interface CompiledModule {
 
 function compileModule(nodeId: string, source: string): CompiledModule | CompileFail {
   const trimmed = source.trim();
-  if (!trimmed) return fail('源码为空。');
+  if (!trimmed) return fail('The source is empty.');
 
   const { code: withoutImports, bindings } = rewriteImports(trimmed);
   const plan = adaptExports(withoutImports);
@@ -323,7 +323,7 @@ function compileModule(nodeId: string, source: string): CompiledModule | Compile
     'var __yggNamed = function (id, name) {',
     '  var mod = __yggRequire(id);',
     '  if (mod && typeof mod === \'object\' && name in mod) return mod[name];',
-    '  throw new Error(\'模块 \' + id + \' 没有导出 \' + name);',
+    '  throw new Error(\'module \' + id + \' has no export \' + name);',
     '};',
     bindingLines(bindings),
     'var React = __yggReact;',
@@ -345,29 +345,29 @@ function compileModule(nodeId: string, source: string): CompiledModule | Compile
       compact: false,
     });
     const code = out?.code;
-    if (!code) return fail('Babel 未返回编译结果。');
+    if (!code) return fail('Babel returned no compiled output.');
     compiled = code;
   } catch (e) {
-    return fail('编译失败：' + (e as Error).message);
+    return fail('Compilation failed: ' + (e as Error).message);
   }
 
   let factory: (requireFn: (id: string) => ModuleValue, react: ModuleValue) => Record<string, unknown>;
   try {
     factory = new Function('__yggRequire', '__yggReact', compiled + '\nreturn __yggModule();') as typeof factory;
   } catch (e) {
-    return fail('无法生成模块工厂：' + (e as Error).message);
+    return fail('Could not build the module factory: ' + (e as Error).message);
   }
 
   const modules = { ...baseModules(), ...Object.fromEntries(externals) };
   const requireFn = (id: string): ModuleValue => {
     if (id in modules) return modules[id];
-    throw new Error('模块 ' + id + ' 不在允许列表中。可用：' + Object.keys(modules).join(', '));
+    throw new Error('Module ' + id + ' is not in the allow list. Available: ' + Object.keys(modules).join(', '));
   };
 
   try {
     return { ok: true, mod: factory(requireFn, modules.react) };
   } catch (e) {
-    return fail('执行模块顶层代码失败：' + (e as Error).message);
+    return fail('Running the module top-level code failed: ' + (e as Error).message);
   }
 }
 
@@ -426,7 +426,7 @@ function compileComponentUncached(nodeId: string, source: string): CompileResult
     Component = funcs.length === 1 ? funcs[0] : null;
   }
   if (typeof Component !== 'function') {
-    return fail('导出内容不是 React 组件：请 export default 一个函数组件。');
+    return fail('The default export is not a React component: export default a function component.');
   }
   return { ok: true, Component: Component as React.ComponentType<Record<string, unknown>> };
 }
@@ -443,7 +443,7 @@ export function compileTool(nodeId: string, source: string): ToolCompileOk | Com
   const { mod } = compiled;
   const fn = (mod.default ?? mod.run ?? null) as unknown;
   if (typeof fn !== 'function') {
-    return fail('工具源码需要 export default 一个函数，或 export function run(args)。');
+    return fail('Tool source must export default a function, or export function run(args).');
   }
   return { ok: true, run: (args: unknown) => (fn as (a: unknown) => unknown)(args) };
 }

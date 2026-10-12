@@ -41,7 +41,7 @@ const MAX_URLS = 60;
 
 function absUrl(raw: string): URL {
   const trimmed = raw.trim();
-  if (!trimmed) throw new Error('url 为空。');
+  if (!trimmed) throw new Error('The url is empty.');
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : 'https://' + trimmed;
   return new URL(withScheme);
 }
@@ -419,12 +419,12 @@ export async function fetchImageData(
   }
 
   throw new Error(
-    '读不到这张图的字节：这张图不允许跨域读取（CORS），浏览器里拿不到它的内容。' +
+    'Cannot read this image bytes: the host does not allow cross-origin reads (CORS), so the browser cannot get its content.' +
       (relay
-        ? '你配的图片中转地址也没能取到它。'
-        : '（读图片必须用 fetch，而 fetch 跨域要求图床允许 —— 大部分图床不允许。' +
-          '想要能读，可以在设置里填一个图片中转地址；那只是一个把字节递过来的中转，不做识别。）') +
-      '退而求其次：用 fetch_image 确认它可达，把直链写进组件的 <img src> 让用户看到；' +
-      '或者换一张允许跨域的图（很多 wiki / github / 常见图床的图可以）。',
+        ? 'The image relay you configured could not fetch it either.'
+        : '(reading an image requires fetch, and cross-origin fetch requires the host to allow it — most image hosts do not.' +
+          'To make it readable, fill in an image relay address in settings; that relay only forwards bytes and does no recognition.)') +
+      'A fallback: confirm it is reachable with fetch_image and put the direct link into a component <img src> for the user to see;' +
+      'or pick an image that allows cross-origin reads (many wiki / github / common image hosts do).',
   );
 }

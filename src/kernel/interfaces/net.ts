@@ -31,19 +31,19 @@ export function registerNetInterfaces(): void {
           r.title ? 'title: ' + r.title : '',
           'via: ' + r.via,
           r.truncated
-            ? '正文已截断：共 ' + r.totalChars + ' 字符，这里只回了前 ' + r.text.length + ' 个（要更多就调大 maxChars）'
+            ? 'Body truncated: ' + r.totalChars + ' chars in total, only the first ' + r.text.length + ' are returned here (raise maxChars for more)'
             : '',
         ]
           .filter(Boolean)
           .join('\n');
         const images = r.images.length
-          ? '\n\n图片直链（可直接写进 <img src>）：\n' + r.images.slice(0, 24).join('\n')
+          ? '\n\nDirect image links (ready to use in <img src>):\n' + r.images.slice(0, 24).join('\n')
           : '';
-        const links = r.links.length ? '\n\n可跟进的链接：\n' + r.links.slice(0, 20).join('\n') : '';
+        const links = r.links.length ? '\n\nFollowable links:\n' + r.links.slice(0, 20).join('\n') : '';
         const summary =
-          '已抓取 ' + url + '（正文 ' + r.text.length + ' 字符' +
-          (r.images.length ? ' · 图 ' + r.images.length : '') +
-          (r.links.length ? ' · 链接 ' + r.links.length : '') + '）';
+          'Fetched ' + url + ' (body ' + r.text.length + ' chars' +
+          (r.images.length ? ' · ' + r.images.length + ' images' : '') +
+          (r.links.length ? ' · ' + r.links.length + ' links' : '') + ')';
         return ok(summary, {
           observation: head + '\n\n' + r.text + images + links,
         });
@@ -69,11 +69,11 @@ export function registerNetInterfaces(): void {
         // 网页或 JSON 说明这不是直链（常见于图床的中间页 / 防盗链拦截页）。
         if (/^(text\/|application\/(json|xml))/i.test(r.contentType)) {
           return fail(
-            '这个地址返回的是 ' + r.contentType + '，不是图片 —— 大概率是图片详情页而不是直链。' +
-              '换一个以图片扩展名结尾、content-type 是 image/* 的地址。',
+            'This URL returned ' + r.contentType + ', not an image — it is probably an image detail page rather than a direct link.' +
+              'Use a URL that ends in an image extension and whose content-type is image/*.',
           );
         }
-        return ok('图片可用：' + r.contentType + ' ' + (r.bytes || '未知') + 'B', {
+        return ok('Image is usable: ' + r.contentType + ' ' + (r.bytes || 'unknown') + 'B', {
           observation: JSON.stringify(r),
         });
       } catch (e) {
@@ -87,7 +87,7 @@ export function registerNetInterfaces(): void {
     label: '看图',
     description:
       '**Read an image into your context** (fetch bytes → base64 → **your own vision**; no third-party recognition). Usage: get a direct image link with fetch_url → view_image → you can see it next round → then decide how to write the component. Requires a vision-capable model (a text-only model fails the whole round); bytes are read directly and an image host that disallows cross-origin reads reports an error. One image = one message in the context (it takes space, so do not look at many at once).',
-    example: { kind: 'view_image', url: 'https://example.com/a.png', note: '首页主视觉' },
+    example: { kind: 'view_image', url: 'https://example.com/a.png', note: 'homepage hero' },
     mutates: false,
     cap: 'net',
     handler: async (op, ctx) => {
@@ -106,8 +106,8 @@ export function registerNetInterfaces(): void {
         const prepared = await prepareImage(img.blob);
         const dataUrl = prepared?.dataUrl ?? img.dataUrl;
         const caption =
-          '图片内容' + (note ? '（' + note + '）' : '') + '：' + img.finalUrl +
-          '（' + img.contentType + '，' + img.bytes + ' 字节，来源 ' + img.via + '）';
+          'Image content' + (note ? ' (' + note + ')' : '') + ': ' + img.finalUrl +
+          ' (' + img.contentType + ', ' + img.bytes + ' bytes, via ' + img.via + ')';
         /*
          * 写进**这次运行所属的那个会话**的记忆：
          * 基底 Agent 的对话按输入框分开（每个输入框一份），组件 Agent 用自己 facet 上的一份。
@@ -125,10 +125,10 @@ export function registerNetInterfaces(): void {
             messages: next.length > MAX_STORED_MESSAGES ? next.slice(-MAX_STORED_MESSAGES) : next,
           });
         }
-        return ok('已读取图片并放进上下文', {
+        return ok('Read the image into your context', {
           observation:
-            caption + '\n这张图**已经进入你的上下文**，下一轮你就能看到它（包括下一轮以及之后的每一轮，' +
-            '直到它被历史裁剪掉）。现在可以描述它、判断它是否适合放进界面，或者据此写组件。',
+            caption + '\nThis image **is now in your context** and you will see it next round (and every round after that' +
+            'until it is trimmed from the history). You can now describe it, judge whether it belongs in the interface, or write a component from it.',
         });
       } catch (e) {
         return fail('Looking at the image failed: ' + (e as Error).message);

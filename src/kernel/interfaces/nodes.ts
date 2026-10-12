@@ -105,11 +105,11 @@ function updateDefaultWindow(op: DerivationOp, ref: string): OpResult {
   const fitted = fitRectToViewport(rect, viewW, viewH, win.min.w, win.min.h);
 
   const touched: string[] = [];
-  if (fitted.x !== win.rect.x || fitted.y !== win.rect.y) touched.push('位置');
-  if (fitted.w !== win.rect.w || fitted.h !== win.rect.h) touched.push('尺寸');
+  if (fitted.x !== win.rect.x || fitted.y !== win.rect.y) touched.push('position');
+  if (fitted.w !== win.rect.w || fitted.h !== win.rect.h) touched.push('size');
   if (op.focus === true) {
     s.bringToFront(win.id);
-    touched.push('置顶');
+    touched.push('raised');
   }
   if (touched.length === 0) return fail('No changeable field was given (default windows support pos/size/dx/dy/dw/dh/center/fill/align/focus only).');
 
@@ -120,7 +120,7 @@ function updateDefaultWindow(op: DerivationOp, ref: string): OpResult {
     s.setSessionRect(win.id, fitted);
   }
   s.log('op', 'panel ' + win.id + ' ' + touched.join('+'), win.id);
-  return ok('已调整默认窗口「' + win.title + '」：' + touched.join('、'), {
+  return ok('Adjusted default window "' + win.title + '": ' + touched.join(', '), {
     observation:
       win.id + ' pos=' + fitted.x + ',' + fitted.y + ' size=' + fitted.w + 'x' + fitted.h,
   });
@@ -158,12 +158,12 @@ function setDefaultWindowState(ref: string, state: 'active' | 'minimized' | 'clo
   }
   if (state !== 'closed') s.bringToFront(win.id);
   s.log('op', 'panel ' + win.id + ' ' + state, win.id);
-  const label = state === 'active' ? '显示' : state === 'minimized' ? '最小化' : '关闭';
-  return ok('已' + label + '默认窗口「' + win.title + '」');
+  const label = state === 'active' ? 'shown' : state === 'minimized' ? 'minimised' : 'closed';
+  return ok('Default window "' + win.title + '" is now ' + label + '.');
 }
 
 function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionId: string }) {
-  const name = strOr(op.name, '组件');
+  const name = strOr(op.name, 'component');
   const store = useDesktopStore.getState();
   const id = newNodeId();
 
@@ -288,21 +288,21 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionI
 
   // 返回信息只说明"这个组件有没有 agent 能力"，不把它叫成另一种东西。
   const scopeText =
-    node.agent && node.agent.scope !== '*' ? (node.agent.scope as string[]).join(', ') : '全部';
+    node.agent && node.agent.scope !== '*' ? (node.agent.scope as string[]).join(', ') : 'all';
   const capNote = wantAgent
-    ? '它已具备 agent 能力（档位 ' + mode + '；作用域 ' + scopeText +
+    ? 'It now has agent capability (tier ' + mode + '; scope ' + scopeText +
       (mode === 'reply'
-        ? '；一问一答，回复直接显示在它自己的界面里，没有能力开关' +
-          (ignoredForReply ? '（reply 档已忽略你给的 caps/tools）' : '')
-        : '；能力开关 ' + capSummary(caps ?? [])) +
-      (autoAttached ? '，检测到源码用了 useAgent 已自动接入' : '') +
-      '），可在自己的界面里用 useAgent() 驱动它。'
-    : '它目前是普通组件（默认如此）；只有当用户明确要求它自己思考、自己行动时，才用 attach_agent 接入 agent 能力（界面不变）。' +
-      (ignoredAgent ? ' 你给的 agent 字段里没有职责也没有工具，已按空壳忽略。' : '');
+        ? '; question and answer, replies show directly in its own interface, no capability switches' +
+          (ignoredForReply ? ' (caps/tools were ignored for the reply tier)' : '')
+        : '; capability switches ' + capSummary(caps ?? [])) +
+      (autoAttached ? ', auto-attached because the source uses useAgent' : '') +
+      '), and you can drive it from its own interface with useAgent().'
+    : 'It is a plain component for now (the default); only attach agent capability with attach_agent when the user explicitly asks it to think and act on its own (the interface does not change).' +
+      (ignoredAgent ? ' The agent object you gave had neither a role nor tools, so it was ignored as an empty shell.' : '');
 
-  return ok('已创建组件「' + name + '」', {
+  return ok('Created component "' + name + '"', {
     createdId: id,
-    observation: '组件 id=' + id + ' name=' + name + ' 已插入桌面。' + capNote,
+    observation: 'Component id=' + id + ' name=' + name + ' was inserted into the desktop. ' + capNote,
   });
 }
 /**
@@ -364,7 +364,7 @@ export function registerNodeInterfaces(): void {
       '**Create a page/window** (the only creation entry point): one source yields one plain component. pos / size optional — without them it lands in a free spot. Pass frame: "widget" for a widget. The agent field is optional (normally omitted): whether to attach, how, which tier and which capability switches are covered in the "Agent capability" section.',
     example: {
       kind: 'create_component',
-      name: '计算器',
+      name: 'Calculator',
       size: { w: 320, h: 420 },
       source:
         'import * as React from "react";\n' +
@@ -406,7 +406,7 @@ export function registerNodeInterfaces(): void {
           return fail('The changed source failed to compile, so this edit was dropped: ' + compiled.error);
         }
         patch.source = op.source;
-        touched.push('源码');
+        touched.push('source');
         // 记下长度变化：用户能从日志看出这次是"整段重写"还是"定点修改"。
         desktop().log(
           'op',
@@ -418,29 +418,29 @@ export function registerNodeInterfaces(): void {
         // 否则界面上的交互会静默失效。只提一句名字（注释）不触发。
         if (/from\s*['"]yggdrasil['"]/.test(op.source) && /\buseAgent\b/.test(op.source) && !node.agent) {
           useDesktopStore.getState().setFacet(id, makeFacet({ scope: [id] }));
-          touched.push('自动接入 agent 能力');
+          touched.push('auto-attached agent capability');
         }
       }
       if (typeof op.name === 'string' && op.name.trim()) {
         patch.name = op.name.trim();
-        touched.push('标题');
+        touched.push('title');
       }
       if (op.frame === 'window' || op.frame === 'widget') {
         patch.frame = op.frame;
-        touched.push(op.frame === 'widget' ? '改成挂件' : '改成普通窗口');
+        touched.push(op.frame === 'widget' ? 'switched to widget' : 'switched to a normal window');
       }
       if (typeof op.fixed === 'boolean') {
         patch.fixed = op.fixed;
-        touched.push(op.fixed ? '固定' : '取消固定');
+        touched.push(op.fixed ? 'fixed' : 'unfixed');
       }
       if (typeof op.locked === 'boolean') {
         patch.locked = op.locked;
-        touched.push(op.locked ? '锁定' : '解锁');
+        touched.push(op.locked ? 'locked' : 'unlocked');
       }
       const pos = op.pos as { x?: unknown; y?: unknown } | undefined;
       if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
         patch.pos = { x: Math.round(pos.x), y: Math.round(pos.y) };
-        touched.push('位置');
+        touched.push('position');
       }
       const size = op.size as { w?: unknown; h?: unknown } | undefined;
       if (size) {
@@ -448,7 +448,7 @@ export function registerNodeInterfaces(): void {
           w: clampNumber(size.w, node.size.w, 200, 1600),
           h: clampNumber(size.h, node.size.h, 140, 1200),
         };
-        touched.push('尺寸');
+        touched.push('size');
       }
       // ---- 几何：相对位移 / 缩放，以及"用视口算好的"居中 / 铺满 / 贴边 ----
       const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
@@ -464,19 +464,19 @@ export function registerNodeInterfaces(): void {
           w: (patch.size?.w ?? node.size.w) + dw,
           h: (patch.size?.h ?? node.size.h) + dh,
         };
-        touched.push('相对调整');
+        touched.push('relative adjust');
       }
       const viewW = desktop().viewW;
       const viewH = desktop().viewH;
       if (op.fill === true) {
         rect = fillRect(viewW, viewH);
-        touched.push('铺满');
+        touched.push('filled');
       } else if (op.center === true) {
         rect = centerRect(rect ?? { ...node.pos, ...node.size }, viewW, viewH);
-        touched.push('居中');
+        touched.push('centred');
       } else if (typeof op.align === 'string' && op.align) {
         rect = alignRect(rect ?? { ...node.pos, ...node.size }, op.align, viewW, viewH);
-        touched.push('贴边');
+        touched.push('aligned to edge');
       }
       if (rect) {
         const clamped = clampRect(rect, viewW, viewH);
@@ -486,25 +486,25 @@ export function registerNodeInterfaces(): void {
 
       if (typeof op.status === 'string' && ['active', 'minimized', 'closed'].includes(op.status)) {
         patch.status = op.status as ComponentNode['status'];
-        touched.push(op.status === 'active' ? '显示' : op.status === 'minimized' ? '最小化' : '关闭');
+        touched.push(op.status === 'active' ? 'shown' : op.status === 'minimized' ? 'minimised' : 'closed');
       }
       if (typeof op.z === 'number' && Number.isFinite(op.z)) {
         patch.z = Math.round(op.z);
-        touched.push('层级');
+        touched.push('layer');
       }
       const tokenPatch = sanitizeTokens(tokensOf(op.tokens));
       if (Object.keys(tokenPatch).length > 0) {
         patch.tokens = { ...(node.tokens ?? {}), ...tokenPatch };
-        touched.push('局部样式');
+        touched.push('local style');
       }
       if (op.tokens && Object.keys(tokenPatch).length === 0 && Object.keys(tokensOf(op.tokens)).length > 0) {
         return fail('No valid --ygg- variable in tokens.');
       }
-      if (op.focus === true) touched.push('置顶');
+      if (op.focus === true) touched.push('raised');
       if (touched.length === 0) {
         return fail(
-          'update_component 没有给出任何要改的字段（source / name / pos / size / dx / dy / dw / dh / ' +
-            'center / fill / align / focus / status / z / tokens）。',
+          'update_component was given no field to change (source / name / pos / size / dx / dy / dw / dh / ' +
+            'center / fill / align / focus / status / z / tokens).',
         );
       }
       useDesktopStore.getState().updateNode(id, patch as Partial<YggNode>);
@@ -513,10 +513,10 @@ export function registerNodeInterfaces(): void {
       desktop().log('op', '~ comp ' + node.name + ' [' + touched.join('+') + ']', id);
       const after = findComponent(id);
       const geo = after
-        ? '现在 pos=' + after.pos.x + ',' + after.pos.y + ' size=' + after.size.w + 'x' + after.size.h
+        ? 'now pos=' + after.pos.x + ',' + after.pos.y + ' size=' + after.size.w + 'x' + after.size.h
         : '';
-      return ok('已修改组件「' + node.name + '」：' + touched.join('、'), {
-        observation: '组件 id=' + id + ' 的 ' + touched.join('、') + ' 已更新。' + geo,
+      return ok('Updated component "' + node.name + '": ' + touched.join(', '), {
+        observation: 'Component id=' + id + ': ' + touched.join(', ') + ' updated. ' + geo,
       });
     },
   });
@@ -529,7 +529,7 @@ export function registerNodeInterfaces(): void {
     example: {
       kind: 'attach_agent',
       id: 'n_xxx',
-      systemPrompt: '你负责回答天气问题',
+      systemPrompt: 'You answer weather questions',
       scope: ['self'],
     },
     mutates: true,
@@ -547,8 +547,8 @@ export function registerNodeInterfaces(): void {
       // 这正是"对派生 agent 太敏感"的另一种表现，直接拒绝并把默认做法说清楚。
       if (!hasAgentSubstance(op.systemPrompt, op.tools)) {
         return fail(
-          'attach_agent 需要给出这个组件自己的职责（systemPrompt）或工具（tools）。' +
-          '若你只是想让它把内容显示出来，普通组件就够了 —— 不要接入 agent 能力。',
+          'attach_agent needs either a role (systemPrompt) or tools for this component.' +
+          'If you only want it to display content, a plain component is enough — do not attach agent capability.',
         );
       }
       const rawScope = op.scope;
@@ -571,14 +571,14 @@ export function registerNodeInterfaces(): void {
         caps: attachCaps,
       }));
       desktop().log('op', 'attach agent ' + node.name, id);
-      return ok('已给「' + node.name + '」接入 agent 能力', {
+      return ok('Attached agent capability to "' + node.name + '"', {
         observation:
-          'id=' + id + ' 现在是一个 Agent（档位 ' + attachMode + '）。它的界面不变（还是它自己的 source）；' +
-          '要让它在界面上呈现上下文，在源码里用 import { useAgent } from "yggdrasil"。' +
+          'id=' + id + ' is now an agent (tier ' + attachMode + '). Its interface does not change (still its own source);' +
+          'to render its context in the interface, use import { useAgent } from "yggdrasil" in the source.' +
           (attachMode === 'reply'
-            ? 'reply 档：一问一答，模型的回复会作为 assistant 消息进 messages，渲染 a.messages 就能看到。'
-            : 'act 档的能力开关：' + capSummary(attachCaps ?? []) +
-              '。不够用就再调 attach_agent 之前用 set_agent_config 加。'),
+            ? 'reply tier: question and answer; the reply is appended to messages as an assistant message, so render a.messages to show it.'
+            : 'act tier capability switches: ' + capSummary(attachCaps ?? []) +
+              '. If they are not enough, add more with set_agent_config instead of calling attach_agent again.'),
       });
     },
   });
@@ -600,7 +600,7 @@ export function registerNodeInterfaces(): void {
       if (node.root) return fail('The base agent capability cannot be removed.');
       useDesktopStore.getState().updateNode(id, { agent: undefined } as Partial<YggNode>);
       desktop().log('op', 'detach agent ' + node.name, id);
-      return ok('已移除「' + node.name + '」的 agent 能力，它现在是普通组件');
+      return ok('Removed agent capability from "' + node.name + '"; it is a plain component again');
     },
   });
 
@@ -619,19 +619,19 @@ export function registerNodeInterfaces(): void {
       const lockedNames = cascaded
         .map((nid) => desktop().nodes[nid])
         .filter((n): n is ComponentNode => !!n && n.kind === 'component' && n.locked === true)
-        .map((n) => '「' + n.name + '」(' + n.id + ')');
+        .map((n) => '"' + n.name + '" (' + n.id + ')');
       if (lockedNames.length > 0) {
         return fail(
-          lockedNames.join('、') + ' 已被**锁定**，不能删除。' +
-            '锁定是用户用来保护成果的；要删就先在 Nodes 面板里解锁（或让用户解锁），不要绕过它。',
+          lockedNames.join(', ') + ' are **locked** and cannot be deleted.' +
+            'Locking is how the user protects their work; unlock it in the Nodes panel first (or ask the user to), and never work around it.',
         );
       }
       for (const cid of cascaded) unregisterTool(cid);
       useDesktopStore.getState().removeNode(id);
       desktop().log('op', '- ' + id);
       return ok(
-        '已删除节点 ' + id + (cascaded.length > 1 ? ' 及其 ' + (cascaded.length - 1) + ' 个关联节点' : ''),
-        { removedIds: cascaded, observation: '已移除 ' + cascaded.join(', ') },
+        'Deleted node ' + id + (cascaded.length > 1 ? ' and ' + (cascaded.length - 1) + ' related nodes' : ''),
+        { removedIds: cascaded, observation: 'Removed ' + cascaded.join(', ') },
       );
     },
   });
@@ -641,7 +641,7 @@ export function registerNodeInterfaces(): void {
     label: '窗口显隐',
     description:
       'Set a window state: active shows / minimized minimises / closed closes it (the node is kept and can be restored from the taskbar at the bottom left). Identified by name or id. **Default windows** (Nodes / Settings / Trace / input boxes) are targeted with `panel` (see the "Default windows" section): closed shuts the panel, minimized sends it to the taskbar, active reopens it.',
-    example: { kind: 'set_window_state', name: '计算器', state: 'minimized' },
+    example: { kind: 'set_window_state', name: 'Calculator', state: 'minimized' },
     mutates: true,
     cap: 'desktop',
     handler: (op) => {
@@ -656,14 +656,14 @@ export function registerNodeInterfaces(): void {
       const targets = Object.values(desktop().nodes).filter(
         (n) => n.kind === 'component' && !n.root,
       );
-      const listText = targets.map((n) => n.name + '(' + n.id + ')').join('、') || '（没有组件）';
+      const listText = targets.map((n) => n.name + '(' + n.id + ')').join(', ') || '(no components)';
 
       let node = id ? findComponent(id) : null;
       if (!node && name) {
         const matches = targets.filter((n) => n.name === name);
         if (matches.length === 1) node = matches[0] as ComponentNode;
         else if (matches.length > 1) {
-          return fail('有 ' + matches.length + ' 个组件都叫「' + name + '」，请改用 id：' +
+          return fail(matches.length + ' components are all called "' + name + '"; use an id instead: ' +
             matches.map((n) => n.id).join(', '));
         }
       }
@@ -672,9 +672,9 @@ export function registerNodeInterfaces(): void {
         return fail('set_window_state needs id or name. Current components: ' + listText);
       }
       useDesktopStore.getState().updateNode(node.id, { status: state as ComponentNode['status'] } as Partial<YggNode>);
-      const label = state === 'active' ? '显示' : state === 'minimized' ? '最小化' : '关闭';
+      const label = state === 'active' ? 'shown' : state === 'minimized' ? 'minimised' : 'closed';
       desktop().log('op', label + ' ' + node.name, node.id);
-      return ok('已' + label + '窗口「' + node.name + '」');
+      return ok('Window "' + node.name + '" is now ' + label + '.');
     },
   });
 
@@ -695,7 +695,7 @@ export function registerNodeInterfaces(): void {
       const merged = { ...(node.tokens ?? {}), ...tokens };
       useDesktopStore.getState().updateNode(id, { tokens: merged } as Partial<YggNode>);
       desktop().log('op', 'scope ' + id + ' \u00d7' + Object.keys(tokens).length, id);
-      return ok('已覆写「' + node.name + '」的 ' + Object.keys(tokens).length + ' 个局部变量', {
+      return ok('Overrode ' + Object.keys(tokens).length + ' local variables of "' + node.name + '"', {
         observation: Object.entries(tokens).map(([k, v]) => k + '=' + v).join(' '),
       });
     },
@@ -714,7 +714,7 @@ export function registerNodeInterfaces(): void {
       let list = Object.values(desktop().nodes);
       if (kind) list = list.filter((n) => n.kind === kind);
       if (query) list = list.filter((n) => n.name.toLowerCase().includes(query));
-      if (list.length === 0) return ok('没有匹配的节点', { observation: '（无）' });
+      if (list.length === 0) return ok('No matching nodes', { observation: '(none)' });
       const text = list
         .map((n) => {
           const pos = n.pos ? ' pos=' + n.pos.x + ',' + n.pos.y : '';
@@ -727,7 +727,7 @@ export function registerNodeInterfaces(): void {
           );
         })
         .join('\n');
-      return ok('匹配 ' + list.length + ' 个节点', { observation: text });
+      return ok('Matched ' + list.length + ' nodes', { observation: text });
     },
   });
 }

@@ -8,12 +8,12 @@ import { newId } from '../ids';
 /** 把浏览器页面列表写成人能读、模型也能读的一段文本。 */
 function pagesText(): string {
   const list = listPages();
-  if (list.length === 0) return '（本应用还没有打开过浏览器页面）';
+  if (list.length === 0) return '(this app has not opened any browser page yet)';
   return list
     .map(
       (p) =>
         '- id=' + p.id + ' 「' + p.name + '」 url=' + p.url +
-        (p.size ? ' size=' + p.size.w + 'x' + p.size.h : ' size=（跨域读不到）') +
+        (p.size ? ' size=' + p.size.w + 'x' + p.size.h : ' size=(cross-origin, unreadable)') +
         (p.pos ? ' pos=' + p.pos.x + ',' + p.pos.y : ''),
     )
     .join('\n');
@@ -36,7 +36,7 @@ export function registerBrowserInterfaces(): void {
     handler: () => {
       const info = viewportInfo();
       const inner = info.inner as { w: number; h: number };
-      return ok('浏览器可视区 ' + inner.w + 'x' + inner.h, {
+      return ok('Browser viewport ' + inner.w + 'x' + inner.h, {
         observation: JSON.stringify(info, null, 2),
       });
     },
@@ -57,13 +57,13 @@ export function registerBrowserInterfaces(): void {
         const r = await setFullscreen(op.fullscreen === true);
         if (!r.ok) {
           return fail(
-            (op.fullscreen ? '申请全屏' : '退出全屏') + '失败：' + r.reason +
-              '（全屏需要用户手势，模型异步执行时通常会被拒绝；可以请用户点一下页面再试）',
+            (op.fullscreen ? 'Requesting fullscreen' : 'Leaving fullscreen') + ' failed: ' + r.reason +
+              ' (fullscreen needs a user gesture and is normally rejected while the model runs asynchronously; ask the user to click the page and try again)',
           );
         }
         const inner = viewportInfo().inner as { w: number; h: number };
-        return ok('已' + (op.fullscreen ? '进入' : '退出') + '全屏（可视区 ' + inner.w + 'x' + inner.h + '）', {
-          observation: '当前浏览器可视区 ' + inner.w + 'x' + inner.h,
+        return ok((op.fullscreen ? 'Entered' : 'Left') + ' fullscreen (viewport ' + inner.w + 'x' + inner.h + ')', {
+          observation: 'Current browser viewport ' + inner.w + 'x' + inner.h,
         });
       }
 
@@ -81,16 +81,16 @@ export function registerBrowserInterfaces(): void {
       }
 
       const r = resizePage(target, opt);
-      const where = r.handledBy || '当前页面';
+      const where = r.handledBy || 'the current page';
       if (r.reason && r.reason.startsWith('write blocked')) {
         return fail('Failed to resize "' + where + '": ' + r.reason + ' (cross-origin windows cannot be resized)');
       }
-      const sizeText = r.size ? r.size.w + 'x' + r.size.h : '（读不到）';
-      return ok('已请求调整「' + where + '」，现在 ' + sizeText, {
+      const sizeText = r.size ? r.size.w + 'x' + r.size.h : '(unreadable)';
+      return ok('Requested a resize of "' + where + '"; it is now ' + sizeText, {
         observation:
-          '请求前 ' + (r.before ? r.before.w + 'x' + r.before.h : '（未知）') +
-          ' → 请求后 ' + sizeText +
-          (r.reason ? '\n注意：' + r.reason : ''),
+          'Before: ' + (r.before ? r.before.w + 'x' + r.before.h : '(unknown)') +
+          ' → after: ' + sizeText +
+          (r.reason ? '\nNote: ' + r.reason : ''),
       });
     },
   });
@@ -116,10 +116,10 @@ export function registerBrowserInterfaces(): void {
 
       if (r.ok) {
         desktop().log('op', 'browser + ' + url);
-        return ok('已在新页面打开 ' + url, {
+        return ok('Opened ' + url + ' in a new page', {
           observation:
-            '页面 id=' + r.id + '，url=' + url +
-            '。可以用 browser_pages 看到它、browser_close 关掉它。',
+            'page id=' + r.id + ', url=' + url +
+            '. Use browser_pages to see it and browser_close to close it.',
         });
       }
 
@@ -128,11 +128,11 @@ export function registerBrowserInterfaces(): void {
         const item = { id: newId(), url };
         useDesktopStore.getState().addPendingOpen(item);
         desktop().log('warn', 'browser blocked ' + url);
-        return ok('浏览器拦截了弹窗，已把 ' + url + ' 放到输入框的「打开」按钮里，等用户点一下', {
+        return ok('The browser blocked the popup; ' + url + ' was attached to the "open" button of the input box, waiting for the user to click', {
           observation:
             r.reason +
-            ' 已经把它挂到输入框上的「打开」按钮，用户点一下就会打开。' +
-            '**不要重复再试** —— 再试还是会被拦；可以先用 fetch_url 把内容取回来直接渲染成组件。',
+            ' It is attached to the "open" button of the input box and opens when the user clicks it.' +
+            '**Do not try again** — it would be blocked again; you can fetch the content with fetch_url and render it into a component instead.',
         });
       }
 
@@ -151,13 +151,13 @@ export function registerBrowserInterfaces(): void {
       const list = listPages();
       const info = viewportInfo();
       const inner = info.inner as { w: number; h: number };
-      return ok('本应用打开着 ' + list.length + ' 个浏览器页面', {
+      return ok('This app has ' + list.length + ' browser pages open', {
         observation:
-          '## 当前页面\n' +
+          '## Current page\n' +
           '- url: ' + String(info.location) + '\n' +
           '- title: ' + String(info.title) + '\n' +
-          '- 可视区: ' + inner.w + 'x' + inner.h + '\n\n' +
-          '## 本应用打开的页面\n' + pagesText(),
+          '- viewport: ' + inner.w + 'x' + inner.h + '\n\n' +
+          '## Pages opened by this app\n' + pagesText(),
       });
     },
   });
@@ -178,8 +178,8 @@ export function registerBrowserInterfaces(): void {
         return fail('No such page ' + r.missing.join(', ') + '. Currently open:\n' + pagesText());
       }
       desktop().log('op', 'browser - ' + target);
-      return ok('已关闭 ' + r.closed + ' 个页面', {
-        observation: '关闭了 ' + r.closed + ' 个' + (r.failed.length ? '；失败：' + r.failed.join('；') : ''),
+      return ok('Closed ' + r.closed + ' pages', {
+        observation: 'Closed ' + r.closed + (r.failed.length ? '; failed: ' + r.failed.join('; ') : ''),
       });
     },
   });
@@ -197,11 +197,11 @@ export function registerBrowserInterfaces(): void {
         return fail('This browser does not support screen capture (getDisplayMedia is missing), so no screenshot can be taken.');
       }
       store.requestShot(ctx.sessionId);
-      store.log('op', '请求截图', ctx.sessionId);
-      return ok('已请求截图：请用户在输入框上点「截图给 Agent」，图会进入你的上下文。', {
+      store.log('op', 'screenshot requested', ctx.sessionId);
+      return ok('Screenshot requested: ask the user to click "screenshot for the agent" on the input box; the image then enters your context.', {
         observation:
-          '截图需要用户手势，已挂起请求。**这一轮到此为止**，不要重复调用；' +
-          '图到手后你会收到一条带图片的新消息。',
+          'Screen capture needs a user gesture, so the request is pending. **End your turn here** and do not call it again;' +
+          'once the image arrives you will get a new message carrying it.',
       });
     },
   });

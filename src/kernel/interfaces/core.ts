@@ -29,14 +29,14 @@ function windowsText(): string {
   const comps = Object.values(desktop().nodes).filter(
     (n): n is ComponentNode => n.kind === 'component' && !n.root,
   );
-  if (comps.length === 0) return '（没有窗口）';
+  if (comps.length === 0) return '(no windows)';
   return comps
     .map(
       (n) =>
-        '- id=' + n.id + ' 「' + n.name + '」 status=' + n.status +
+        '- id=' + n.id + ' "' + n.name + '" status=' + n.status +
         ' pos=' + n.pos.x + ',' + n.pos.y + ' size=' + n.size.w + 'x' + n.size.h + ' z=' + n.z +
-        (n.frame === 'widget' ? ' [挂件' + (n.fixed ? '·已固定' : '') + ']' : '') +
-        (n.locked ? ' [已锁定]' : '') +
+        (n.frame === 'widget' ? ' [widget' + (n.fixed ? ' / fixed' : '') + ']' : '') +
+        (n.locked ? ' [locked]' : '') +
         (n.agent ? ' [agent]' : ''),
     )
     .join('\n');
@@ -51,31 +51,31 @@ function windowsText(): string {
  */
 function agentDetailText(id: string): string {
   const node = desktop().nodes[id];
-  if (!node || !isAgentNode(node)) return '（' + id + ' 不是 Agent）';
+  if (!node || !isAgentNode(node)) return '(no such agent: ' + id + ')';
   const f = node.agent!;
   const lines: string[] = [];
-  lines.push('- 名称：「' + node.name + '」 id=' + id);
-  lines.push('- 位置：' + (node.root === true ? '基底（所有消息的默认接收者）' : '挂在组件 ' + node.parentId + ' 上'));
-  lines.push('- 职责（systemPrompt）：' + (f.systemPrompt || '（空）'));
-  lines.push('- 工具子集：' + (f.toolIds.length ? f.toolIds.join(', ') : '全部可用工具'));
-  lines.push('- 作用域：' + (f.scope === '*' ? '全部节点' : (f.scope as string[]).join(', ') || '（空）'));
+  lines.push('- name: "' + node.name + '" id=' + id);
+  lines.push('- host: ' + (node.root === true ? 'the base agent (default receiver of every message)' : 'attached to component ' + node.parentId));
+  lines.push('- role (systemPrompt): ' + (f.systemPrompt || '(empty)'));
+  lines.push('- tool subset: ' + (f.toolIds.length ? f.toolIds.join(', ') : 'all available tools'));
+  lines.push('- scope: ' + (f.scope === '*' ? 'all nodes' : (f.scope as string[]).join(', ') || '(empty)'));
 
-  lines.push('', '账本（跨刷新保留，"已经做过的事"，共 ' + f.ledger.length + ' 条）：');
-  if (f.ledger.length === 0) lines.push('（空）');
+  lines.push('', 'Ledger (kept across reloads: "things already done"; ' + f.ledger.length + ' entries):');
+  if (f.ledger.length === 0) lines.push('(empty)');
   else for (const e of f.ledger.slice(-30)) lines.push('- ' + e);
 
   // 运行状态：跑没跑、在做什么、排了几条、最近几步 —— 这是"进度"的查询口。
   const run = useDesktopStore.getState().runOf('agent:' + id);
   lines.push(
     '',
-    '运行状态：' + (run.status.running ? '正在跑' : '空闲') +
-      (run.status.phase ? '；当前阶段：' + run.status.phase : '') +
-      (run.status.detail ? '；细节：' + run.status.detail : '') +
-      '；排队 ' + run.queue.length + ' 条',
+    'Run state: ' + (run.status.running ? 'running' : 'idle') +
+      (run.status.phase ? '; phase: ' + run.status.phase : '') +
+      (run.status.detail ? '; detail: ' + run.status.detail : '') +
+      '; queued ' + run.queue.length,
   );
-  lines.push('进度显示：' + (f.progress === 'none' ? '不并进 Trace 面板（创建者自己画在组件界面里）' : '并进 Trace 面板'));
+  lines.push('Progress display: ' + (f.progress === 'none' ? 'not merged into the Trace panel (the creator draws it in the component)' : 'merged into the Trace panel'));
   if (run.trace.length > 0) {
-    lines.push('最近步骤（共 ' + run.trace.length + ' 步）：');
+    lines.push('Recent steps (' + run.trace.length + ' total):');
     for (const s of run.trace.slice(-6)) {
       lines.push('  [' + s.status + '] ' + (s.round > 0 ? 'R' + s.round + ' ' : '') + s.label + ' — ' + (s.message || '').slice(0, 100));
     }
@@ -86,17 +86,17 @@ function agentDetailText(id: string): string {
   if (baseSessions.length > 0) {
     lines.push(
       '',
-      '对话记忆：**按输入框分开**（基底的对话不共用），当前各输入框：' +
-        baseSessions.map((s) => s.title + ' ' + s.messages.length + ' 条').join('；'),
+      'Conversation memory: **per input box** (the base agent does not share it); current input boxes: ' +
+        baseSessions.map((s) => s.title + ': ' + s.messages.length + ' messages').join('; '),
     );
   }
   const own = baseSessions.length > 0 ? [] : f.messages;
-  lines.push('', '最近消息（共 ' + own.length + ' 条，只列最近 ' + Math.min(10, own.length) + ' 条）：');
-  if (own.length === 0) lines.push(baseSessions.length > 0 ? '（基底的历史在各自的输入框里，用上面的条数看）' : '（空）');
+  lines.push('', 'Recent messages (' + own.length + ' total; newest ' + Math.min(10, own.length) + '):');
+  if (own.length === 0) lines.push(baseSessions.length > 0 ? '(the base agent history lives in each input box — see the counts above)' : '(empty)');
   else {
     for (const m of own.slice(-10)) {
       const text = m.content.length > 200 ? m.content.slice(0, 200) + '…' : m.content;
-      lines.push('[' + m.role + '] ' + text + (m.images?.length ? '（含 ' + m.images.length + ' 张图片）' : ''));
+      lines.push('[' + m.role + '] ' + text + (m.images?.length ? ' (with ' + m.images.length + ' images)' : ''));
     }
   }
   return lines.join('\n');
@@ -110,26 +110,26 @@ function agentDetailText(id: string): string {
  */
 function toolDetailText(id: string): string {
   const tool = getTool(id);
-  if (!tool) return '（工具 ' + id + ' 已不在注册表里）';
+  if (!tool) return '(tool ' + id + ' is no longer registered)';
   const lines: string[] = [];
-  lines.push('- 说明：' + (tool.description || '（无）'));
-  lines.push('- 类型：' + (tool.builtin ? '内置（宿主实现）' : '派生（Agent 写的）'));
-  lines.push('- 参数 schema：' + JSON.stringify(tool.paramsSchema ?? {}));
+  lines.push('- description: ' + (tool.description || '(none)'));
+  lines.push('- type: ' + (tool.builtin ? 'builtin (host implementation)' : 'derived (written by an agent)'));
+  lines.push('- params schema: ' + JSON.stringify(tool.paramsSchema ?? {}));
   const node = desktop().nodes[id];
   if (node) {
-    lines.push('- 所属：挂在 ' + node.parentId + ' 下' + (node.description ? '；备注：' + node.description : ''));
+    lines.push('- belongs to: ' + node.parentId + (node.description ? '; note: ' + node.description : ''));
   }
   lines.push('');
   if (tool.source) {
     const clipped =
       tool.source.length > 30000
-        ? tool.source.slice(0, 30000) + '\n…（源码过长已截断，共 ' + tool.source.length + ' 字符）'
+        ? tool.source.slice(0, 30000) + '\n... (source too long, truncated; ' + tool.source.length + ' chars in total)'
         : tool.source;
-    lines.push('源码（这就是它现在真实执行的东西）：', clipped);
+    lines.push('Source (this is what it actually runs right now):', clipped);
   } else {
     lines.push(
-      '源码：**没有** —— 这是宿主内置的工具（' + id + '），没有可编辑的源码。',
-      '要改它的行为：用 create_tool 派生一个自己的工具（在源码里实现你要的算法），再用 call_tool 调它。',
+      'Source: **none** — this is a host builtin tool (' + id + ') and has no editable source.',
+      'To change what it does, derive your own tool with create_tool (implement the algorithm in its source) and call it with call_tool.',
     );
   }
   return lines.join('\n');
@@ -145,24 +145,24 @@ function toolDetailText(id: string): string {
  */
 function surfaceDetailText(def: ReturnType<typeof getSurfaceDef> & object): string {
   const lines: string[] = [];
-  lines.push('- 说明：' + def.description);
-  lines.push('- 状态：' + (getSurfaceState(def.id) ? '已被覆写（Agent 写的）' : '使用内置实现（宿主内置，非 Agent 源码）'));
-  if (def.propsHint) lines.push('- 可用 props：' + def.propsHint);
-  lines.push('- 关键插槽：' + (def.critical ? '是（不要替换）' : '否'));
-  if (def.capabilityHint) lines.push('- 能力约束：' + def.capabilityHint);
-  if (def.builtinHint) lines.push('- 内置实现：' + def.builtinHint);
+  lines.push('- description: ' + def.description);
+  lines.push('- state: ' + (getSurfaceState(def.id) ? 'overridden (written by an agent)' : 'uses the built-in implementation (host code, not agent source)'));
+  if (def.propsHint) lines.push('- available props: ' + def.propsHint);
+  lines.push('- critical slot: ' + (def.critical ? 'yes (do not replace)' : 'no'));
+  if (def.capabilityHint) lines.push('- capability constraint: ' + def.capabilityHint);
+  if (def.builtinHint) lines.push('- built-in implementation: ' + def.builtinHint);
 
   const cur = getSurfaceState(def.id)?.source;
   if (cur) {
-    const clipped = cur.length > 30000 ? cur.slice(0, 30000) + '\n…（源码过长已截断，共 ' + cur.length + ' 字符）' : cur;
-    lines.push('', '当前源码（这就是它现在真实渲染的东西）：', clipped);
-    lines.push('', '要改它就用 patch_source 的 surface 参数定点改；要整体换掉用 replace_surface。');
+    const clipped = cur.length > 30000 ? cur.slice(0, 30000) + '\n... (source too long, truncated; ' + cur.length + ' chars in total)' : cur;
+    lines.push('', 'Current source (this is what it actually renders right now):', clipped);
+    lines.push('', 'To change it, patch it with patch_source and the surface argument; to replace it entirely use replace_surface.');
   } else {
     lines.push(
       '',
-      '当前源码：**没有** —— 它现在渲染的是宿主内置实现，没有可读的源码。',
-      '要换成你自己的实现：用 replace_surface 给一份完整 source；之后它就变成"已被覆写"，' +
-        '再用 inspect before="surface" 就能读到源码，也就能用 patch_source 定点改了。',
+      'Current source: **none** — it renders the host built-in implementation, which has no readable source.',
+      'To use your own implementation: give a complete source with replace_surface; it then becomes "overridden",' +
+        'after which inspect before="surface" can read the source and patch_source works on it.',
     );
   }
   return lines.join('\n');
@@ -176,7 +176,7 @@ function surfaceDetailText(def: ReturnType<typeof getSurfaceDef> & object): stri
  */
 function logsText(): string {
   const logs = desktop().logs;
-  if (logs.length === 0) return '（没有日志）';
+  if (logs.length === 0) return '(no logs)';
   // 只给最近一段：日志是排查线索，不是全文档案。
   return logs
     .slice(-40)
@@ -190,16 +190,16 @@ function logsText(): string {
 
 function agentsText(): string {
   const agents = Object.values(desktop().nodes).filter(isAgentNode);
-  if (agents.length === 0) return '（没有 Agent）';
+  if (agents.length === 0) return '(no agents)';
   return agents
     .map((a) => {
       const f = a.agent!;
-      const where = a.root ? '基底' : '自身组件';
-      const scopeText = f.scope === '*' ? '全部' : f.scope.join(', ') || '（空）';
+      const where = a.root ? 'base' : 'its own component';
+      const scopeText = f.scope === '*' ? 'all' : f.scope.join(', ') || '(empty)';
       return (
-        '- id=' + a.id + ' 「' + a.name + '」 ' + where + '；消息 ' + f.messages.length + ' 条；' +
-        '做过 ' + f.ledger.length + ' 件事；作用域 ' + scopeText +
-        (f.systemPrompt ? '；职责：' + f.systemPrompt.slice(0, 60) : '')
+        '- id=' + a.id + ' "' + a.name + '" ' + where + '; messages ' + f.messages.length + ';' +
+        ' ledger ' + f.ledger.length + ' entries; scope ' + scopeText +
+        (f.systemPrompt ? '; role: ' + f.systemPrompt.slice(0, 60) : '')
       );
     })
     .join('\n');
@@ -212,29 +212,29 @@ function nodeText(n: YggNode): string {
     'kind: ' + n.kind,
     'name: ' + n.name,
     'status: ' + n.status,
-    'pos: ' + (n.pos ? n.pos.x + ',' + n.pos.y : '（无）'),
-    'size: ' + (n.size ? n.size.w + 'x' + n.size.h : '（无）'),
-    'z: ' + (typeof n.z === 'number' ? n.z : '（无）'),
-    n.parentId ? 'parentId: ' + n.parentId : 'parentId: （无）',
+    'pos: ' + (n.pos ? n.pos.x + ',' + n.pos.y : '(none)'),
+    'size: ' + (n.size ? n.size.w + 'x' + n.size.h : '(none)'),
+    'z: ' + (typeof n.z === 'number' ? n.z : '(none)'),
+    n.parentId ? 'parentId: ' + n.parentId : 'parentId: (none)',
   ];
   const tokens = n.tokens ? Object.entries(n.tokens) : [];
-  if (tokens.length > 0) lines.push('局部样式: ' + tokens.map(([k, v]) => k + '=' + v).join(' '));
+  if (tokens.length > 0) lines.push('local style: ' + tokens.map(([k, v]) => k + '=' + v).join(' '));
   if (n.kind === 'component') {
     if (n.frame === 'widget') {
-      lines.push('窗口形态: 挂件（无标题栏、透明背景、靠 hover 出来的按钮操控）' + (n.fixed ? '，**已固定**' : ''));
+      lines.push('shape: widget (no title bar, transparent background, driven by buttons that appear on hover)' + (n.fixed ? ', **fixed**' : ''));
     }
-    if (n.locked) lines.push('锁定: **是**（不可删除，要删先解锁）');
+    if (n.locked) lines.push('locked: **yes** (cannot be deleted; unlock first)');
     lines.push(
       n.agent
-        ? 'agent 能力: 已接入（职责：' + (n.agent.systemPrompt || '（空）') + '；工具：' +
-          (n.agent.toolIds.join(', ') || '全部') + '；消息 ' + n.agent.messages.length + ' 条）'
-        : 'agent 能力: 未接入',
+        ? 'agent capability: attached (role: ' + (n.agent.systemPrompt || '(empty)') + '; tools: ' +
+          (n.agent.toolIds.join(', ') || 'all') + '; messages ' + n.agent.messages.length + ')'
+        : 'agent capability: not attached',
     );
   }
   const src = (n.kind === 'component' || n.kind === 'tool') && n.source ? n.source : '';
   if (!src) return lines.join('\n');
-  const clipped = src.length > 30000 ? src.slice(0, 30000) + '\n…（源码过长已截断，共 ' + src.length + ' 字符）' : src;
-  return lines.join('\n') + '\n\n源码：\n' + clipped;
+  const clipped = src.length > 30000 ? src.slice(0, 30000) + '\n... (source too long, truncated; ' + src.length + ' chars in total)' : src;
+  return lines.join('\n') + '\n\nSource:\n' + clipped;
 }
 
 export function registerCoreInterfaces(): void {
@@ -246,7 +246,7 @@ export function registerCoreInterfaces(): void {
     example: {
       kind: 'create_tool',
       name: 'sum',
-      description: '求和',
+      description: 'Sum',
       paramsSchema: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } } },
       source: 'export default function (args) { return args.a + args.b; }',
     },
@@ -278,9 +278,9 @@ export function registerCoreInterfaces(): void {
       };
       store.addNode(node);
       desktop().log('op', '+ tool ' + name, id);
-      return ok('已派生工具「' + name + '」', {
+      return ok('Derived tool "' + name + '"', {
         createdId: id,
-        observation: '工具 id=' + id + ' name=' + name + ' 已注册，可用 call_tool 调用。',
+        observation: 'Tool id=' + id + ' name=' + name + ' is registered; call it with call_tool.',
       });
     },
   });
@@ -297,14 +297,14 @@ export function registerCoreInterfaces(): void {
       let tool = id ? getTool(id) : undefined;
       if (!tool && name) tool = toolCatalog().some((t) => t.name === name) ? getTool(toolCatalog().find((t) => t.name === name)?.id ?? '') : undefined;
       if (!tool) {
-        const list = toolCatalog().map((t) => t.name + '(' + t.id + ')').join('、') || '（没有工具）';
+        const list = toolCatalog().map((t) => t.name + '(' + t.id + ')').join(', ') || '(no tools)';
         return fail('No such tool ' + (id || name) + '. Current tools: ' + list);
       }
       try {
         const value = await tool.run(op.args);
         const text = JSON.stringify(value) ?? 'undefined';
         desktop().log('op', 'tool ' + tool.name + ' \u2192 ' + text.slice(0, 160));
-        return ok('工具「' + tool.name + '」返回：' + text.slice(0, 400), { observation: text.slice(0, 2000) });
+        return ok('Tool "' + tool.name + '" returned: ' + text.slice(0, 400), { observation: text.slice(0, 2000) });
       } catch (e) {
         desktop().log('error', 'tool ' + tool.name + ' \u2715 ' + (e as Error).message);
         return fail('Tool "' + tool.name + '" failed while running: ' + (e as Error).message);
@@ -326,7 +326,7 @@ export function registerCoreInterfaces(): void {
       if (keys.length === 0) return fail('The style operation contains no valid --ygg- variable.');
       useDesktopStore.getState().applyTokens({ ...desktop().tokens, ...tokens });
       desktop().log('op', 'tokens \u00d7' + keys.length);
-      return ok('已改写 ' + keys.length + ' 个样式变量', { observation: '已生效变量：' + keys.join(', ') });
+      return ok('Rewrote ' + keys.length + ' style variables', { observation: 'Variables now in effect: ' + keys.join(', ') });
     },
   });
 
@@ -341,19 +341,19 @@ export function registerCoreInterfaces(): void {
       const s = desktop();
       const part = strOr(op.before, 'all');
       const chunks: string[] = [];
-      const viewport = '## 视口\n' + s.viewW + ' x ' + s.viewH + '（窗口坐标原点在左上角）';
+      const viewport = '## Viewport\n' + s.viewW + ' x ' + s.viewH + ' (window coordinates start at the top-left)';
       if (part === 'all' || part === 'windows') {
         chunks.push(viewport);
-        chunks.push('## 窗口\n' + windowsText());
+        chunks.push('## Windows\n' + windowsText());
         // 默认窗口（Nodes / 设置 / Trace / 输入框）不是组件，但也能移动 / 缩放 / 显隐。
-        chunks.push('## 默认窗口\n' + defaultWindowsText(defaultWindows(s)));
+        chunks.push('## Default windows\n' + defaultWindowsText(defaultWindows(s)));
       }
       if (part === 'all' || part === 'agents') chunks.push('## Agent\n' + agentsText());
-      if (part === 'all' || part === 'tree') chunks.push('## 节点树\n' + treeText(s.nodes, s.rootId));
-      if (part === 'all' || part === 'tokens') chunks.push('## 样式变量\n' + themeText(s.tokens));
-      if (part === 'all' || part === 'surfaces') chunks.push('## 界面插槽\n' + surfacesText());
-      if (part === 'all' || part === 'tools') chunks.push('## 工具\n' + toolCatalogText(toolCatalog()));
-      if (part === 'all' || part === 'logs') chunks.push('## 日志\n' + logsText());
+      if (part === 'all' || part === 'tree') chunks.push('## Node tree\n' + treeText(s.nodes, s.rootId));
+      if (part === 'all' || part === 'tokens') chunks.push('## Style tokens\n' + themeText(s.tokens));
+      if (part === 'all' || part === 'surfaces') chunks.push('## Surface slots\n' + surfacesText());
+      if (part === 'all' || part === 'tools') chunks.push('## Tools\n' + toolCatalogText(toolCatalog()));
+      if (part === 'all' || part === 'logs') chunks.push('## Logs\n' + logsText());
       if (part === 'agent') {
         const aid = strOr(op.id, '');
         const a = aid ? s.nodes[aid] : undefined;
@@ -371,11 +371,11 @@ export function registerCoreInterfaces(): void {
         const def = sid ? getSurfaceDef(sid) : undefined;
         if (!sid || !def) {
           return fail(
-            'inspect before="surface" 需要 surface。可用插槽：' +
-              (listSurfaces().map((s) => s.id).join('、') || '（无）'),
+            'inspect before="surface" needs a surface. Available slots: ' +
+              (listSurfaces().map((s) => s.id).join(', ') || '(none)'),
           );
         }
-        chunks.push('## 插槽 ' + def.id + '「' + def.label + '」\n' + surfaceDetailText(def));
+        chunks.push('## Slot ' + def.id + ' "' + def.label + '"\n' + surfaceDetailText(def));
       }
       if (part === 'tool') {
         const tid = strOr(op.id, '');
@@ -391,7 +391,7 @@ export function registerCoreInterfaces(): void {
             .join('、');
           return fail('inspect before="tool" needs the id of a registered tool. Current tools: ' + (list || '(no tools)'));
         }
-        chunks.push('## 工具 ' + tool.name + '\n' + toolDetailText(tid));
+        chunks.push('## Tool ' + tool.name + '\n' + toolDetailText(tid));
       }
       if (part === 'component') {
         const cid = strOr(op.id, '');
@@ -404,18 +404,18 @@ export function registerCoreInterfaces(): void {
           return fail('inspect before="component" needs an id. Current windows: ' + (list || '(no windows)'));
         }
         chunks.push(viewport);
-        chunks.push('## 页面 ' + target.name + '\n' + nodeText(target));
+        chunks.push('## Page ' + target.name + '\n' + nodeText(target));
       }
       if (chunks.length === 0) {
         return fail(
-          'inspect 的 before 只接受 windows / component / tool / surface / agent / logs / agents / tree / tokens / surfaces / tools / all。',
+          'inspect before= accepts windows / component / tool / surface / agent / logs / agents / tree / tokens / surfaces / tools / all only.',
         );
       }
       if (part === 'all') {
         const total = Object.keys(s.nodes).length;
-        chunks.unshift('节点总数 ' + total + ' / 上限 ' + MAX_NODES);
+        chunks.unshift('Total nodes ' + total + ' / limit ' + MAX_NODES);
       }
-      return ok('已读取界面结构（' + part + '）', { observation: chunks.join('\n\n') });
+      return ok('Read the interface structure (' + part + ')', { observation: chunks.join('\n\n') });
     },
   });
 
@@ -480,13 +480,13 @@ export function registerCoreInterfaces(): void {
         const cur = getSurfaceState(surface)?.source;
         if (!cur) {
           return fail(
-            '插槽 ' + surface + ' 目前还是**内置实现**（宿主内置，没有可读的源码），不能 patch。' +
-              '先 `inspect before="surface" surface="' + surface + '"` 看它现在的结构与内置实现说明，' +
-              '再用 replace_surface 给一份**完整**实现；之后它就是"已被覆写"，也就能用 patch_source 定点改了。',
+            'Slot ' + surface + ' is still the **built-in implementation** (host code, no readable source), so it cannot be patched.' +
+              'First run `inspect before="surface" surface="' + surface + '"` to see its structure and the built-in description,' +
+              'then give a **complete** implementation with replace_surface; it then becomes "overridden" and patchable with patch_source.',
           );
         }
         current = cur;
-        label = '插槽「' + def.label + '」';
+        label = 'slot "' + def.label + '"';
         key = 'surface_' + surface;
         write = (next) => setSurfaceSource(surface, next);
       } else {
@@ -500,7 +500,7 @@ export function registerCoreInterfaces(): void {
         }
         if (!node.source.trim()) return fail('Component "' + node.name + '" has no source, so there is nothing to replace.');
         current = node.source;
-        label = '组件「' + node.name + '」';
+        label = 'component "' + node.name + '"';
         key = id;
         write = (next) => useDesktopStore.getState().updateNode(id, { source: next });
       }
@@ -512,21 +512,21 @@ export function registerCoreInterfaces(): void {
         const hits = next.split(e.find).length - 1;
         if (hits === 0) {
           return fail(
-            'edits[' + i + '] 在' + label + '的**当前源码**里找不到这段内容，本次修改已整体放弃（源码未变）：\n' +
+            'edits[' + i + '] cannot find this text in the **current source** of ' + label + ', so the whole edit was dropped (source unchanged):\n' +
               '---\n' + e.find + '\n---\n' +
-              '请先用 inspect before="component" id=... 或 list_surfaces 看**当前真实源码**，' +
-              '把 find 写成源码里原样的一段（不要凭记忆写，也不要凭上一轮改之前的样子写）。',
+              'Use inspect before="component" id=... or list_surfaces to read the **current real source** first,' +
+              'and write find as a verbatim fragment of it (never from memory, and never from how it looked before your last change).',
           );
         }
         if (hits > 1 && !e.all) {
           return fail(
-            'edits[' + i + '] 在' + label + '里出现了 ' + hits + ' 次，不唯一，本次修改已整体放弃（源码未变）：\n' +
+            'edits[' + i + '].find occurs ' + hits + ' times in ' + label + ', so it is not unique and the whole edit was dropped (source unchanged):\n' +
               '---\n' + e.find + '\n---\n' +
-              '请把锚点写长一点（带上前后文让它唯一），或者传 all: true 明确表示全部替换。',
+              'Lengthen the anchor (include surrounding text so it is unique), or pass all: true to replace every occurrence.',
           );
         }
         next = e.all ? next.split(e.find).join(e.replace) : next.replace(e.find, e.replace);
-        notes.push('第 ' + (i + 1) + ' 处 ×' + hits);
+        notes.push('#' + (i + 1) + ' x' + hits);
       }
       if (next === current) {
         return fail('The source is unchanged after the replacement — did you write find and replace identically?');
@@ -538,21 +538,21 @@ export function registerCoreInterfaces(): void {
         if (surface) desktop().log('error', 'surface ' + surface + ' \u2715 ' + compiled.error);
         else desktop().log('error', 'comp ' + label + ' \u2715 ' + compiled.error);
         return fail(
-          '改动后的源码**编译失败，本次修改已整体放弃 —— 原源码一个字都没变**：' +
+          'The changed source **failed to compile, so the whole edit was dropped — not one character of the original source changed**:' +
             compiled.error +
-            '\n请缩小改动范围（一次只改一个地方），或者先用 inspect 确认当前源码。',
+            '\nShrink the change (edit one place at a time), or confirm the current source with inspect first.',
         );
       }
 
       write(next);
-      if (surface) desktop().log('op', 'patch surface ' + surface + ' (' + edits.length + ' 处)');
-      else desktop().log('op', 'patch ' + label + ' (' + edits.length + ' 处)', id);
+      if (surface) desktop().log('op', 'patch surface ' + surface + ' (' + edits.length + ')');
+      else desktop().log('op', 'patch ' + label + ' (' + edits.length + ')', id);
 
-      return ok('已局部修改' + label + '（' + edits.length + ' 处）', {
+      return ok('Patched ' + label + ' (' + edits.length + ' edits)', {
         observation:
-          '改动明细：' + notes.join('；') +
-          '。源码长度 ' + current.length + ' → ' + next.length +
-          '。改动已通过编译并生效；如果界面上的表现还不对，先 inspect before="logs" 看运行时报错，再继续用 patch_source 小步修改。',
+          'Changes: ' + notes.join('; ') +
+          '. Source length ' + current.length + ' → ' + next.length +
+          '. It compiled and is now in effect; if the interface still looks wrong, inspect before="logs" for runtime errors and keep patching in small steps.',
       });
     },
   });
@@ -563,7 +563,7 @@ export function registerCoreInterfaces(): void {
     description: 'List every replaceable slot on the interface, whether it is currently overridden, and the props each one accepts.',
     example: { kind: 'list_surfaces' },
     cap: 'global',
-    handler: () => ok('共 ' + listSurfaces().length + ' 个插槽', { observation: surfacesText() }),
+    handler: () => ok(listSurfaces().length + ' slots', { observation: surfacesText() }),
   });
 
   registerInterface({
@@ -589,7 +589,7 @@ export function registerCoreInterfaces(): void {
       if (raw === null || raw === undefined || (typeof raw === 'string' && !raw.trim())) {
         clearSurfaceSource(surface);
         desktop().log('op', 'surface reset ' + surface);
-        return ok('已还原插槽「' + def.label + '」为内置实现');
+        return ok('Restored slot "' + def.label + '" to the built-in implementation');
       }
       if (typeof raw !== 'string') return fail('source must be a string or null.');
 
@@ -597,10 +597,10 @@ export function registerCoreInterfaces(): void {
       // 替换它会把所有窗口的操作拆掉 —— 需要显式确认才放行。
       if (isCriticalSurface(surface) && op.allowCritical !== true) {
         return fail(
-          '插槽 ' + surface + ' 是**关键插槽**，承载窗口的基础能力（' +
-            (listSurfaces().find((s) => s.id === surface)?.capabilityHint ?? '拖拽等') +
-            '）。替换它会破坏所有窗口的操作，已拒绝。' +
-            '如果你确实要点额外装饰，请改用非关键插槽，或先用 set_node_tokens / update_component 调整窗口本身。',
+          'Slot ' + surface + ' is a **critical slot** carrying basic window abilities (' +
+            (listSurfaces().find((s) => s.id === surface)?.capabilityHint ?? 'dragging and so on') +
+            '). Replacing it would break the controls of every window, so it was rejected.' +
+            'If you really want extra decoration, use a non-critical slot, or adjust the window itself with set_node_tokens / update_component.',
         );
       }
 
@@ -617,9 +617,9 @@ export function registerCoreInterfaces(): void {
       );
       setSurfaceSource(surface, raw);
       desktop().log('op', 'surface ' + surface);
-      return ok('已替换界面元素「' + def.label + '」', {
+      return ok('Replaced interface element "' + def.label + '"', {
         observation:
-          '插槽 ' + surface + ' 已被覆写。' + (def.propsHint ? ' 该插槽组件会收到 props：' + def.propsHint : ''),
+          'Slot ' + surface + ' is now overridden.' + (def.propsHint ? ' Its component receives the props: ' + def.propsHint : ''),
       });
     },
   });
@@ -644,27 +644,27 @@ export function registerCoreInterfaces(): void {
       const facetPatch: Record<string, unknown> = {};
       if (typeof op.name === 'string' && op.name.trim()) {
         nodePatch.name = op.name.trim();
-        touched.push('名字');
+        touched.push('name');
       }
       if (typeof op.systemPrompt === 'string') {
         facetPatch.systemPrompt = op.systemPrompt;
-        touched.push('职责');
+        touched.push('role');
       }
       if (Array.isArray(op.scope)) {
         facetPatch.scope = op.scope.filter((x): x is string => typeof x === 'string');
-        touched.push('作用域');
+        touched.push('scope');
       }
       if (Array.isArray(op.tools)) {
         facetPatch.toolIds = op.tools.filter((x): x is string => typeof x === 'string');
-        touched.push('工具');
+        touched.push('tools');
       }
       if (op.progress === 'trace' || op.progress === 'none') {
         facetPatch.progress = op.progress;
-        touched.push(op.progress === 'none' ? '不显示进度' : '显示进度');
+        touched.push(op.progress === 'none' ? 'progress hidden' : 'progress shown');
       }
       if (op.mode === 'reply' || op.mode === 'act') {
         facetPatch.mode = op.mode;
-        touched.push(op.mode === 'reply' ? '档位=reply（只回话）' : '档位=act（要动手）');
+        touched.push(op.mode === 'reply' ? 'tier=reply (talk only)' : 'tier=act (takes action)');
       }
       if (Array.isArray(op.caps)) {
         const next = parseCaps(op.caps) ?? DEFAULT_ACT_CAPS;
@@ -676,7 +676,7 @@ export function registerCoreInterfaces(): void {
         const conflict = capScopeConflict(next, nextScope);
         if (conflict) return fail('Capability switches conflict with the scope: ' + conflict);
         facetPatch.caps = next;
-        touched.push('能力开关=' + capSummary(next));
+        touched.push('capability switches=' + capSummary(next));
       }
       if (touched.length === 0) {
         return fail('set_agent_config needs one of name / systemPrompt / scope / tools / progress / mode / caps.');
@@ -685,7 +685,7 @@ export function registerCoreInterfaces(): void {
       if (Object.keys(nodePatch).length) store.updateNode(agent.id, nodePatch as Partial<YggNode>);
       if (Object.keys(facetPatch).length) store.updateFacet(agent.id, facetPatch);
       desktop().log('op', 'agent cfg ' + agent.name, agent.id);
-      return ok('已更新 Agent「' + agent.name + '」的 ' + touched.join('、'));
+      return ok('Updated agent "' + agent.name + '": ' + touched.join(', '));
     },
   });
 
@@ -712,12 +712,12 @@ export function registerCoreInterfaces(): void {
         store.clearSessionMessages(ctx.sessionId);
         store.updateFacet(found.id, { ledger: [] });
         desktop().log('op', 'agent clear ' + found.name + ' @' + ctx.sessionId, found.id);
-        return ok('已清空当前输入框的 ' + n + ' 条历史，以及共享的 ' + l + ' 条账本');
+        return ok('Cleared ' + n + ' messages from the current input box, plus the shared ledger of ' + l + ' entries');
       }
       const n = facet.messages.length;
       store.updateFacet(found.id, { messages: [], ledger: [] });
       desktop().log('op', 'agent clear ' + found.name, found.id);
-      return ok('已清空「' + found.name + '」的 ' + n + ' 条历史与 ' + l + ' 条账本');
+      return ok('Cleared "' + found.name + '": ' + n + ' messages and ' + l + ' ledger entries');
     },
   });
 }

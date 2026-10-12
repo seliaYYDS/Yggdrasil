@@ -41,7 +41,7 @@ export function toolCatalog(): ToolCatalogEntry[] {
 
 export async function callTool(id: string, args: unknown): Promise<unknown> {
   const tool = tools.get(id);
-  if (!tool) throw new Error('找不到工具：' + id);
+  if (!tool) throw new Error('No such tool: ' + id);
   return await tool.run(args);
 }
 
