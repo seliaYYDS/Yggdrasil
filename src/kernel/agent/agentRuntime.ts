@@ -13,7 +13,7 @@ import type {
 import { newId } from '../ids';
 import { chatStream, estimateTokens, type LlmUsage } from '../llm/client';
 import type { ChatMessage, ContentPart, LlmSettings } from '../llm/types';
-import { nativeCallsFromArgs, parsePlan, planFromNativeCalls } from './parse';
+import { looksLikeNativeCall, nativeCallsFromArgs, parsePlan, planFromNativeCalls } from './parse';
 import {
   buildSummaryMessages,
   compactedMemory,
@@ -338,10 +338,7 @@ const MAX_RECOVERIES = 3;
  * 这时唯一的出路是明确告诉模型"这个协议没有工具调用语法"，
  * 否则它只会用同一种写法把恢复机会一次次耗光。
  */
-function looksLikeToolCall(text: string): boolean {
-  const t = text.toLowerCase();
-  return t.includes('invoke name=') || t.includes('parameter name=') || t.includes('tool_calls');
-}
+/* looksLikeToolCall 已挪到解析层（parse.ts 的 looksLikeNativeCall）—— 判据只留一份。 */
 
 /**
  * 观察结果的滚动预算（字符）。超过就丢掉最老的几条。
@@ -905,7 +902,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
               'Your previous output was not a valid plan; parsing failed: ' + err,
               'Raw output fragment: ' + raw.slice(0, 300),
               // 翻译器认得出的形式走不到这里；认不出的必须**点名**，否则模型会一直重犯。
-              ...(looksLikeToolCall(raw)
+              ...(looksLikeNativeCall(raw)
                 ? [
                     'Your reply was written in native tool-call syntax (a call block with named parameters).' +
                       ' This protocol declares no tools and never uses that syntax: put every call into ops' +

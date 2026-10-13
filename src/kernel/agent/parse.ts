@@ -31,6 +31,18 @@ export interface NativeCall {
  * 只在**解析层**收下它，协议没变：翻译出来的 ops 照样过总线的 caps / 作用域 / 参数校验，
  * 认不出的 kind 会被总线连同可用清单一起拒掉。
  */
+/**
+ * 正文里有没有**原生工具调用标记**。
+ *
+ * 以前这个判据只长在 agentRuntime 里（用来说明"你刚才用的是工具调用语法"），
+ * 现在解析层自己也要用：有这种标记时，JSON 分支没解析出计划就要先走翻译，
+ * 而不是把"没 ops 的 JSON"当成一个合法但空的计划收下。
+ */
+export function looksLikeNativeCall(text: string): boolean {
+  const t = text.toLowerCase();
+  return t.includes('invoke name=') || t.includes('parameter name=') || t.includes('tool_calls');
+}
+
 export function extractNativeCalls(text: string): NativeCall[] {
   // 带 g 的正则有 lastIndex 状态，所以每次调用现建 —— 模块级共用会被嵌套调用踩到。
   const invoke = /invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/[^>]*invoke\s*>/g;
@@ -156,6 +168,15 @@ export function parsePlan(text: string): ParseResult {
     const calls = extractNativeCalls(raw);
     return calls.length > 0 ? planFromNativeCalls(calls, raw) : null;
   };
+  /** JSON 是对象、但**不是计划**（没有 ops 数组）时的报错。 */
+  const notAPlan = (): ParseResult => ({
+    ok: false,
+    error:
+      'The model reply is a JSON object but not a plan: it has no "ops" array. Available kinds: ' +
+      knownKinds().join(', ') +
+      '.',
+    raw,
+  });
 
   const json = extractJson(raw);
   if (!json) return tryNative() ?? { ok: false, error: 'No JSON object found in the model reply.', raw };
@@ -171,7 +192,18 @@ export function parsePlan(text: string): ParseResult {
   }
 
   const obj = data as Record<string, unknown>;
-  const opsRaw = Array.isArray(obj.ops) ? obj.ops : [];
+  /*
+   * **有 ops 数组才算计划。**
+   *
+   * extractJson 取的是全篇第一个 `{` 到配对的 `}` —— 模型用原生工具调用标记时，
+   * 那一对括号常常落在某个参数值上（例如 size 的 {"w":460,"h":360}）。这种片段是**合法**
+   * JSON，于是一条"没有 ops 的计划"以前会被当成成功收下：上一轮什么都没做，也不报错，
+   * 用户只看到"没有产生任何改动"，模型还永远不知道自己的信封用错了。
+   * 现在的规矩：形状不像计划就交给原生翻译；翻译不出来才算失败。
+   */
+  if (!Array.isArray(obj.ops)) return tryNative() ?? notAPlan();
+
+  const opsRaw = obj.ops as unknown[];
   const ops: DerivationOp[] = [];
   for (const item of opsRaw) {
     if (!item || typeof item !== 'object') continue;
@@ -181,21 +213,28 @@ export function parsePlan(text: string): ParseResult {
   }
 
   if (ops.length === 0 && opsRaw.length > 0) {
-    return {
-      ok: false,
-      error: 'No op in "ops" carries a kind. Available kinds: ' + knownKinds().join(', ') + '.',
-      raw,
-    };
+    return (
+      tryNative() ?? {
+        ok: false,
+        error: 'No op in "ops" carries a kind. Available kinds: ' + knownKinds().join(', ') + '.',
+        raw,
+      }
+    );
   }
 
-  return {
-    ok: true,
-    via: 'json',
-    raw,
-    plan: {
-      reasoning: typeof obj.reasoning === 'string' ? obj.reasoning : undefined,
-      continue: obj.continue === true,
-      ops,
-    },
+  const plan: DerivationPlan = {
+    reasoning: typeof obj.reasoning === 'string' ? obj.reasoning : undefined,
+    continue: obj.continue === true,
+    ops,
   };
+  /*
+   * 显式空计划（ops: []）＝"这一轮没事做"，照旧收下 —— 但要是同一份正文里还带着原生调用，
+   * 那些调用才是它真正想做的事，优先执行它们（宁可做，也不要把话咽下去）。
+   */
+  if (ops.length === 0) {
+    const native = tryNative();
+    if (native) return native;
+  }
+
+  return { ok: true, via: 'json', raw, plan };
 }

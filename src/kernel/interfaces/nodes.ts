@@ -369,7 +369,7 @@ export function registerNodeInterfaces(): void {
     kind: 'create_component',
     label: '创建组件',
     description:
-      '**Create a page/window** (the only creation entry point): one source yields one plain component. pos / size optional — without them it lands in a free spot. Pass frame: "widget" for a widget. The agent field is optional (normally omitted): whether to attach, how, which tier and which capability switches are covered in the "Agent capability" section.',
+      '**Create a page/window** (the only creation entry point): one source yields one plain component. Placement is pos / size only, both optional — without them it lands in a free spot; there is no center or align parameter. Pass frame: "widget" for a widget. The agent field is optional (normally omitted): whether to attach, how, which tier and which capability switches are covered in the "Agent capability" section.',
     example: {
       kind: 'create_component',
       name: 'Calculator',
