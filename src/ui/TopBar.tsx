@@ -1,4 +1,4 @@
-import { useDesktopStore, MAX_SESSIONS } from '../store/desktopStore';
+import { useDesktopStore, MAX_SESSIONS, traceTotal } from '../store/desktopStore';
 import { ExportIcon, ImportIcon, NewInputIcon, NodesIcon, PluginIcon, ResetIcon, SettingsIcon, TraceIcon, WorkspaceIcon } from './icons';
 
 /**
@@ -39,7 +39,13 @@ function TopRight() {
   const setTraceOpen = useDesktopStore((s) => s.setTraceOpen);
   const setResetOpen = useDesktopStore((s) => s.setResetOpen);
   const addSession = useDesktopStore((s) => s.addSession);
-  const traceCount = useDesktopStore((s) => s.sessions.reduce((n, ses) => n + ses.trace.length, 0));
+  /*
+   * 徽标 = **没看过**的步数，不是轨迹总数。
+   * 以前挂的是总数：点开看过之后它还挂在那里，只有手动"清空轨迹"才会消失 —— 那是个假通知。
+   */
+  const traceCount = useDesktopStore(traceTotal);
+  const traceSeen = useDesktopStore((s) => s.traceSeen);
+  const unseen = Math.max(0, traceCount - traceSeen);
   const sessionCount = useDesktopStore((s) => s.sessions.length);
   const runningCount = useDesktopStore((s) => s.sessions.filter((ses) => ses.status.running).length);
 
@@ -60,7 +66,7 @@ function TopRight() {
         onClick={() => setTraceOpen(true)}
       >
         <TraceIcon />
-        {traceCount > 0 ? <span className="badge">{traceCount}</span> : null}
+        {unseen > 0 ? <span className="badge">{unseen}</span> : null}
         {runningCount > 0 ? <span className="pulse" title={runningCount + ' 个任务运行中'} /> : null}
       </button>
       <button className="ygg-topbtn" title="节点树" onClick={() => setTreeOpen(true)}>

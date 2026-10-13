@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useDesktopStore } from '../store/desktopStore';
+import { useEffect, useState } from 'react';
+import { useDesktopStore, traceTotal } from '../store/desktopStore';
 import { PanelWindow } from './PanelWindow';
 import type { TraceStep, TraceStatus } from '../kernel/types';
 import { ClearIcon } from './icons';
@@ -35,6 +35,19 @@ export function TracePanel() {
   const agentRuns = useDesktopStore((s) => s.agentRuns);
   const logs = useDesktopStore((s) => s.logs);
   const clearTraces = useDesktopStore((s) => s.clearTraces);
+  const markTraceSeen = useDesktopStore((s) => s.markTraceSeen);
+  /** 被收进任务栏时不算"看过"：那期间来的步骤应该重新点亮徽标。 */
+  const minimized = useDesktopStore((s) => !!s.minimizedPanels.trace);
+  /** 轨迹总步数：与顶栏徽标用同一个口径（会话 + 组件 agent）。 */
+  const total = traceTotal({ sessions, agentRuns });
+
+  /*
+   * 面板开着就把"看过"水位同步到当前步数：正在看着不用再提示；
+   * 关掉之后再来的新步骤才会重新点亮顶栏徽标。
+   */
+  useEffect(() => {
+    if (open && !minimized) markTraceSeen();
+  }, [open, minimized, markTraceSeen, total]);
 
   const [view, setView] = useState<View>('steps');
   const [filter, setFilter] = useState<Filter>('all');

@@ -665,6 +665,14 @@ interface DesktopState {
   agentRuns: Record<NodeId, RunSlice>;
   feedback: RunFeedback | null;
   traceOpen: boolean;
+  /**
+   * 顶栏徽标的"已看过"水位：轨迹里已经有这么多步是用户看过的。
+   *
+   * 为什么需要它：徽标以前显示的是**轨迹总步数**，只有手动清空轨迹才会归零 ——
+   * 用户点开看过之后它还挂在那里，是个假通知。现在徽标 = 总步数 - 这个水位，
+   * 面板打开期间水位跟着涨（正在看着就不用提示），所以关掉再开也不会立刻又冒出数字。
+   */
+  traceSeen: number;
   /** 插件面板开着没。 */
   pluginsOpen: boolean;
   /** 工作区面板开着没。 */
@@ -803,6 +811,8 @@ interface DesktopState {
   setPluginValue: (id: string, key: string, value: string) => void;
   setTreeOpen: (open: boolean) => void;
   setTraceOpen: (open: boolean) => void;
+  /** 把当前这批轨迹标记为"已看过"（打开面板时自动调用）。 */
+  markTraceSeen: () => void;
   setResetOpen: (open: boolean) => void;
   setPanelMinimized: (panel: PanelKey, minimized: boolean) => void;
   /** 打开 / 关掉一个面板（把三个各自不同的开合标记统一成一个入口）。 */
@@ -1170,6 +1180,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   agentRuns: {},
   feedback: null,
   traceOpen: false,
+  traceSeen: 0,
   pluginsOpen: false,
   workspaceOpen: false,
   plugins: [],
@@ -1549,7 +1560,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
           { ...run, trace: [], status: { ...run.status, running: false, phase: '', detail: '', round: 0 } },
         ]),
       );
-      return { sessions, nodes, agentRuns, logs: [], feedback: null };
+      return { sessions, nodes, agentRuns, logs: [], feedback: null, traceSeen: 0 };
     });
     schedulePersist();
   },
@@ -1647,6 +1658,12 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   setTraceOpen: (open) => {
     set({ traceOpen: open });
     if (open) openPanel('trace');
+    // 打开即"看过"：徽标立刻清零，不用再点一次。
+    if (open) get().markTraceSeen();
+  },
+
+  markTraceSeen: () => {
+    set({ traceSeen: traceTotal(get()) });
   },
   setResetOpen: (open) => set({ resetOpen: open }),
 
@@ -2156,6 +2173,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       resizing: false,
       curves: [],
       dying: {},
+      traceSeen: 0,
       consolePrompt: null,
       pendingShot: null,
       seedDialog: null,
@@ -2166,6 +2184,21 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     get().log('info', 'reset');
   },
 }));
+
+/**
+ * 轨迹里一共有多少步：会话 + 各组件 agent 的运行记录。
+ *
+ * 顶栏徽标与"看过"水位必须用**同一个口径**，否则水位永远追不上徽标。
+ */
+export function traceTotal(s: {
+  sessions: { trace: TraceStep[] }[];
+  agentRuns: Record<string, { trace: TraceStep[] }>;
+}): number {
+  return (
+    s.sessions.reduce((n, ses) => n + ses.trace.length, 0) +
+    Object.values(s.agentRuns ?? {}).reduce((n, run) => n + (run?.trace?.length ?? 0), 0)
+  );
+}
 
 /** 供非 React 代码（派生总线）读取状态。 */
 export function desktop() {
