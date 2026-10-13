@@ -3,6 +3,7 @@ import { useDesktopStore } from '../store/desktopStore';
 import { PanelWindow } from './PanelWindow';
 import { describeManifest, parsePluginPackage } from '../kernel/plugin/package';
 import { checkPluginUpdate, pluginDiff } from '../kernel/plugin/runtime';
+import { Switch } from './Switch';
 import { PLUGIN_EXT, type PluginPackage } from '../kernel/plugin/types';
 
 /**
@@ -152,7 +153,7 @@ export function PluginsPanel() {
           <button className="ygg-btn ghost" onClick={() => void onDemo()}>装示例</button>
         </div>
         <div className="ygg-hint">
-          支持 {PLUGIN_EXT}（zip 包）与单文件 json。装之前先把清单摊开给你看 —— 解析阶段不执行包里的任何东西。
+          支持 {PLUGIN_EXT}（zip）与单文件 json。装之前先给你看清单 —— 解析阶段不执行包里的东西。
         </div>
 
         {error ? <div className="ygg-plugin-error">{error}</div> : null}
@@ -176,8 +177,7 @@ export function PluginsPanel() {
               </div>
             ) : null}
             <div className="ygg-hint">
-              装上之后，上面这些操作会变成 Agent 可以调的接口；它只能访问白名单里的主机。
-              关闭开关可以随时让 Agent 看不到它。
+              装上后这些操作会变成 Agent 可调的接口，它只能访问白名单里的主机；随时可以关掉。
             </div>
             <div className="ygg-row-gap" style={{ marginTop: 8 }}>
               <button className="ygg-btn primary" onClick={confirm}>安装</button>
@@ -193,14 +193,12 @@ export function PluginsPanel() {
         {plugins.map((p) => (
           <div className="ygg-plugin-card" key={p.id}>
             <div className="ygg-plugin-head">
-              <label className="ygg-plugin-toggle" title={p.enabled ? '对 Agent 可见' : '对 Agent 隐藏'}>
-                <input
-                  type="checkbox"
-                  checked={p.enabled}
-                  onChange={(e) => setEnabled(p.id, e.target.checked)}
-                />
-                <span className={'ygg-toggle' + (p.enabled ? ' on' : '')}><i className="dot" /></span>
-              </label>
+              {/* 插件开关也用滑块：与设置里的开关是同一个组件、同一种手感 */}
+              <Switch
+                on={p.enabled}
+                onChange={(v) => setEnabled(p.id, v)}
+                title={p.enabled ? '对 Agent 可见' : '对 Agent 隐藏'}
+              />
               <span className="ygg-plugin-name">{p.name}</span>
               <span className="ygg-plugin-ver">v{p.version}</span>
             </div>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
 import { PanelWindow } from './PanelWindow';
 import type { TraceStep, TraceStatus } from '../kernel/types';
+import { ClearIcon } from './icons';
 
 const STATUS_MARK: Record<TraceStep['status'], string> = {
   running: '◌',
@@ -33,7 +34,7 @@ export function TracePanel() {
   const nodes = useDesktopStore((s) => s.nodes);
   const agentRuns = useDesktopStore((s) => s.agentRuns);
   const logs = useDesktopStore((s) => s.logs);
-  const clearLogs = useDesktopStore((s) => s.clearLogs);
+  const clearTraces = useDesktopStore((s) => s.clearTraces);
 
   const [view, setView] = useState<View>('steps');
   const [filter, setFilter] = useState<Filter>('all');
@@ -89,40 +90,50 @@ export function TracePanel() {
       onClose={() => setOpen(false)}
     >
       <div className="ygg-panel-body">
-        <div className="ygg-section">
+        {/*
+          一行两段：左边是带**描述前缀**的计数（光看数字不知道哪个是日志、哪个是失败），
+          右边是清除按钮 —— 用 margin-left:auto 钉在最右，不随左侧按钮增减而移动。
+          清除会连 agent 记忆一起清（见 store.clearTraces 的说明）。
+        */}
+        <div className="ygg-section ygg-trace-bar">
           <div className="ygg-seg">
             <button
               className={view === 'steps' && filter === 'all' ? 'on' : ''}
-              title="全部步骤"
+              title="全部步骤（点一下只看全部）"
               onClick={() => pickFilter('all')}
             >
-              {merged.length}
+              步骤 {merged.length}
             </button>
             <button
               className={view === 'steps' && filter === 'ok' ? 'on' : ''}
-              title="只看成功"
+              title="只看成功的步骤"
               onClick={() => pickFilter('ok')}
             >
-              {okCount}
+              成功 {okCount}
             </button>
             <button
               className={view === 'steps' && filter === 'fail' ? 'on' : ''}
-              title="只看失败"
+              title="只看失败的步骤"
               onClick={() => pickFilter('fail')}
             >
-              {failCount}
+              失败 {failCount}
             </button>
             <button
               className={view === 'log' ? 'on' : ''}
-              title="运行日志"
+              title="运行日志（点一下切到日志视图）"
               onClick={() => setView(view === 'log' ? 'steps' : 'log')}
             >
-              {logs.length}
+              日志 {logs.length}
             </button>
-            {view === 'log' && logs.length > 0 ? (
-              <button title="清空日志" onClick={clearLogs}>×</button>
-            ) : null}
           </div>
+          <button
+            className="ygg-trace-clear"
+            title="清空轨迹与日志，并清除 Agent 记忆（组件与界面本身不动）"
+            disabled={merged.length === 0 && logs.length === 0}
+            onClick={clearTraces}
+          >
+            <ClearIcon />
+          </button>
         </div>
 
         {view === 'steps' && merged.length > 0 ? (

@@ -268,9 +268,16 @@ export const DEFAULT_PANEL_Z: Record<PanelKey, number> = {
   workspace: 1,
 };
 
+/**
+ * 面板的**显示名**：面板标题、任务栏、以及 Agent 看到的默认窗口清单都用它。
+ *
+ * 必须与面板自己传的 title 一致 —— 之前 settings 这里写的是旧名 'LLM'，
+ * 于是最小化之后任务栏显示 'LLM'，而窗口标题是 '设置'，看起来像两个东西。
+ * 统一成一份，就不会再对不上。
+ */
 export const PANEL_TITLES: Record<PanelKey, string> = {
   inspector: 'Nodes',
-  settings: 'LLM',
+  settings: '设置',
   trace: 'Trace',
   plugins: '插件',
   workspace: '工作区',
@@ -734,6 +741,16 @@ interface DesktopState {
 
   log: (level: LogLevel, text: string, nodeId?: NodeId) => void;
   clearLogs: () => void;
+  /**
+   * 清空**全部运行痕迹**：每个会话与每个 agent 的轨迹、运行日志、
+   * 以及 agent 的对话记忆与账本。
+   *
+   * 为什么"清轨迹"要连记忆一起清：轨迹面板是"运行过什么"的唯一入口。
+   * 用户点清空的意图是"我不想看到这些了"；如果留着对话记忆，
+   * 下一轮 Agent 还会接着上次说 —— 那和"清空"的直觉相反。
+   * 组件源码与桌面本身不动（那是成果，不是痕迹）。
+   */
+  clearTraces: () => void;
 
   /** 再开一个输入框（= 再开一个可以并行干活的 Agent 会话）。返回新会话 id。 */
   addSession: () => string;
@@ -826,7 +843,7 @@ interface DesktopState {
    * 这样迁移 / 去重 / 夹进视口这些逻辑全部复用，不必再写第二套装载逻辑。
    * 只覆盖文件里带的区块，其余保持原样。
    */
-  importSeed: (seed: SeedFile) => Promise<void>;
+  importSeed: (seed: SeedFile, parts?: SeedPart[]) => Promise<void>;
   /** Agent 请求截图（真正的抓取要等用户点按钮，见 pendingShot）。 */
   requestShot: (sessionId: string) => void;
   /** 清掉待截图请求（用户点了、或放弃了）。 */
@@ -1505,6 +1522,33 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
+  clearTraces: () => {
+    set((s0) => {
+      // 会话：轨迹清空，状态复位（否则界面会停在"运行中"）。
+      const sessions = s0.sessions.map((ses) => ({
+        ...ses,
+        trace: [],
+        status: { ...ses.status, running: false, phase: '', detail: '', round: 0 },
+        // 对话记忆也清掉：见上面 clearTraces 的说明。
+        messages: [],
+      }));
+      // agent：轨迹 + 记忆 + 账本一起清（记忆留着就等于没清）。
+      const nodes = { ...s0.nodes };
+      for (const [id, n] of Object.entries(nodes)) {
+        if (n.kind !== 'component' || !n.agent) continue;
+        nodes[id] = { ...n, agent: { ...n.agent, messages: [], ledger: [] } };
+      }
+      const agentRuns = Object.fromEntries(
+        Object.entries(s0.agentRuns).map(([id, run]) => [
+          id,
+          { ...run, trace: [], status: { ...run.status, running: false, phase: '', detail: '', round: 0 } },
+        ]),
+      );
+      return { sessions, nodes, agentRuns, logs: [], feedback: null };
+    });
+    schedulePersist();
+  },
+
   addSession: () => {
     const s = get();
     if (s.sessions.length >= MAX_SESSIONS) return '';
@@ -1709,7 +1753,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   exportSeed: (parts, includeApiKey) => buildSeed(snapshot(), parts, includeApiKey),
 
-  importSeed: async (seed) => {
+  importSeed: async (seed, parts) => {
     const adapter = await initStorage();
     adapterRef = adapter;
     /*
@@ -1720,7 +1764,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       window.clearTimeout(persistTimer);
       persistTimer = null;
     }
-    for (const [key, value] of seedStorageEntries(seed)) {
+    for (const [key, value] of seedStorageEntries(seed, parts)) {
       /*
        * 设置**按字段合并**：文件里有的字段覆盖，没有的保持当前。
        *
@@ -1740,7 +1784,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     // 交给 hydrate：它负责迁移、去重、夹取，并把 loaded / 视口等一起复位。
     await get().hydrate();
     applyPlugins(pluginsBefore);
-    get().log('op', 'seed import · ' + seed.parts.join('+'));
+    get().log('op', 'seed import · ' + (parts && parts.length ? parts.join('+') : seed.parts.join('+')));
     schedulePersist();
   },
 

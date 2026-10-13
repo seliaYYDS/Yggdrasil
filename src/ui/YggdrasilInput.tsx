@@ -528,6 +528,22 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
             : pending.length + ' 个文件将在发送时存入工作区 —— Agent 会按需用 ws_read 读取'}
             </span>
           ) : null}
+          {/*
+            空闲提示。
+            这一行原来在没跑任务时是**空的** —— 一块占着高度却什么都不显示的区域，
+            用户看不出这里是什么、也不知道能做什么。
+            现在没在跑、也没有文件要发的时候，就在这里显示"能用什么"：
+            左边是用法提示，右边（由 .ygg-metrics 占位）是用量指标。
+          */}
+          {!busy && !uploadError && pending.length === 0 ? (
+            /*
+             * 提示要**短**：这一行右边还有用量指标，太长就会被截断，
+             * 而且"读一半"的提示比不显示更糟。所以只保留最有用的一句。
+             */
+            <span className="ygg-compose-idle" title="输入你的想法，Agent 会自己拆解成组件与工具；也可以直接粘贴或拖入文件">
+              输入想法开始，或粘贴 / 拖入文件
+            </span>
+          ) : null}
         </div>
       </div>
     </WindowFrame>

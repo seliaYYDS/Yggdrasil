@@ -4,6 +4,7 @@ import {
   describeSeed,
   parseSeed,
   seedFileName,
+  seedPartOptions,
   seedToText,
   SEED_PART_INFO,
   SEED_EXT,
@@ -98,6 +99,11 @@ function ImportSeed() {
   const [seed, setSeed] = useState<SeedFile | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  /**
+   * 要导入哪些区块。默认**全选文件里有的** ——
+   * 用户点"导入"时的心智是"把这个场景导进来"，不该还要先勾一遍。
+   */
+  const [parts, setParts] = useState<SeedPart[]>([]);
 
   const pick = async (file: File | undefined) => {
     setError('');
@@ -107,13 +113,15 @@ function ImportSeed() {
     const parsed = parseSeed(text);
     if (!parsed.ok) { setError(parsed.error); return; }
     setSeed(parsed.seed);
+    // 换文件就重置勾选：默认全选这个文件里真实存在的区块。
+    setParts(seedPartOptions(parsed.seed).filter((o) => o.available).map((o) => o.id));
   };
 
   const run = async () => {
     if (!seed) return;
     setBusy(true);
     try {
-      await importSeed(seed);
+      await importSeed(seed, parts);
       setMode(null);
     } catch (e) {
       setError('导入失败：' + (e as Error).message);
@@ -123,6 +131,11 @@ function ImportSeed() {
   };
 
   const lines = seed ? describeSeed(seed) : [];
+  const options = seed ? seedPartOptions(seed).filter((o) => o.available) : [];
+  /** 勾选状态跟着选中的文件走（换文件时重置成"文件里有的全选"）。 */
+  const toggle = (id: SeedPart) => {
+    setParts((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+  };
 
   return (
     <div className="ygg-overlay" onClick={() => !busy && setMode(null)}>
@@ -146,15 +159,29 @@ function ImportSeed() {
                 <li key={i}>{l}</li>
               ))}
             </ul>
+            {/* 选择导入内容：只列文件里真的有的区块，不列点了也没用的项。 */}
+            <div className="ygg-seed-row" style={{ marginBottom: 4, cursor: 'default' }}>
+              <span style={{ color: 'var(--ygg-accent-hi)' }}>导入这些内容：</span>
+            </div>
+            {options.map((o) => (
+              <label className="ygg-seed-row" key={o.id}>
+                <input type="checkbox" checked={parts.includes(o.id)} onChange={() => toggle(o.id)} />
+                <span>{o.label}</span>
+              </label>
+            ))}
             <div className="ygg-seed-warn">
-              <strong>导入会覆盖上面这些区块</strong>（文件里没有的区块保持不动）。
-              导入之后原来的组件与对话记忆就找不回来了 —— 想留就先导出一份。
+              <strong>导入会覆盖上面勾选的区块</strong>（没勾的、以及文件里没有的区块保持不动）。
+              {parts.length === 0
+                ? ' 一项都没勾 —— 现在导入等于什么都不做。'
+                : parts.includes('components') || parts.includes('history')
+                  ? ' 导入之后原来的组件与对话记忆就找不回来了 —— 想留就先导出一份。'
+                  : ' 这次不会动到组件与对话记忆。'}
             </div>
           </>
         ) : null}
         <div className="ygg-modal-actions">
           <button className="ygg-btn ghost" disabled={busy} onClick={() => setMode(null)}>取消</button>
-          <button className="ygg-btn" disabled={!seed || busy} onClick={() => void run()}>
+          <button className="ygg-btn" disabled={!seed || busy || parts.length === 0} onClick={() => void run()}>
             {busy ? '···' : '导入'}
           </button>
         </div>

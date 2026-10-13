@@ -153,9 +153,8 @@ export function WorkspacePanel() {
     <PanelWindow panel="workspace" title="工作区" minW={340} minH={300} onClose={() => setOpen(false)}>
       <div className="ygg-panel-body">
         <div className="ygg-hint" style={{ marginTop: 0 }}>
-          Agent 的**临时**加工台：它把文本/图片先放这里处理，再嵌进组件。
-          嵌进去的内容是**复制**的，所以这里删掉不会弄坏已经做好的界面。
-          你只能看和删 —— 写入口只给 Agent。点文件名可以展开查看。
+          Agent 的临时加工台。嵌进组件的内容是复制过去的，所以这里删掉不会弄坏界面。
+          你只能看和删；点文件名展开。
         </div>
 
         <div className="ygg-row-gap" style={{ marginTop: 8 }}>

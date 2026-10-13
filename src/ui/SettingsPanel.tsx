@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
 import { PanelWindow } from './PanelWindow';
 import { SECURITY_LEVELS, describePolicy, policyFor, type SecurityLevel } from '../kernel/security';
+import { Switch } from './Switch';
 
 type Section = 'general' | 'llm';
 
@@ -59,15 +60,33 @@ export function SettingsPanel() {
                 ))}
               </div>
             </div>
+            {/* 开关一律用滑块：状态由滑块位置表达，不用读文字 */}
             <div className="ygg-field">
-              <button
-                className={'ygg-toggle' + (adultOn ? ' on' : '')}
-                title={adultOn ? '成人模式：开（点击关闭）' : '成人模式：关（点击开启）'}
-                onClick={() => setSettings({ adultMode: !adultOn })}
-              >
-                <span className="dot" />
-                成人模式：{adultOn ? '开' : '关'}
-              </button>
+              <Switch
+                on={adultOn}
+                onChange={(v) => setSettings({ adultMode: v })}
+                label="成人模式"
+                title="涉及性 / 情色时按正当题材处理，不回避、不说教（服务商自己的策略仍绕不过）"
+              />
+            </div>
+            {/*
+              图片中转以前放在 LLM 区 —— 那是错的：它跟模型无关，
+              是"浏览器读不了跨域图时怎么办"的应用行为，所以归到常规。
+            */}
+            <div className="ygg-field">
+              <label className="ygg-label">图片中转（可选）</label>
+              <input
+                className="ygg-input"
+                value={settings.imageRelay ?? ''}
+                placeholder="留空 = 不中转，只直连读取"
+                onChange={(e) => setSettings({ imageRelay: e.target.value })}
+                spellCheck={false}
+              />
+              <div className="ygg-hint">
+                只在直连失败时用（跨域读图是浏览器硬规则）。它只递字节，不识别、不存储；
+                地址里可写 {'{url}'}。自建中转见仓库里的 <code>tools/image-relay-worker.js</code>。
+                <strong>第三方公共代理能看到你取的每一张图。</strong>
+              </div>
             </div>
           </div>
         ) : (
@@ -92,27 +111,6 @@ export function SettingsPanel() {
               />
             </div>
             <div className="ygg-field">
-              <label className="ygg-label">图片中转（可选）</label>
-              <input
-                className="ygg-input"
-                value={settings.imageRelay ?? ''}
-                placeholder="留空 = 不中转，只直连读取"
-                onChange={(e) => setSettings({ imageRelay: e.target.value })}
-                spellCheck={false}
-              />
-              <div className="ygg-hint">
-                跨域读图是浏览器的硬规则，页面里绕不过 —— 只有在直连失败时才会用到这个地址，
-                它只负责把字节递过来（不识别、不存储）。识别始终是"base64 交给当前模型"。
-                地址里可以写 {'{url}'}，会被替换成编码后的图片地址；不写就拼在末尾。
-              </div>
-              <div className="ygg-hint">
-                想完全解决：自己起一个中转（仓库里带了现成的 <code>tools/image-relay-worker.js</code>，
-                粘到 Cloudflare Worker 就能用），把地址填这里，例如
-                <code>https://你的域名/?url={'{url}'}</code>。
-                用第三方公共代理也行，但它能看到你取的每一张图。
-              </div>
-            </div>
-            <div className="ygg-field">
               <label className="ygg-label">Model</label>
               <input
                 className="ygg-input"
@@ -121,8 +119,7 @@ export function SettingsPanel() {
                 spellCheck={false}
               />
               <div className="ygg-hint">
-                识图需要支持视觉的模型（如 gpt-4o / claude-3.5 / qwen-vl）。
-                纯文本模型收到图片整条请求会失败，输入框会提示。
+                识图需要视觉模型（gpt-4o / claude-3.5 / qwen-vl 等）；纯文本模型收到图片会整条失败。
               </div>
             </div>
             <div className="ygg-field">

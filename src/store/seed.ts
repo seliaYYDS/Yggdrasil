@@ -218,21 +218,61 @@ export function describeSeed(seed: SeedFile): string[] {
 }
 
 /** 场景文件 → 落盘用的键值对。导入就是把它们写进存储再走一遍 hydrate()。 */
-export function seedStorageEntries(seed: SeedFile): [string, unknown][] {
+/**
+ * 场景文件 → 落盘用的键值对。
+ *
+ * parts 可选：只导入勾选的那些区块。**不传就全部导入**（老调用方的行为不变）。
+ *
+ * 依赖关系在这里处理，而不是让调用方去拼：
+ * - 组件与历史都放在 nodes / sessions 里，所以要它们任一被勾选就得带上那两个键；
+ * - "只导入历史"没有意义（历史依附于组件与输入框），这时自动按"组件 + 历史"处理；
+ * - 界面区块里的面板位置 / 层级是纯 UI 的，不勾就不写。
+ */
+export function seedStorageEntries(seed: SeedFile, parts?: SeedPart[]): [string, unknown][] {
   const d = seed.data;
+  const want = parts ? new Set(parts) : null;
+  const has = (p: SeedPart) => (want ? want.has(p) : true);
+  // "历史"依附于载体：单独勾它等于什么都没导入，所以连带组件一起要。
+  const withNodes = has('components') || has('history');
   const out: [string, unknown][] = [];
-  if (d.nodes) {
+
+  if (d.nodes && withNodes) {
     out.push(['nodes', d.nodes]);
     if (d.rootId) out.push(['rootId', d.rootId]);
   }
-  if (d.theme) out.push(['theme', d.theme]);
-  if (d.surfaces) out.push(['surfaces', d.surfaces]);
-  if (d.panels) out.push(['panels', d.panels]);
-  if (d.panelZ) out.push(['panelZ', d.panelZ]);
-  if (typeof d.z === 'number') out.push(['z', d.z]);
-  if (d.sessions) out.push(['sessions', d.sessions]);
-  if (d.settings) out.push(['settings', d.settings]);
+  if (d.theme && has('interface')) out.push(['theme', d.theme]);
+  if (d.surfaces && has('interface')) out.push(['surfaces', d.surfaces]);
+  if (d.panels && has('interface')) out.push(['panels', d.panels]);
+  if (d.panelZ && has('interface')) out.push(['panelZ', d.panelZ]);
+  if (typeof d.z === 'number' && has('interface')) out.push(['z', d.z]);
+  // 输入框（会话）本身属于"界面"，它们的对话内容属于"历史"。
+  if (d.sessions && (has('interface') || has('history'))) {
+    out.push([
+      'sessions',
+      // 只导入界面时把对话记忆剥掉：否则"导入界面"会顺手把别人的聊天记录带进来。
+      has('history')
+        ? d.sessions
+        : d.sessions.map((ses) => ({ ...ses, messages: [] })),
+    ]);
+  }
+  if (d.settings && has('settings')) out.push(['settings', d.settings]);
   return out;
+}
+
+/**
+ * 文件里可选的区块 —— 给导入对话框渲染勾选框用。
+ *
+ * 只列出**文件里真的有**的部分：不列那些点了也没用的项（比如文件里没有设置区块）。
+ */
+export function seedPartOptions(seed: SeedFile): { id: SeedPart; label: string; available: boolean }[] {
+  const d = seed.data;
+  const meta = (p: SeedPart) => SEED_PART_INFO.find((x) => x.id === p)?.label ?? p;
+  return [
+    { id: 'interface', label: meta('interface'), available: !!d.theme || !!d.surfaces || !!d.panels || !!d.sessions },
+    { id: 'components', label: meta('components'), available: !!d.nodes },
+    { id: 'history', label: meta('history'), available: !!d.nodes || !!d.sessions },
+    { id: 'settings', label: meta('settings'), available: !!d.settings },
+  ];
 }
 
 /** 导出文件名：yggdrasil-2026-02-14-1530.seed */
