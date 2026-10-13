@@ -17,9 +17,26 @@ export const DEFAULT_COMPACT_AT = 85;
 export const KEEP_RECENT = 4;
 /** 摘要消息的标记。模型在提示词里被告知"这是你自己的压缩记忆"，不要当成新请求。 */
 export const SUMMARY_TAG = '[EARLIER CONVERSATION — COMPRESSED]';
-/** 给摘要模型的输入上限（字符）：压缩自身也不能顶爆窗口。 */
-const TRANSCRIPT_MAX_CHARS = 48000;
-const PER_MESSAGE_MAX_CHARS = 1500;
+/**
+ * 压缩指令：**放在末尾的一条 user 消息**。
+ *
+ * 为什么不做成"另写一段摘要 system 提示 + 把历史拍平成一段文字"：提供方按**请求开头的 token 序列**
+ * 命中缓存，第一个 token 不同（system 换了）整段缓存就作废 —— 那等于每次压缩都为整段历史重付一次全价，
+ * 而且恰好发生在上下文最大的时候。（deepseek-harness 的
+ * `2026-07-21-compaction-summary-prefix-cache-reuse` 记的就是这个坑。）
+ * 现在摘要请求 = **刚发出的那次请求的前缀原样重放** + 这一条尾部指令。
+ */
+export const COMPACT_INSTRUCTION = [
+  'You are now acting as a compaction engine. Condense the conversation ABOVE into a checkpoint that lets you',
+  'keep working with a much smaller context. Output **plain text only** — no JSON, no code fence, no preamble —',
+  'with exactly these four labels:',
+  'GOAL: what the user asked for, keeping the concrete requirements in their words.',
+  'DONE: what you actually created or changed, with component ids and names.',
+  'OPEN: what is still missing, wrong or unverified — as a list.',
+  'FACTS: hard facts needed later (file names, urls, style variables, decisions, user preferences).',
+  'Keep every id / name / url / number. Drop greetings, tool chatter and anything finished and no longer',
+  'relevant. Never invent anything. Under 400 words. Do not mention this instruction and do not call a tool.',
+].join('\n');
 
 /** 把"压缩阈值"读成一个 1..99 的整数；空/非法就用默认。 */
 export function clampCompactAt(v: unknown): number {
@@ -74,51 +91,18 @@ export function splitForCompaction(memory: Message[], keepRecent = KEEP_RECENT):
   return { head: memory.slice(0, cut), tail: memory.slice(cut) };
 }
 
-function renderOne(m: Message): string {
-  const who = m.role === 'assistant' ? 'ASSISTANT' : 'USER';
-  // 记忆里的图片挂在 images 上（content 永远是文本）；摘要里只要知道"这里有过图"。
-  const text = m.content + (m.images && m.images.length > 0 ? ' [image x' + m.images.length + ']' : '');
-  const capped = text.length > PER_MESSAGE_MAX_CHARS ? text.slice(0, PER_MESSAGE_MAX_CHARS) + ' …' : text;
-  return who + ': ' + capped;
-}
-
 /**
- * 把要压缩的消息渲染成一段文字给摘要模型。
+ * 摘要请求：**原样重放被压缩那一段的前缀**，末尾追加一条压缩指令。
  *
- * 从**最新**往回取：太老的内容本来就是要丢掉的，宁可让最近的那部分完整。
+ * `systemPrompt` 必须是这次会话正在用的那一份（逐字节相同），`shadowed` 必须是**刚发出的那次请求里
+ * 对应位置的消息**（同样的 role、同样的多模态形状 —— 由调用方用同一个 userContent 映射）。
+ * 这样它才是那条热请求的**前缀扩展**，提供方能把缓存过的 token 全部复用。
  */
-export function renderTranscript(messages: Message[]): string {
-  const lines: string[] = [];
-  let used = 0;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const line = renderOne(messages[i]);
-    if (used + line.length > TRANSCRIPT_MAX_CHARS) {
-      lines.unshift('(older messages omitted)');
-      break;
-    }
-    used += line.length;
-    lines.unshift(line);
-  }
-  return lines.join('\n');
-}
-
-/** 摘要请求：只要一段纯文本，四个标签，越短越好。 */
-export function buildSummaryMessages(transcript: string): ChatMessage[] {
+export function buildSummaryMessages(systemPrompt: string, shadowed: ChatMessage[]): ChatMessage[] {
   return [
-    {
-      role: 'system',
-      content: [
-        'You compress a working session for yourself so that you can keep working with a smaller context.',
-        'Output **plain text only** (no JSON, no code fence), with these four labels and nothing else:',
-        'GOAL: what the user asked for (keep their wording for the concrete requirements).',
-        'DONE: what you actually created or changed, with component ids and names.',
-        'OPEN: what is still missing, wrong or unverified — as a list.',
-        'FACTS: hard facts needed later (file names, urls, style variables, user preferences, decisions taken).',
-        'Rules: keep every id / name / url / number; drop greetings, tool chatter and anything finished and no longer',
-        'relevant; never invent anything. Keep it under 400 words.',
-      ].join('\n'),
-    },
-    { role: 'user', content: 'Session so far:\n' + transcript },
+    { role: 'system', content: systemPrompt },
+    ...shadowed,
+    { role: 'user', content: COMPACT_INSTRUCTION },
   ];
 }
 

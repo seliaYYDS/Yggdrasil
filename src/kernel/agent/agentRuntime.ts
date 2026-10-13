@@ -19,7 +19,6 @@ import {
   compactedMemory,
   compactThresholdTokens,
   estimateTokensOf,
-  renderTranscript,
   splitForCompaction,
 } from './compact';
 import {
@@ -112,16 +111,25 @@ async function compactMemory(
   originId: NodeId,
   sessionId: string,
   settings: LlmSettings,
+  /** 这次会话正在用的系统提示（逐字节相同地重放，才能复用缓存）。 */
+  systemPrompt: string,
   signal?: AbortSignal,
 ): Promise<{ compacted: boolean; before: number; after: number; error?: string }> {
   const memory = sessionMemory(originId, sessionId);
   const before = memory.length;
   const { head, tail } = splitForCompaction(memory);
   if (head.length === 0) return { compacted: false, before, after: before, error: '没有可压缩的历史' };
+  /*
+   * 被压缩的那一段要**按请求里的样子**重放：同一个 userContent、同一套多模态形状、同样的顺序。
+   * 它正好是刚发出那次请求的开头（历史排在最前），所以这是一次"前缀扩展"而不是一次新请求。
+   */
+  const shadowed: ChatMessage[] = head
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({ role: m.role, content: userContent(m.content, m.images, settings.vision !== false) }));
   let call;
   try {
     // 压缩不需要流式回调（界面上只看到一条"压缩上下文"的轨迹），给一个空实现。
-    call = await chatWithRetry(settings, buildSummaryMessages(renderTranscript(head)), { onDelta: () => {} }, 2, signal);
+    call = await chatWithRetry(settings, buildSummaryMessages(systemPrompt, shadowed), { onDelta: () => {} }, 2, signal);
   } catch (e) {
     return { compacted: false, before, after: before, error: (e as Error).message };
   }
@@ -174,9 +182,15 @@ function pushMemory(originId: NodeId, sessionId: string, message: Message): void
 function historyMessages(
   nodeId: NodeId,
   sessionId: string,
-  input: string,
-  /** 历史能占的 token 上限；0 = 不设（压缩成功或窗口未知时都是 0）。 */
-  budgetTokens = 0,
+  /** 这一轮请求在记忆里的**原文**（与发出去的那条逐字节相同）；用它把本轮这条从历史里去掉。 */
+  requestText: string,
+  /**
+   * 历史能占的 token 上限：
+   *   undefined = **窗口未知** → 沿用老条数上限（保守）；
+   *   0         = 知道窗口、长度交给压缩管 → 不设上限；
+   *   > 0       = 到阈值了但压缩没成功 → 按预算丢最老的兜底。
+   */
+  budgetTokens?: number,
 ): ChatMessage[] {
   const settings = useDesktopStore.getState().settings;
   const all = sessionMemory(nodeId, sessionId);
@@ -184,19 +198,17 @@ function historyMessages(
    * ⚠ **必须先复制再动**：这份数组就是会话记忆本身，下面那个 `pop()` 会把真实记忆删掉。
    */
   const list =
-    budgetTokens > 0
-      ? all.slice()
-      : all.length > MAX_HISTORY_MESSAGES + HISTORY_TRIM_SLACK
-        ? all.slice(-MAX_HISTORY_MESSAGES)
-        : all.slice();
+    budgetTokens === undefined && all.length > MAX_HISTORY_MESSAGES + HISTORY_TRIM_SLACK
+      ? all.slice(-MAX_HISTORY_MESSAGES)
+      : all.slice();
   // 先去掉"这一轮的请求"（它下面单独发），预算只管历史。
-  if (list.length > 0 && list[list.length - 1].content === input) list.pop();
+  if (list.length > 0 && list[list.length - 1].content === requestText) list.pop();
   /*
    * **溢出兜底**：整份请求已经到阈值，而压缩没能把记忆变短（没有 key / 摘要失败 /
    * 某一轮单独就超了）。这时从最新往回装，装不下就丢最老的整块 ——
    * 宁可丢历史，也不要让这一轮因为超出窗口而失败。正常路径（压缩成功）不会走到这里。
    */
-  if (budgetTokens > 0 && list.length > 0) {
+  if (budgetTokens !== undefined && budgetTokens > 0 && list.length > 0) {
     let used = 0;
     let keep = list.length;
     for (let i = list.length - 1; i >= 0; i -= 1) {
@@ -431,6 +443,9 @@ function recordUsage(
       cachedIn: call.usage.cachedTokens,
       msTotal: Math.max(1, call.ms),
       exact: true,
+      // "最近一次"是给界面看的直接读数：累计值会被冷启动拖住。
+      lastTokensIn: call.usage.promptTokens,
+      lastCachedIn: call.usage.cachedTokens,
     });
     return;
   }
@@ -440,6 +455,8 @@ function recordUsage(
     cachedIn: 0,
     msTotal: Math.max(1, call.ms),
     exact: false,
+    lastTokensIn: estimateTokens('x'.repeat(promptChars)),
+    lastCachedIn: 0,
   });
 }
 
@@ -584,9 +601,6 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
   const runId = newId();
   store.beginSessionTrace(sessionId, runId);
   store.setSessionStatus(sessionId, { running: true, phase: '准备上下文', detail: '', round: 0, runId });
-  // 记忆里也**不**存文件内容；要读就再读一次（文件还在工作区）。
-  pushMemory(originId, sessionId, { role: 'user', content: input });
-
   /*
    * 档位分流。
    *
@@ -594,8 +608,21 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
    * act 档才需要下面那一整套（接口目录、JSON 解析、多轮、观察回灌、账本、作用域）。
    */
   if (isAgentic(origin) && origin.agent.mode === 'reply') {
+    // reply 档的请求没有标记，记忆里存的就是原文 —— 发出去的与存下来的逐字节相同。
+    // 记忆里也**不**存文件内容；要读就再读一次（文件还在工作区）。
+    pushMemory(originId, sessionId, { role: 'user', content: input });
     return runReply(input, originId, sessionId, runId, [], options.signal);
   }
+  /*
+   * act 档这一轮用户消息的**唯一拼法**：它既是发出去的那条请求，也是写进记忆的那条。
+   *
+   * 两处必须是同一个字符串。以前发的是带 [CURRENT REQUEST] 标记的版本、存的却是不带标记的原文，
+   * 于是下一轮的历史里同一条消息短了十几个字符 —— **前缀缓存正是从那里断开**，后面那条旧请求
+   * 连同整段尾部全部作废（实测换轮只有 77% 能命中）。日志式请求的关键就在这：**只追加，不改写过的东西**。
+   * 代价是历史里的旧请求也带着这个标记，所以提示词里那条规则改成"只处理**最后一条**带标记的"。
+   */
+  const requestText = CURRENT_REQUEST_TAG + '\n' + input + uploadNote;
+  pushMemory(originId, sessionId, { role: 'user', content: requestText });
 
   const pushStep = (step: TraceStep) => useDesktopStore.getState().upsertSessionStep(sessionId, step);
   const setRunStatus = (patch: Partial<RunStatus>): void =>
@@ -716,10 +743,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         const systemMessage: ChatMessage = { role: 'system', content: systemPrompt };
         // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
         // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
-        const requestMessage: ChatMessage = {
-          role: 'user',
-          content: userContent(CURRENT_REQUEST_TAG + '\n' + input + uploadNote),
-        };
+        const requestMessage: ChatMessage = { role: 'user', content: userContent(requestText) };
         const tailMessage: ChatMessage = {
           role: 'user',
           content:
@@ -731,9 +755,9 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           if (threshold <= 0) return 0;
           return Math.max(0, threshold - estimateTokensOf([systemMessage, requestMessage, tailMessage]));
         };
-        const buildMessages = (budgetTokens: number): ChatMessage[] => [
+        const buildMessages = (budgetTokens: number | undefined): ChatMessage[] => [
           systemMessage,
-          ...historyMessages(originId, sessionId, input, budgetTokens),
+          ...historyMessages(originId, sessionId, requestText, budgetTokens),
           requestMessage,
           tailMessage,
         ];
@@ -741,10 +765,11 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
          * 先**完整**拼一份（不削历史）再看有没有到阈值：
          * 顺序反了的话，"按预算削历史"会抢在压缩前面动手 —— 那就又变回了截断。
          */
-        let messages = buildMessages(0);
         const thresholdTokens = compactThresholdTokens(store.settings.contextWindow, store.settings.compactAt);
+        // 窗口未知（threshold 0）→ 0 会变成"不设上限"，那是错的，要传 undefined 走保守分支。
+        let messages = buildMessages(thresholdTokens > 0 ? 0 : undefined);
         if (thresholdTokens > 0 && estimateTokensOf(messages) > thresholdTokens) {
-          const res = await compactMemory(originId, sessionId, store.settings, signal);
+          const res = await compactMemory(originId, sessionId, store.settings, systemPrompt, signal);
           // 压成功 → 记忆短了，重拼；压不成 → 重拼时给历史一个预算兜底。
           messages = buildMessages(res.compacted ? 0 : historyBudget());
           pushStep({
@@ -765,18 +790,10 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           store.log(res.compacted ? 'info' : 'warn', res.compacted ? 'compact ' + res.before + ' → ' + res.after + ' 条' : 'compact ✕ ' + (res.error ?? '未知'));
         }
         /*
-         * **最快的缓存前缀**：稳定系统提示 → 历史 → 本次请求 → 观察回灌 → 本轮的快照。
-         *
-         * 逐轮会变的只有最后那一条：观察回灌只会在尾部追加（所以上一轮那段仍能复用），
-         * 快照排在它后面（它每轮都变，放最后才不污染前面任何东西）。
-         * 以前快照在系统提示里，导致历史与请求每轮全部重算 —— 命中率就是这么丢的。
+         * 这里曾经又 push 了一条"观察回灌 + 快照" —— buildMessages() 里已经拼过同一条，
+         * 于是每条请求都把这段尾部发两遍：白烧 token，还把"每轮只有一条会变"变成两条
+         * （实测同一轮 R1→R2 的字节前缀只有 75%）。删掉，只留 buildMessages 里那一份。
          */
-        messages.push({
-          role: 'user',
-          content:
-            (observationLog.length > 0 ? buildObservationPrompt(observationLog) + '\n\n' : '') +
-            snapshotPrompt,
-        });
 
         // 正文与思考分开收集：思考单独展示，不参与 JSON 解析。
         let buffer = '';

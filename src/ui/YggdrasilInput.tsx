@@ -3,6 +3,7 @@ import { useShallow } from 'zustand/react/shallow';
 import {
   avgTps,
   hitRate,
+  stepHitRate,
   useDesktopStore,
   type InputSession,
   type SessionMetrics,
@@ -65,7 +66,13 @@ export function compactCount(n: number): string {
 function metricsText(m?: SessionMetrics): string {
   if (!m || m.runs === 0) return '';
   const total = compactCount(m.tokensIn + m.tokensOut);
-  const rate = hitRate(m);
+  /*
+   * 主显示是**最近一次请求**的命中率，不是累计值。
+   *
+   * 累计值被冷启动拖着：每个会话的第一次请求必然 0%，压缩改写历史之后那一次也一样 ——
+   * 短会话里它根本反映不出缓存有没有起作用（用户看到的"命中率太低"有一半是这个口径造成的）。
+   */
+  const rate = stepHitRate(m);
   const rateText = rate === null ? '—' : Math.round(rate * 100) + '%';
   const speed = avgTps(m).toFixed(1);
   // 有一位是估算的就在整串前面加 ~：三个数里最可能被当成精确值的就是它们。
@@ -324,9 +331,12 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
             className="ygg-metrics"
             title={
               (metrics.exact ? '' : '（含本地估算，数字前带 ~）') +
-              '本会话整体：命中 ' + metrics.cachedIn.toLocaleString() + ' / 输入 ' +
+              '最近一次请求：命中 ' + metrics.lastCachedIn.toLocaleString() + ' / 输入 ' +
+              metrics.lastTokensIn.toLocaleString() + ' = ' +
+              Math.round((stepHitRate(metrics) ?? 0) * 100) + '%；' +
+              '本会话累计：命中 ' + metrics.cachedIn.toLocaleString() + ' / 输入 ' +
               metrics.tokensIn.toLocaleString() + ' = ' +
-              Math.round((hitRate(metrics) ?? 0) * 100) + '%；输出 ' +
+              Math.round((hitRate(metrics) ?? 0) * 100) + '%（含会话第一次与每次压缩后的冷启动）；输出 ' +
               metrics.tokensOut.toLocaleString() + '；累计生成 ' +
               (metrics.msTotal / 1000).toFixed(1) + ' 秒'
             }

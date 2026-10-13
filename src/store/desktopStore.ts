@@ -49,10 +49,19 @@ export interface SessionMetrics {
   runs: number;
   /** true = 数字全部来自服务端 usage；false = 含本地估算（界面会标 ~）。 */
   exact: boolean;
+  /**
+   * **最近一次请求**的输入 token 与其中的命中数。
+   *
+   * 为什么单独记：累计命中率会被"每个会话的第一次请求必然 0%"拖住（压缩之后那一次也一样），
+   * 短会话里那个数字根本不能反映真实的缓存表现。界面主显示的是最近一次，
+   * 累计值放在悬浮说明里，并注明它含冷启动。
+   */
+  lastTokensIn: number;
+  lastCachedIn: number;
 }
 
 export function emptyMetrics(): SessionMetrics {
-  return { tokensIn: 0, tokensOut: 0, cachedIn: 0, msTotal: 0, runs: 0, exact: true };
+  return { tokensIn: 0, tokensOut: 0, cachedIn: 0, msTotal: 0, runs: 0, exact: true, lastTokensIn: 0, lastCachedIn: 0 };
 }
 
 /**
@@ -65,10 +74,24 @@ export function avgTps(m: Pick<SessionMetrics, 'tokensOut' | 'msTotal'>): number
   return m.tokensOut / (m.msTotal / 1000);
 }
 
-/** 整体命中率 = 累计命中 / 累计输入。0..1；没有输入时返回 null（"还没有数据"，不是 0）。 */
+/**
+ * 累计命中率 = 累计命中 / 累计输入。0..1；没有输入时返回 null（"还没有数据"，不是 0）。
+ *
+ * 注意它**包含冷启动**：每个会话的第一次请求必然全部不命中，压缩改写历史之后那一次也一样 ——
+ * 所以它天然低于"最近一次"。界面主显示用 stepHitRate，这个放悬浮说明。
+ */
 export function hitRate(m: Pick<SessionMetrics, 'tokensIn' | 'cachedIn'>): number | null {
   if (m.tokensIn <= 0) return null;
   return m.cachedIn / m.tokensIn;
+}
+
+/**
+ * **最近一次请求**的命中率。这才是"缓存有没有起作用"的直接读数
+ * （deepseek-harness 的 TurnUsagePanel 也是按一轮显示，而不是拿整段日志的平均值）。
+ */
+export function stepHitRate(m: Pick<SessionMetrics, 'lastTokensIn' | 'lastCachedIn'>): number | null {
+  if (!m.lastTokensIn || m.lastTokensIn <= 0) return null;
+  return m.lastCachedIn / m.lastTokensIn;
 }
 
 export interface RunStatus {
@@ -777,10 +800,7 @@ interface DesktopState {
   /** 会话 id -> 是否该会话还有排队项。 */
   clearQueue: (id: string) => void;
   /** 累加一次运行的用量（token / 速度 / 缓存命中）。 */
-  addMetrics: (
-    id: string,
-    delta: Partial<SessionMetrics> & { tokensIn?: number; tokensOut?: number; msTotal?: number },
-  ) => void;
+  addMetrics: (id: string, delta: Partial<SessionMetrics>) => void;
   /** 追加一条消息到这个会话的记忆（基底 agent 的对话按会话分开）。 */
   appendSessionMessage: (id: string, message: Message) => void;
   /**
@@ -2038,6 +2058,9 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
             runs: m.runs + 1,
             // 只要有一次是估算的，整体就标成非精确（界面上带 ~）。
             exact: m.exact && delta.exact !== false,
+            // "最近一次"是**覆盖**而不是累加：累计值会被冷启动拖住，界面主显示用它。
+            lastTokensIn: delta.lastTokensIn ?? 0,
+            lastCachedIn: delta.lastCachedIn ?? 0,
           },
         };
       }),
