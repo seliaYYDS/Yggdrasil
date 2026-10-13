@@ -199,7 +199,7 @@ export function TracePanel() {
                       <span className="spacer" />
                       <span className="dur">{step.status === 'running' ? '…' : duration(step)}</span>
                     </div>
-                    <div className="ygg-step-sum">{step.summary}</div>
+                    {step.summary ? <div className="ygg-step-sum">{step.summary}</div> : null}
 
                     {/*
                       展开后能看到模型的**思考过程**与原始输出。

@@ -227,17 +227,30 @@ export async function executeOps(
   return { outcomes, createdIds, tokensBefore, steps };
 }
 
+/**
+ * 一步的"要点"：把这条指令里最能定位它的字段挑出来。
+ *
+ * 两点约定：
+ * - **没有要点就返回空串**。这里原来返回一个 '—' 占位，于是界面上出现
+ *   "抓取网页 · —" 这种尾巴（状态行是 `label + ' · ' + summary` 拼的）——
+ *   占位符只该出现在"整块内容为空"的地方，不该塞进拼接串里。
+ * - 抓取 / 浏览器这类操作的要点就是 **url**（不然一行字里看不出它在操作什么）。
+ */
 function summarize(op: DerivationOp): string {
   const parts: string[] = [];
   if (typeof op.id === 'string') parts.push('id=' + op.id);
   if (typeof op.surface === 'string') parts.push('surface=' + op.surface);
   if (typeof op.name === 'string') parts.push('name=' + op.name);
   if (typeof op.before === 'string') parts.push('before=' + op.before);
+  if (typeof op.url === 'string' && op.url) parts.push('url=' + op.url);
+  if (typeof op.panel === 'string') parts.push('panel=' + op.panel);
+  if (typeof op.state === 'string') parts.push('state=' + op.state);
   if (op.tokens && typeof op.tokens === 'object') {
     parts.push('tokens=' + Object.keys(op.tokens).join('/'));
   }
   if (typeof op.source === 'string') parts.push('source=' + op.source.length + 'B');
-  return parts.join(' ') || '—';
+  if (typeof op.script === 'string') parts.push('script=' + op.script.length + 'B');
+  return parts.join(' ');
 }
 
 /** 回滚一轮执行：撤销新建的节点与样式变量改动。 */

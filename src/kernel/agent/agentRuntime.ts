@@ -953,7 +953,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             pushStep(step);
             setRunStatus({
               phase: '执行 ' + (step.index + 1) + '/' + plan.ops.length,
-              detail: step.label + ' · ' + step.summary,
+              // 要点为空时只显示标签 —— 别拼出"抓取网页 · "这种空尾巴。
+              detail: step.summary ? step.label + ' · ' + step.summary : step.label,
               round,
             });
           },
