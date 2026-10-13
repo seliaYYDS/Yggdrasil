@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
 import { PanelWindow } from './PanelWindow';
+import { SECURITY_LEVELS, describePolicy, policyFor, type SecurityLevel } from '../kernel/security';
 
 type Section = 'general' | 'llm';
 
@@ -20,6 +21,8 @@ export function SettingsPanel() {
   if (!open) return null;
 
   const adultOn = settings.adultMode === true;
+  const level: SecurityLevel = (settings.securityLevel ?? 'normal') as SecurityLevel;
+  const policy = policyFor(level);
 
   return (
     <PanelWindow panel="settings" title="设置" minW={300} minH={280} onClose={() => setOpen(false)}>
@@ -35,6 +38,27 @@ export function SettingsPanel() {
 
         {section === 'general' ? (
           <div className="ygg-form">
+            <div className="ygg-field">
+              <label className="ygg-label">安全等级</label>
+              <div className="ygg-seg">
+                {SECURITY_LEVELS.map((lv) => (
+                  <button
+                    key={lv}
+                    className={level === lv ? 'on' : ''}
+                    title={policyFor(lv).summary}
+                    onClick={() => setSettings({ securityLevel: lv })}
+                  >
+                    {policyFor(lv).label}
+                  </button>
+                ))}
+              </div>
+              {/* 说明逐条来自 policy 表 —— 等级改了这里自动跟着改，不会和实际行为对不上 */}
+              <div className="ygg-hint">
+                {describePolicy(policy).map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))}
+              </div>
+            </div>
             <div className="ygg-field">
               <button
                 className={'ygg-toggle' + (adultOn ? ' on' : '')}

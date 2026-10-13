@@ -1,3 +1,5 @@
+import type { SecurityLevel } from '../security';
+
 export interface LlmSettings {
   baseUrl: string;
   apiKey: string;
@@ -21,6 +23,14 @@ export interface LlmSettings {
    * —— 服务端该拒还是会拒；② 涉及未成年人的性内容与其它违法内容始终不在此列。
    */
   adultMode?: boolean;
+  /**
+   * 安全等级。**默认 normal。**
+   *
+   * 它决定"在 Worker 隔离之上再追加多少约束"：插件 js 工具能不能跑、
+   * 一次调用能发几个请求、插件能不能读到密钥、未签名的包收不收。
+   * 具体每一档的差别集中在 src/kernel/security.ts 的表里（界面说明与执行检查读同一份）。
+   */
+  securityLevel?: SecurityLevel;
 }
 
 export const DEFAULT_SETTINGS: LlmSettings = {
@@ -31,6 +41,7 @@ export const DEFAULT_SETTINGS: LlmSettings = {
   // 刻意留空：默认不经过任何第三方。
   imageRelay: '',
   adultMode: false,
+  securityLevel: 'normal',
 };
 
 /** 多模态消息的内容块（OpenAI 兼容格式）。 */

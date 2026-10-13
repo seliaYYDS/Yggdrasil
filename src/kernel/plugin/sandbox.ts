@@ -17,12 +17,23 @@ export interface SandboxJob {
   /** 工具源码：一个函数表达式（async (args, ctx) => ...）。 */
   source: string;
   args: Record<string, unknown>;
-  /** 用户填的字段（含密钥）—— 工具可以用 ctx.fields 读，但它不该写进返回值。 */
+  /**
+   * 工具在 ctx.fields 里能看到的字段。
+   *
+   * **调用方按安全等级过滤过了**：高/标准档把 secret 字段去掉（给空串）。
+   * 沙箱自己不判断等级 —— 它拿到的就是允许看到的那一份。
+   */
   fields: Record<string, string>;
   plugin: { id: string; name: string; version: string };
   timeoutMs: number;
   /** 允许 ctx.fetch 访问的主机（就是插件生效的那份白名单）。 */
   allowHosts: string[];
+  /** 一次调用最多几次 ctx.fetch（安全等级决定；Infinity = 不限）。 */
+  maxFetches?: number;
+  /** 单次响应正文最多取多少字符（安全等级决定）。 */
+  maxResponseBytes?: number;
+  /** 工具日志单条上限（安全等级决定）。 */
+  logChars?: number;
   /** 桥接出去的请求；默认用全局 fetch。测试里可以换成桩。 */
   fetchImpl?: typeof fetch;
 }
@@ -67,6 +78,10 @@ export async function runTool(job: SandboxJob): Promise<SandboxResult> {
 export const WORKER_SHIM = [
   'const pending = new Map();',
   'let seq = 0;',
+  '// 配额：主线程也会独立计数（双保险），这里先在源头拦住。',
+  'let fetched = 0;',
+  'let quota = Infinity;',
+  'let logCap = 400;',
   "self.addEventListener('message', async (e) => {",
   '  const m = e.data || {};',
   "  if (m.type === 'fetch-result') { const p = pending.get(m.id); if (p) { pending.delete(m.id); p(m.result); } return; }",
@@ -92,12 +107,18 @@ export const WORKER_SHIM = [
   '  // navigator.sendBeacon 是另一条能带上数据的出口，整块拿走。',
   '  try { if (typeof self.navigator !== "undefined") self.navigator = undefined; } catch (err) {}',
   '  try { if (typeof self.location !== "undefined") self.location = undefined; } catch (err) {}',
+  '  quota = typeof m.maxFetches === "number" ? m.maxFetches : Infinity;',
+  '  logCap = typeof m.logChars === "number" ? m.logChars : 400;',
   '  const ctx = {',
   '    args: m.args,',
   '    fields: m.fields,',
   '    plugin: m.plugin,',
-  "    log: (t) => self.postMessage({ type: 'log', text: String(t).slice(0, 400) }),",
+  "    log: (t) => self.postMessage({ type: 'log', text: String(t).slice(0, logCap) }),",
   '    fetch: (url, init) => new Promise((resolve, reject) => {',
+  '      if (fetched >= quota) {',
+  "        return reject(new Error('这次调用已经用完联网配额（' + quota + ' 个请求）。要更多就把设置里的安全等级调低一档。'));",
+  '      }',
+  '      fetched += 1;',
   '      const id = ++seq;',
   '      pending.set(id, (r) => {',
   "        if (!r) return reject(new Error('fetch 没有结果'));",
@@ -125,6 +146,7 @@ export async function bridgeFetch(
   init: unknown,
   allowHosts: string[],
   fetchImpl: typeof fetch,
+  maxBytes = 200000,
 ): Promise<Record<string, unknown>> {
   let url: URL;
   try {
@@ -140,7 +162,7 @@ export async function bridgeFetch(
     const res = await fetchImpl(url.href, (init as RequestInit) || undefined);
     const text = await res.text();
     // 工具拿到的正文也限制一下：不然一个 100MB 的响应会先炸内存再炸上下文。
-    return { ok: res.ok, status: res.status, text: text.slice(0, 200000) };
+    return { ok: res.ok, status: res.status, text: text.slice(0, maxBytes) };
   } catch (e) {
     return { error: '请求 ' + url.hostname + ' 失败：' + (e as Error).message };
   }
@@ -168,20 +190,26 @@ async function runInWorker(job: SandboxJob): Promise<SandboxResult> {
     }, job.timeoutMs);
 
     worker.onmessage = (e: MessageEvent) => {
+      void (async () => {
       const m = (e.data || {}) as Record<string, unknown>;
       if (m.type === 'log') {
-        logs.push(String(m.text).slice(0, 400));
+        // 主线程侧也按等级截一次（Worker 侧已截，这里是双保险）
+        logs.push(String(m.text).slice(0, job.logChars ?? 400));
         return;
       }
       if (m.type === 'fetch') {
         fetches += 1;
-        void bridgeFetch(String(m.url), m.init, job.allowHosts, fetchImpl).then((result) => {
-          worker.postMessage({ type: 'fetch-result', id: m.id, result });
-        });
+        // 双保险：Worker 侧已经拦过配额，这里再拦一次（万一 shim 没生效）。
+        const overQuota = job.maxFetches !== undefined && fetches > job.maxFetches;
+        const result = overQuota
+          ? { error: '这次调用已经用完联网配额（' + job.maxFetches + ' 个请求）。' }
+          : await bridgeFetch(String(m.url), m.init, job.allowHosts, fetchImpl, job.maxResponseBytes);
+        worker.postMessage({ type: 'fetch-result', id: m.id, result });
         return;
       }
       if (m.type === 'done') return finish({ ok: true, value: m.value, logs, fetches });
       if (m.type === 'error') return finish({ ok: false, error: String(m.message), logs, fetches });
+      })();
     };
     worker.onerror = (e: ErrorEvent) => finish({ ok: false, error: 'Worker 出错：' + (e.message || '未知'), logs, fetches });
 
@@ -191,6 +219,8 @@ async function runInWorker(job: SandboxJob): Promise<SandboxResult> {
       args: job.args,
       fields: job.fields,
       plugin: job.plugin,
+      maxFetches: job.maxFetches ?? Infinity,
+      logChars: job.logChars ?? 400,
     });
   });
 }

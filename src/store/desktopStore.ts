@@ -27,6 +27,7 @@ import {
 import { exportSurfaceStates, importSurfaceStates } from '../kernel/registry/surfaceRegistry';
 import { buildSeed, seedStorageEntries, type SeedFile, type SeedPart } from './seed';
 import { syncPluginRuntime } from '../kernel/plugin/runtime';
+import { policyFor } from '../kernel/security';
 import type { InstalledPlugin, PluginPackage } from '../kernel/plugin/types';
 
 /**
@@ -1606,6 +1607,18 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   installPlugin: (pkg, source) => {
     const manifest = pkg.manifest;
+    /*
+     * 高安全档只收已签名的包。
+     * 检查放在这里（而不是只在界面上禁用按钮）—— 导入 .seed 之类的路径也可能走到安装。
+     */
+    const policy = policyFor(get().settings.securityLevel);
+    if (policy.requireSignature && pkg.signature !== 'ok') {
+      throw new Error(
+        '安全等级「' + policy.label + '」要求插件必须已签名，这个包是「' +
+          (pkg.signature === 'none' ? '未签名' : pkg.signature === 'unsupported' ? '环境无法验证签名' : '签名无效') +
+          '」。请在设置里降低安全等级，或改用已签名的插件包。',
+      );
+    }
     /*
      * 装：清单 + guide + 用户字段的默认值。
      * 同 id 视为**升级**：保留用户已填的值（填一次密码不该因为升级就丢），

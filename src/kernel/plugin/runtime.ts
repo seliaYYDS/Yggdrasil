@@ -3,6 +3,8 @@ import { fail, ok, str, strOr, type OpContext, type OpResult } from '../bus/opCo
 import { listInterfaces, registerInterface, unregisterInterface } from '../registry/interfaceRegistry';
 import { hostAllowed, versionAtLeast } from './package';
 import { runTool, toolSandboxKind } from './sandbox';
+import { policyFor, type SecurityPolicy } from '../security';
+import { useDesktopStore } from '../../store/desktopStore';
 import type { InstalledPlugin, PluginEndpoint, PluginTool } from './types';
 
 /**
@@ -18,6 +20,27 @@ import type { InstalledPlugin, PluginEndpoint, PluginTool } from './types';
 
 /** 当前已安装且**已启用**的插件（plugin_docs 与提示词都读它）。 */
 let current: InstalledPlugin[] = [];
+
+/** 当前安全策略（从设置里读；设置坏了就按默认档）。 */
+export function securityPolicy(): SecurityPolicy {
+  return policyFor(useDesktopStore.getState().settings.securityLevel);
+}
+
+/**
+ * 工具能看到的字段：按等级决定要不要把 secret 字段抹掉。
+ *
+ * 抹成空串而不是删掉键 —— 这样插件写 ctx.fields.token 仍然是字符串，
+ * 不会因为"键不存在"而抛错或走进奇怪的 else 分支，行为只是"没配"。
+ */
+export function visibleFields(plugin: InstalledPlugin, policy: SecurityPolicy): Record<string, string> {
+  if (policy.exposeSecretsToTools) return { ...plugin.values };
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(plugin.values)) {
+    const field = plugin.fields.find((f) => f.key === k);
+    out[k] = field?.secret ? '' : v;
+  }
+  return out;
+}
 
 export function pluginKind(pluginId: string, name: string): string {
   return pluginId + '.' + name;
@@ -351,15 +374,31 @@ function registerToolInterface(plugin: InstalledPlugin, tool: PluginTool): void 
     handler: async (op: DerivationOp): Promise<OpResult> => {
       const source = plugin.files[tool.file];
       if (!source) return fail('插件包里找不到 ' + tool.file + '（装的时候没带进来？）。');
+      const policy = securityPolicy();
+      /*
+       * 高安全档直接不执行 —— 连"限制着跑"都不做。
+       * 理由：js 工具的价值是"声明式表达不了的那点逻辑"，在最高安全档下，
+       * "代码来自别人"这件事本身就不该被接受；声明式端点不受影响（那是数据不是代码）。
+       */
+      if (!policy.allowPluginTools) {
+        return fail(
+          '当前安全等级是「' + policy.label + '」，**禁止执行插件自带的 js 工具**。' +
+            '要用它请在设置里把安全等级降到「标准」或更低；声明式端点不受影响。',
+        );
+      }
       const collected = collectParams({ params: tool.params ?? [] } as PluginEndpoint, op);
       if (!collected.ok) return fail(collected.error);
       const res = await runTool({
         source,
         args: collected.params,
-        fields: plugin.values,
+        // **密钥遮蔽**：不给工具看 secret 字段（等级决定），它拿到的就是允许看到的那份。
+        fields: visibleFields(plugin, policy),
         plugin: { id: plugin.id, name: plugin.name, version: plugin.version },
         timeoutMs: tool.timeoutMs ?? 8000,
         allowHosts: effectiveHosts(plugin),
+        maxFetches: policy.fetchPerCall,
+        maxResponseBytes: policy.responseBytes,
+        logChars: policy.logChars,
       });
       const head = plugin.name + ' · ' + tool.label;
       if (!res.ok) {
@@ -562,6 +601,14 @@ export async function checkPluginUpdate(
 /** 提示词里的插件段：每个插件一行，**不塞指南**。 */
 export function pluginsText(): string {
   if (current.length === 0) return '';
+  const policy = securityPolicy();
+  const note =
+    '\n(current security level: **' + policy.level + '** — ' +
+    (policy.allowPluginTools
+      ? 'plugin js tools run with a fetch budget of ' + (policy.fetchPerCall === Infinity ? 'no limit' : policy.fetchPerCall) + ' per call'
+      : 'plugin js tools are **disabled**; declarative operations still work') +
+    (policy.exposeSecretsToTools ? '' : ', and plugin tools cannot read secret fields') +
+    ')';
   return current
     .map((p) => {
       const kinds = p.endpoints.map((e) => pluginKind(p.id, e.name)).join(', ');
@@ -573,5 +620,5 @@ export function pluginsText(): string {
         (uis ? '\n  screens it can put up (use plugin_ui with this id): ' + uis : '') +
         '\n  read its guide with plugin_docs("' + p.id + '") before using it.';
     })
-    .join('\n');
+    .join('\n') + note;
 }
