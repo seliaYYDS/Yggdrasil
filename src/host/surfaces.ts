@@ -18,8 +18,10 @@ export function registerBuiltinSurfaces(): void {
     description: 'The title bar at the top of every window, holding the title and the window buttons. Once replaced, every window uses your version.',
     propsHint: '{ title, kindLabel, actions: {label,title,danger,onClick}[], onMinimize?, onDelete? }',
     // 拖拽 / 缩放 / 最小化 / 删除都从这条标题栏发起。
-    // 换掉它 = 拆掉所有窗口的基础操作，所以标记为关键并明确禁止。
+    // 基础能力已经上移到窗口容器层，所以替换它不会让窗口变成拖不动；
+    // 但它仍然是**默认界面的结构**：换掉要弹一次确认让用户能还原。
     critical: true,
+    defaultWindow: true,
     capabilityHint:
       'Dragging the window, minimising, deleting and focusing (raising the layer). If you put buttons in a custom title bar,' +
       'give them class="ygg-winbtn" — the drag test uses that class to exclude the button area,' +
@@ -29,6 +31,36 @@ export function registerBuiltinSurfaces(): void {
       'and the buttons on the right (minimise / delete, class="ygg-winbtn"). Height 30px;' +
       'the drag test is handled by the window container: a drag starts when the press is within the top 30px of the container and not on .ygg-winbtn.',
   });
+
+  /*
+   * 常驻面板的**结构插槽**。
+   *
+   * 面板内置实现是宿主代码（读不到源码），所以 props 里一定带 `children` ——
+   * **内置内容本身**（一个 React 元素）。想"只改结构、不丢功能"就把它放进自己的布局里；
+   * 想整块换掉就不渲染它。数据（节点、轨迹、文件列表……）不经过 props：
+   * 它们活在宿主状态里，由面板自己读；要数据用 inspect / list_nodes / ws_list / ws_read。
+   *
+   * 这些插槽都标 defaultWindow：改完会弹一次确认，用户可以选择把结构还原。
+   */
+  const panelSlot = (key: string, label: string, description: string): void =>
+    registerSurface({
+      id: 'panel.' + key,
+      label,
+      description,
+      propsHint: '{ panel, title, close, children }',
+      defaultWindow: true,
+      builtinHint:
+        'The built-in body of this panel. Its source is host code and is not readable — pass it through by rendering' +
+        ' the `children` prop inside your own structure, or drop it and draw the panel yourself (no panel data is' +
+        ' passed as props; read what you need with inspect / list_nodes / ws_list).',
+    });
+
+  panelSlot('input', '输入框', 'The composer window body: the text field, the queue, the send button and the metrics line. Replacing it changes how the user talks to the agent.');
+  panelSlot('inspector', '节点面板', 'The Nodes panel body: the tree of agents, components, tools and surface slots. Replacing it changes how the user browses the desktop.');
+  panelSlot('trace', '轨迹面板', 'The Trace panel body: every session\'s run steps, with the filters and the expandable raw output. Replacing it changes how the user reads what the agent did.');
+  panelSlot('settings', '设置面板', 'The Settings panel body: model, provider, context window, security level. Replacing it changes where the user configures the LLM.');
+  panelSlot('plugins', '插件面板', 'The Plugins panel body: installed plugins, their fields and their signatures. Replacing it changes how the user manages plugins.');
+  panelSlot('workspace', '工作区面板', 'The Workspace panel body: the files the agent can read and write. Replacing it changes how the user browses those files.');
 
   registerSurface({
     id: 'desktop.background',

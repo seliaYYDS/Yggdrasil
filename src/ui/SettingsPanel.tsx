@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
+import { Surface } from '../host/Surface';
 import { PanelWindow } from './PanelWindow';
 import { SECURITY_LEVELS, describePolicy, policyFor, type SecurityLevel } from '../kernel/security';
 import { Switch } from './Switch';
@@ -70,8 +71,12 @@ export function SettingsPanel() {
   const currentProvider = providerFor(settings.baseUrl);
   const providerValue = currentProvider && currentProvider.baseUrl ? currentProvider.id : '';
 
-  return (
-    <PanelWindow panel="settings" title="设置" minW={300} minH={280} onClose={() => setOpen(false)}>
+  /*
+   * 面板的**结构插槽**：Agent 可以用 replace_surface 覆写它（改完会弹一次确认，可还原结构）。
+   * 内置内容作为 children 传下去 —— 想只改结构、不丢功能，就把 children 放进自己的布局里。
+   */
+  const builtin = (
+    <>
       <div className="ygg-panel-body">
         <div className="ygg-seg" style={{ padding: '0 2px 9px' }}>
           <button className={section === 'general' ? 'on' : ''} onClick={() => setSection('general')}>
@@ -275,6 +280,15 @@ export function SettingsPanel() {
           </div>
         )}
       </div>
+    </>
+  );
+  return (
+    <PanelWindow panel="settings" title="设置" minW={300} minH={280} onClose={() => setOpen(false)}>
+      <Surface
+        id="panel.settings"
+        props={{ panel: 'settings', title: '设置', close: () => setOpen(false), children: builtin }}
+        fallback={builtin}
+      />
     </PanelWindow>
   );
 }

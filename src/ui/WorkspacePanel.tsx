@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
+import { Surface } from '../host/Surface';
 import { PanelWindow } from './PanelWindow';
 import {
   clearWorkspace,
@@ -149,8 +150,12 @@ export function WorkspacePanel() {
 
   const previewText = preview ? textOf(preview) : undefined;
 
-  return (
-    <PanelWindow panel="workspace" title="工作区" minW={340} minH={300} onClose={() => setOpen(false)}>
+  /*
+   * 面板的**结构插槽**：Agent 可以用 replace_surface 覆写它（改完会弹一次确认，可还原结构）。
+   * 内置内容作为 children 传下去 —— 想只改结构、不丢功能，就把 children 放进自己的布局里。
+   */
+  const builtin = (
+    <>
       <div className="ygg-panel-body">
         <div className="ygg-hint" style={{ marginTop: 0 }}>
           Agent 的临时加工台。内容嵌进组件时是复制，删除这里的文件不影响界面。
@@ -222,6 +227,15 @@ export function WorkspacePanel() {
           ))
         )}
       </div>
+    </>
+  );
+  return (
+    <PanelWindow panel="workspace" title="工作区" minW={340} minH={300} onClose={() => setOpen(false)}>
+      <Surface
+        id="panel.workspace"
+        props={{ panel: 'workspace', title: '工作区', close: () => setOpen(false), children: builtin }}
+        fallback={builtin}
+      />
     </PanelWindow>
   );
 }

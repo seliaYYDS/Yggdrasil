@@ -11,6 +11,7 @@ import {
 import { stopRun, submitInput } from '../kernel/agent/scheduler';
 import { QueueIcon, SendIcon, StopIcon } from './icons';
 import { captureScreen } from '../host/screen';
+import { Surface } from '../host/Surface';
 import { WindowFrame } from '../host/WindowFrame';
 import { formatBytes } from '../kernel/workspace/store';
 import {
@@ -297,29 +298,12 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   // 最小化后交给任务栏渲染，这里什么都不画。
   if (minimized) return null;
 
-  return (
-    <WindowFrame
-      id={session.id}
-      title={title}
-      rect={rect}
-      zIndex={z}
-      focused={focusedId === session.id}
-      onRect={(r) => {
-        // 尺寸变了（宽或高）就记住"这是用户自己定的"，此后不再自动改高度。
-        if (r.w !== rect.w || r.h !== rect.h) userSized.current = true;
-        setSessionRect(session.id, r);
-      }}
-      onFocus={() => bringToFront(session.id)}
-      onMinimize={() => requestMinimize(session.id)}
-      // 只剩一个时不给关：全关掉就没有入口了。
-      // 先播淡出再真正移除（store 里收尾）；只剩一个时不给关。
-      onDelete={sessionCount > 1 ? () => requestCloseSession(session.id) : undefined}
-      minW={300}
-      minH={70}
-      minHeightCss={needed}
-      // 整个窗口都是落点：拖文件过来不用瞄准那一行文字。
-      onDropFiles={holdFiles}
-    >
+  /*
+   * 面板的**结构插槽**：Agent 可以用 replace_surface 覆写它（改完会弹一次确认，可还原结构）。
+   * 内置内容作为 children 传下去 —— 想只改结构、不丢功能，就把 children 放进自己的布局里。
+   */
+  const builtin = (
+    <>
       <div className="ygg-compose">
         {/*
           用量指标：**固定在右下角**（绝对定位，不占流），而且**没数据时整块不渲染**。
@@ -556,6 +540,36 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           ) : null}
         </div>
       </div>
+    </>
+  );
+  return (
+    <WindowFrame
+      id={session.id}
+      title={title}
+      rect={rect}
+      zIndex={z}
+      focused={focusedId === session.id}
+      onRect={(r) => {
+        // 尺寸变了（宽或高）就记住"这是用户自己定的"，此后不再自动改高度。
+        if (r.w !== rect.w || r.h !== rect.h) userSized.current = true;
+        setSessionRect(session.id, r);
+      }}
+      onFocus={() => bringToFront(session.id)}
+      onMinimize={() => requestMinimize(session.id)}
+      // 只剩一个时不给关：全关掉就没有入口了。
+      // 先播淡出再真正移除（store 里收尾）；只剩一个时不给关。
+      onDelete={sessionCount > 1 ? () => requestCloseSession(session.id) : undefined}
+      minW={300}
+      minH={70}
+      minHeightCss={needed}
+      // 整个窗口都是落点：拖文件过来不用瞄准那一行文字。
+      onDropFiles={holdFiles}
+    >
+      <Surface
+        id="panel.input"
+        props={{ panel: 'input', title: '输入框', close: () => requestCloseSession(session.id), children: builtin }}
+        fallback={builtin}
+      />
     </WindowFrame>
   );
 }

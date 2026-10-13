@@ -4,6 +4,7 @@ import { Surface } from '../host/Surface';
 import { Feedback } from '../ui/Feedback';
 import { TopBar } from '../ui/TopBar';
 import { ResetDialog } from '../ui/ResetDialog';
+import { StructChangeDialog } from '../ui/StructChangeDialog';
 import { ConsoleErrorPrompt } from '../ui/ConsoleErrorPrompt';
 import { SeedDialog } from '../ui/SeedDialog';
 import { installConsoleErrorHooks, subscribeConsoleErrors } from '../host/consoleErrors';
@@ -67,6 +68,7 @@ export function App() {
       {/* 下面两个是覆盖层，本就该在最上面 */}
       <TopBar />
       <ResetDialog />
+      <StructChangeDialog />
       <ConsoleErrorPrompt />
       <SeedDialog />
       <Feedback />

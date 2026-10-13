@@ -10,6 +10,7 @@ import {
   getSurfaceDef,
   getSurfaceState,
   isCriticalSurface,
+  isDefaultWindowSurface,
   listSurfaces,
   setSurfaceSource,
   surfacesText,
@@ -530,7 +531,10 @@ export function registerCoreInterfaces(): void {
         current = cur;
         label = 'slot "' + def.label + '"';
         key = 'surface_' + surface;
-        write = (next) => setSurfaceSource(surface, next);
+        write = (next) => {
+        setSurfaceSource(surface, next);
+        if (isDefaultWindowSurface(surface)) desktop().noteStructChange(surface);
+      };
       } else {
         const node = desktop().nodes[id];
         if (!node || node.kind !== 'component' || node.root) {
@@ -676,6 +680,8 @@ export function registerCoreInterfaces(): void {
       );
       setSurfaceSource(surface, raw);
       desktop().log('op', 'surface ' + surface);
+      // 默认界面（常驻面板 / 标题栏）的结构改动要问用户一句"要不要还原"。
+      if (isDefaultWindowSurface(surface)) desktop().noteStructChange(surface);
       return ok('Replaced interface element "' + def.label + '"', {
         observation:
           'Slot ' + surface + ' is now overridden.' + (def.propsHint ? ' Its component receives the props: ' + def.propsHint : ''),

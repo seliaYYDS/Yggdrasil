@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useDesktopStore, traceTotal } from '../store/desktopStore';
+import { Surface } from '../host/Surface';
 import { PanelWindow } from './PanelWindow';
 import type { TraceStep, TraceStatus } from '../kernel/types';
 import { ClearIcon } from './icons';
@@ -93,15 +94,12 @@ export function TracePanel() {
     setFilter(filter === next ? 'all' : next);
   };
 
-  return (
-    <PanelWindow
-      panel="trace"
-      title="Trace"
-      kindLabel={anyRunning ? 'running' : undefined}
-      minW={320}
-      minH={240}
-      onClose={() => setOpen(false)}
-    >
+  /*
+   * 面板的**结构插槽**：Agent 可以用 replace_surface 覆写它（改完会弹一次确认，可还原结构）。
+   * 内置内容作为 children 传下去 —— 想只改结构、不丢功能，就把 children 放进自己的布局里。
+   */
+  const builtin = (
+    <>
       <div className="ygg-panel-body">
         {/*
           一行两段：左边是带**描述前缀**的计数（光看数字不知道哪个是日志、哪个是失败），
@@ -234,6 +232,22 @@ export function TracePanel() {
           </>
         )}
       </div>
+    </>
+  );
+  return (
+    <PanelWindow
+      panel="trace"
+      title="Trace"
+      kindLabel={anyRunning ? 'running' : undefined}
+      minW={320}
+      minH={240}
+      onClose={() => setOpen(false)}
+    >
+      <Surface
+        id="panel.trace"
+        props={{ panel: 'trace', title: 'Trace', close: () => setOpen(false), children: builtin }}
+        fallback={builtin}
+      />
     </PanelWindow>
   );
 }

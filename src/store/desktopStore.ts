@@ -24,7 +24,7 @@ import {
   migrateTokens,
   sanitizeTokens,
 } from '../theme/engine';
-import { exportSurfaceStates, importSurfaceStates } from '../kernel/registry/surfaceRegistry';
+import { clearSurfaceSource, exportSurfaceStates, importSurfaceStates } from '../kernel/registry/surfaceRegistry';
 import { buildSeed, seedStorageEntries, type SeedFile, type SeedPart } from './seed';
 import { syncPluginRuntime } from '../kernel/plugin/runtime';
 import { policyFor } from '../kernel/security';
@@ -829,6 +829,19 @@ interface DesktopState {
   uninstallPlugin: (id: string) => void;
   /** 用户填一个字段（密钥或配置）。 */
   setPluginValue: (id: string, key: string, value: string) => void;
+
+  /**
+   * 本次任务里被改过结构的**默认界面**插槽（常驻面板 + 窗口标题栏）。
+   *
+   * 为什么要有：默认界面是宿主代码，Agent 改它的结构之后用户未必看得出来
+   * （例如 Nodes 面板换了排布、标题栏换了布局），所以改完要问一句"要不要还原"。
+   * 这里只记插槽 id —— 还原时逐个 clearSurfaceSource，**只动结构，不碰样式变量**。
+   */
+  structChanges: string[];
+  /** 记一笔"默认界面结构被改了"。 */
+  noteStructChange: (slot: string) => void;
+  /** 处理确认弹窗：restore=true 把记录里的插槽结构还原成内置实现，false = 保留。两种都会清空记录。 */
+  resolveStructChanges: (restore: boolean) => void;
   setTreeOpen: (open: boolean) => void;
   setTraceOpen: (open: boolean) => void;
   /** 把当前这批轨迹标记为"已看过"（打开面板时自动调用）。 */
@@ -1201,6 +1214,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   feedback: null,
   traceOpen: false,
   traceSeen: 0,
+  structChanges: [],
   pluginsOpen: false,
   workspaceOpen: false,
   plugins: [],
@@ -1684,6 +1698,23 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   markTraceSeen: () => {
     set({ traceSeen: traceTotal(get()) });
+  },
+
+  noteStructChange: (slot) => {
+    if (!slot) return;
+    set((s) => (s.structChanges.includes(slot) ? s : { structChanges: [...s.structChanges, slot] }));
+  },
+
+  resolveStructChanges: (restore) => {
+    const slots = [...get().structChanges];
+    if (restore) {
+      // 只还原结构：样式（--ygg- 变量、节点局部变量）一律不碰。
+      for (const slot of slots) clearSurfaceSource(slot);
+    }
+    if (slots.length > 0) {
+      get().log('op', (restore ? 'struct restore · ' : 'struct keep · ') + slots.join('+'));
+    }
+    set({ structChanges: [] });
   },
   setResetOpen: (open) => set({ resetOpen: open }),
 
@@ -2192,6 +2223,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       pendingOpen: [],
       leaving: {},
       restoring: {},
+      structChanges: [],
       snapDrag: false,
       resizing: false,
       curves: [],

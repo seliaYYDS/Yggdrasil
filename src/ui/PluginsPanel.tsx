@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
+import { Surface } from '../host/Surface';
 import { PanelWindow } from './PanelWindow';
 import { describeManifest, parsePluginPackage } from '../kernel/plugin/package';
 import { checkPluginUpdate, pluginDiff } from '../kernel/plugin/runtime';
@@ -137,8 +138,12 @@ export function PluginsPanel() {
     }
   };
 
-  return (
-    <PanelWindow panel="plugins" title="插件" minW={340} minH={300} onClose={() => setOpen(false)}>
+  /*
+   * 面板的**结构插槽**：Agent 可以用 replace_surface 覆写它（改完会弹一次确认，可还原结构）。
+   * 内置内容作为 children 传下去 —— 想只改结构、不丢功能，就把 children 放进自己的布局里。
+   */
+  const builtin = (
+    <>
       <div className="ygg-panel-body">
         <input
           ref={fileRef}
@@ -275,6 +280,15 @@ export function PluginsPanel() {
           </div>
         ))}
       </div>
+    </>
+  );
+  return (
+    <PanelWindow panel="plugins" title="插件" minW={340} minH={300} onClose={() => setOpen(false)}>
+      <Surface
+        id="panel.plugins"
+        props={{ panel: 'plugins', title: '插件', close: () => setOpen(false), children: builtin }}
+        fallback={builtin}
+      />
     </PanelWindow>
   );
 }

@@ -96,8 +96,12 @@ export function surfacesText(compact = false): string {
       const warn = s.critical
         ? `\n    ⚠ Critical slot: it carries basic window abilities (${s.capabilityHint ?? 'unknown'}). Replacing it breaks them, so **do not touch it**.`
         : '';
+      // 默认界面的结构改完会弹一次"要不要还原"的确认 —— 先说清楚，免得 Agent 以为改动是静默生效的。
+      const confirmNote = s.defaultWindow
+        ? '\n    ↺ Default interface: changing this structure pops a confirmation the user can use to restore it (structure only, styles are untouched).'
+        : '';
       const desc = compact ? '' : ` — ${s.description}`;
-      return `- id=${s.id} 「${s.label}」${state}${desc}${hint}${warn}`;
+      return `- id=${s.id} 「${s.label}」${state}${desc}${hint}${warn}${confirmNote}`;
     })
     .join('\n');
 }
@@ -110,4 +114,13 @@ export function criticalSurfaceIds(): string[] {
 /** 某个插槽是否承载基础能力。 */
 export function isCriticalSurface(id: string): boolean {
   return defs.get(id)?.critical === true;
+}
+
+/**
+ * 这个插槽是不是**默认界面**的结构（常驻面板、窗口标题栏）。
+ *
+ * 改这种插槽要弹一次确认让用户决定要不要还原，所以执行面必须能一眼认出来。
+ */
+export function isDefaultWindowSurface(id: string): boolean {
+  return defs.get(id)?.defaultWindow === true;
 }
