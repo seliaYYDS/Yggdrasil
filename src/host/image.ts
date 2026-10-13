@@ -87,22 +87,3 @@ export async function prepareImage(file: Blob): Promise<PreparedImage | null> {
   if (!raw) return null;
   return { dataUrl: raw, width: 0, height: 0, bytes: bytesOfDataUrl(raw) };
 }
-
-/** 从粘贴事件里挑出图片。 */
-export function imageFilesFromClipboard(data: DataTransfer | null): File[] {
-  if (!data) return [];
-  const out: File[] = [];
-  for (const item of Array.from(data.items ?? [])) {
-    if (item.kind !== 'file') continue;
-    if (!item.type.startsWith('image/')) continue;
-    const file = item.getAsFile();
-    if (file) out.push(file);
-  }
-  // 有些环境 items 是空的，但 files 里有 —— 兜一层。
-  if (out.length === 0) {
-    for (const f of Array.from(data.files ?? [])) {
-      if (f.type.startsWith('image/')) out.push(f);
-    }
-  }
-  return out;
-}

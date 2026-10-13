@@ -306,6 +306,19 @@ export function buildSnapshotPrompt(input: SystemPromptInput): string {
     (input.viewW ?? 1280) + ' x ' + (input.viewH ?? 800) +
       ' pixels (a window pos is its top-left corner and size is w x h; the origin is the top-left)',
     '',
+    /*
+     * 上传物。**内容不进提示词**，所以这节只讲"它们在哪、你要主动读"。
+     * 常驻而不是只在上传那一轮出现：Agent 可能过几轮才回头去看。
+     */
+    on('net') ? '## Uploaded files' : '',
+    on('net')
+      ? 'Files the user attaches (images, documents, archives…) go into your **workspace**, never into this prompt.\n' +
+        'So read them yourself before using them: ws_list() to see what is there, ws_read(name) for one file\n' +
+        '(images come back into your eyes, text comes back as text), ws_run(...) to transform them.\n' +
+        '**Never guess what a file contains** — if the user mentions an attachment, read it first; if nothing\n' +
+        'is there, say so instead of inventing content.'
+      : '',
+    '',
     unrestricted
       ? '## Current windows (live snapshot — the only source of truth)'
       : '## Your scope (this is all you can see)',

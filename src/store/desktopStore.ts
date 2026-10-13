@@ -111,8 +111,13 @@ export interface QueuedInput {
   /** 目标 Agent（组件 id）。发出时若该组件已被删，会自动回落到基底。 */
   originId: NodeId;
   createdAt: number;
-  /** 这条排队输入附带的图片（data URL）。 */
-  images?: string[];
+  /**
+   * 这条排队输入提到的**工作区文件**（只有名字，没有内容）。
+   *
+   * 排队项要留住它，否则"上传文件 + 排队发送"时，轮到它执行就不知道有哪些文件了；
+   * 而内容在工作区里，不需要（也不应该）复制进队列。
+   */
+  files?: string[];
 }
 
 /**

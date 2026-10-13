@@ -140,8 +140,13 @@ export interface RunOptions {
   originId?: NodeId;
   /** 发起这次运行的输入框（会话）。工作状态按会话隔离，默认是主会话。 */
   sessionId?: string;
-  /** 这次请求附带的图片（data URL）。用户在输入框里粘贴或拖进来的。 */
-  images?: string[];
+  /**
+   * 这次请求提到的**工作区文件**（只有名字）。
+   *
+   * 上传的文件本身已经写进工作区；这里只是把名字带过来，
+   * 让这一轮知道"有哪些文件可以读"。内容**不进**提示词与记忆。
+   */
+  files?: string[];
   /** 用户按"停止"时在这里中止 —— 轮次之间、以及模型调用中都会检查它。 */
   signal?: AbortSignal;
 }
@@ -463,13 +468,25 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
   const sessionId = options.sessionId ?? MAIN_SESSION;
   // 用户按"停止"时 abort 它；轮次之间与模型调用中都会检查。
   const signal = options.signal;
-  const images = (options.images ?? []).filter(
-    (u) => typeof u === 'string' && u.startsWith('data:image/'),
-  );
+  /*
+   * 用户上传的文件已经写进工作区，这里只留下**名字**。
+   *
+   * 刻意不再把它们拼成多模态或塞进提示词：上传物进上下文会（1）每轮重发、
+   * （2）把历史撑大、（3）让"要不要看"这件事由上传自动决定。
+   * 现在由 Agent 主动 ws_read —— 它想看什么、看多少，是它的决定。
+   */
+  const files = (options.files ?? []).filter((f) => typeof f === 'string' && f.length > 0);
+  // 有上传文件时，在提示词里明确"它们在哪儿、要主动读"（内容不进提示词）。
+  const uploadNote = files.length
+    ? '\n\n[UPLOADED FILES] 用户这一轮上传了这些文件，它们**已经在你的工作区里**，' +
+      '内容**不在**上下文中：' + files.join('、') +
+      '。需要什么先用 ws_read 读（或者用 ws_run 加工），不要凭空猜内容。'
+    : '';
   const runId = newId();
   store.beginSessionTrace(sessionId, runId);
   store.setSessionStatus(sessionId, { running: true, phase: '准备上下文', detail: '', round: 0, runId });
-  pushMemory(originId, sessionId, { role: 'user', content: input, ...(images.length ? { images } : {}) });
+  // 记忆里也**不**存文件内容；要读就再读一次（文件还在工作区）。
+  pushMemory(originId, sessionId, { role: 'user', content: input });
 
   /*
    * 档位分流。
@@ -478,7 +495,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
    * act 档才需要下面那一整套（接口目录、JSON 解析、多轮、观察回灌、账本、作用域）。
    */
   if (isAgentic(origin) && origin.agent.mode === 'reply') {
-    return runReply(input, originId, sessionId, runId, images, options.signal);
+    return runReply(input, originId, sessionId, runId, [], options.signal);
   }
 
   const pushStep = (step: TraceStep) => useDesktopStore.getState().upsertSessionStep(sessionId, step);
@@ -602,7 +619,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           ...historyMessages(originId, sessionId, input),
           // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
           // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
-          { role: 'user', content: userContent(CURRENT_REQUEST_TAG + '\n' + input, images) },
+          { role: 'user', content: userContent(CURRENT_REQUEST_TAG + '\n' + input + uploadNote) },
         ];
         /*
          * **最快的缓存前缀**：稳定系统提示 → 历史 → 本次请求 → 观察回灌 → 本轮的快照。
@@ -685,8 +702,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           useDesktopStore.getState().setFeedback(
             mkFeedback(
               'fail',
-              images.length > 0 ? '带图片的请求失败' : '模型调用失败（已重试）',
-              msg + visionHint(images, msg),
+              '模型调用失败（已重试）',
+              msg,
             ),
           );
           return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: msg });
@@ -714,7 +731,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             continue;
           }
           useDesktopStore.getState().setFeedback(
-            mkFeedback('fail', '模型反复没有输出合法指令', err + visionHint(images, err)),
+            mkFeedback('fail', '模型反复没有输出合法指令', err),
           );
           return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: err });
         }

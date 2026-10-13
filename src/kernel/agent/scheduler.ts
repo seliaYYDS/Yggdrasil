@@ -75,12 +75,12 @@ export function queueLength(sessionId: string = MAIN_SESSION): number {
  */
 export function submitInput(
   text: string,
-  options: { originId?: NodeId; sessionId?: string; images?: string[] } = {},
+  options: { originId?: NodeId; sessionId?: string; files?: string[] } = {},
 ): boolean {
   const value = text.trim();
-  const images = options.images ?? [];
-  // 只有图片没有文字也要能发（"看看这张图"）。
-  if (!value && images.length === 0) return false;
+  const files = options.files ?? [];
+  // 只有文件没有文字也要能发（"看看这个"）。
+  if (!value && files.length === 0) return false;
   const store = useDesktopStore.getState();
   const sessionId = options.sessionId ?? MAIN_SESSION;
   // 输入框会话要求输入框在；agent 会话要求目标组件在（hasSession 两种都认）。
@@ -93,11 +93,11 @@ export function submitInput(
       text: value,
       originId: target,
       createdAt: Date.now(),
-      ...(images.length ? { images } : {}),
+      ...(files.length ? { files } : {}),
     });
     return true;
   }
-  void drain(sessionId, value, target, images);
+  void drain(sessionId, value, target, files);
   return true;
 }
 
@@ -114,7 +114,7 @@ async function drain(
   sessionId: string,
   firstText: string,
   firstOrigin: NodeId,
-  firstImages: string[] = [],
+  firstFiles: string[] = [],
 ): Promise<void> {
   busy.add(sessionId);
   // 每次运行一个控制器，"停止"就是把它 abort 掉。
@@ -122,11 +122,11 @@ async function drain(
   running.set(sessionId, ctl);
   let text: string | null = firstText;
   let origin: NodeId = firstOrigin;
-  let images: string[] = firstImages;
+  let files: string[] = firstFiles;
   try {
     while (text !== null) {
       try {
-        await runDerivation(text, { originId: origin, sessionId, images, signal: ctl.signal });
+        await runDerivation(text, { originId: origin, sessionId, files, signal: ctl.signal });
       } catch (e) {
         useDesktopStore.getState().log('error', 'run ✕ ' + (e as Error).message);
       }
@@ -141,10 +141,10 @@ async function drain(
       text = next ? next.text : null;
       if (next) {
         origin = next.originId;
-        images = next.images ?? [];
+        files = next.files ?? [];
         useDesktopStore
           .getState()
-          .log('info', 'queue → ' + (next.text || '（图片）').slice(0, 60));
+          .log('info', 'queue → ' + (next.text || '（文件）').slice(0, 60));
       }
     }
   } finally {

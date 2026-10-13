@@ -11,7 +11,13 @@ import { stopRun, submitInput } from '../kernel/agent/scheduler';
 import { QueueIcon, SendIcon, StopIcon } from './icons';
 import { captureScreen } from '../host/screen';
 import { WindowFrame } from '../host/WindowFrame';
-import { imageFilesFromClipboard, MAX_IMAGES, prepareImage, type PreparedImage } from '../host/image';
+import {
+  MAX_UPLOAD_FILES,
+  filesFromClipboard,
+  uploadedFilesNote,
+  uploadFiles,
+  type UploadedFile,
+} from '../kernel/workspace/upload';
 
 /*
  * 下面这些常量必须与 global.css 里的实际值一致 ——
@@ -22,7 +28,7 @@ const COMPOSE_PAD_V = 16; // .ygg-compose padding 8px 上下
 const GAP = 5; // .ygg-compose gap
 const STATE_H = 15; // .ygg-compose-state min-height
 
-const IMAGE_STRIP_H = 46; // .ygg-images 一行缩略图的高度
+const FILE_STRIP_H = 24; // .ygg-files 一行文件条的高度
 const PENDING_H = 20; // .ygg-pending 行高
 const QUEUE_ITEM_H = 18; // .ygg-queue-item height
 const QUEUE_GAP = 2; // .ygg-queue gap
@@ -68,17 +74,18 @@ export function inputMinHeight(
   areaH: number,
   queueCount: number,
   pendingCount = 0,
-  imageCount = 0,
+  fileCount = 0,
 ): number {
   const rows = Math.min(Math.max(queueCount, 0), QUEUE_MAX_ROWS);
   const queueH = rows > 0 ? rows * QUEUE_ITEM_H + (rows - 1) * QUEUE_GAP + QUEUE_PAD_V : 0;
   const pendingH = pendingCount > 0 ? PENDING_H + GAP : 0;
-  const imageH = imageCount > 0 ? IMAGE_STRIP_H + GAP : 0;
+  // 上传的文件条比图片缩略图矮（没有缩略图），所以单独一个高度常量。
+  const fileH = fileCount > 0 ? FILE_STRIP_H + GAP : 0;
   return (
     TITLEBAR_H +
     COMPOSE_PAD_V +
     pendingH +
-    imageH +
+    fileH +
     queueH +
     (queueH > 0 ? GAP : 0) +
     areaH +
@@ -96,12 +103,20 @@ export function inputMinHeight(
 export function YggdrasilInput({ session }: { session: InputSession }) {
   const [text, setText] = useState('');
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  /** 文件选择器的隐藏 input（粘贴/拖拽之外的正经入口）。 */
+  const fileInputRef = useRef<HTMLInputElement>(null);
   /** 输入法正在拼字。拼字期间的回车是"确认候选词"，不是"发送"。 */
   const composing = useRef(false);
   const [areaH, setAreaH] = useState(LINE_H);
-  /** 粘贴 / 拖进来的图片。提交时随请求一起发给模型。 */
-  const [images, setImages] = useState<PreparedImage[]>([]);
-  const [imageError, setImageError] = useState('');
+  /**
+   * 已上传到工作区的文件（粘贴 / 拖拽 / 选择）。
+   *
+   * **它们不再直接进提示词**：上传只是把文件放进工作区，内容由 Agent 主动 ws_read。
+   * 这里保留一份列表只是为了在输入框上显示"这次带了什么"、以及提交时告诉 Agent
+   * 有哪些文件可读（只说名字，不塞内容）。
+   */
+  const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [uploadError, setUploadError] = useState('');
 
   /*
    * 订阅**这一个会话**：`find` 在没变化时返回同一个对象引用，
@@ -144,37 +159,42 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   /** 提交。读 DOM 当前值（输入法状态可能滞后），确认收下才清空。 */
   const submit = () => {
     const el = areaRef.current;
-    const value = (el ? el.value : text).trim();
-    // 只有图片没有文字也应该能发（"看看这张图"）。
-    if (!value && images.length === 0) return;
-    const accepted = submitInput(value, {
-      sessionId: session.id,
-      images: images.map((im) => im.dataUrl),
-    });
+    const raw = (el ? el.value : text).trim();
+    // 只有文件没有文字也应该能发（"看看这个"）。
+    if (!raw && files.length === 0) return;
+    /*
+     * 上传过的文件**不把内容塞进请求**，只在文字前面加一段"有哪些文件可读"。
+     * Agent 需要什么就用 ws_read 去读 —— 这样上下文不会被上传物撑满，
+     * 也不会出现"每轮都重发一张图"。
+     */
+    const value = files.length > 0 ? uploadedFilesNote(files) + '\n\n' + raw : raw;
+    const accepted = submitInput(value, { sessionId: session.id });
     if (accepted) {
       setText('');
-      setImages([]);
-      setImageError('');
+      setFiles([]);
+      setUploadError('');
     }
   };
 
-  /** 粘贴 / 拖进来的图片：压缩后挂到待发送列表上。 */
-  const addImages = async (files: File[]) => {
-    if (files.length === 0) return;
-    setImageError('');
-    const room = MAX_IMAGES - images.length;
+  /**
+   * 粘贴 / 拖拽 / 选择的文件：**直接写进工作区**。
+   *
+   * 不再有"图片专用"这条路：图片、文本、PDF、压缩包统一走这里。
+   * 失败的文件单独报告，不影响成功的那些。
+   */
+  const addFiles = async (incoming: File[]) => {
+    if (incoming.length === 0) return;
+    setUploadError('');
+    const room = MAX_UPLOAD_FILES - files.length;
     if (room <= 0) {
-      setImageError('最多 ' + MAX_IMAGES + ' 张图片');
+      setUploadError('最多 ' + MAX_UPLOAD_FILES + ' 个文件');
       return;
     }
-    const prepared = await Promise.all(files.slice(0, room).map((f) => prepareImage(f)));
-    const okList = prepared.filter((x): x is PreparedImage => !!x);
-    if (okList.length === 0) {
-      setImageError('这张图片读不出来（格式不支持？）');
-      return;
-    }
-    setImages((prev) => [...prev, ...okList].slice(0, MAX_IMAGES));
-    if (files.length > room) setImageError('最多 ' + MAX_IMAGES + ' 张图片，多余的已忽略');
+    const { ok, errors } = await uploadFiles(incoming.slice(0, room));
+    if (ok.length > 0) setFiles((prev) => [...prev, ...ok]);
+    const notes = [...errors];
+    if (incoming.length > room) notes.push('最多 ' + MAX_UPLOAD_FILES + ' 个文件，多余的已忽略');
+    setUploadError(notes.join('\n'));
   };
 
   /** 输入框按内容自适应：量出内容自然高度（1~6 行），写成 min-height。 */
@@ -192,9 +212,9 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
     setAreaH(next);
   }, [text]);
 
-  const needed = inputMinHeight(areaH, queue.length, pendingOpen.length, images.length);
+  const needed = inputMinHeight(areaH, queue.length, pendingOpen.length, files.length);
   /** 生成中且输入框为空 → 发送按钮变成停止。 */
-  const canStop = busy && !text.trim() && images.length === 0;
+  const canStop = busy && !text.trim() && files.length === 0;
 
   /*
    * 右下角那三个数的**实际宽度**要告诉状态行，让它留出对应的右边距。
@@ -336,16 +356,21 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           </button>
         ) : null}
 
-        {/* 粘贴 / 拖进来的图片：先在这里确认一眼，再随请求发出去 */}
-        {images.length > 0 ? (
-          <div className="ygg-images">
-            {images.map((im, i) => (
-              <div className="ygg-image" key={i}>
-                <img src={im.dataUrl} alt={'图片 ' + (i + 1)} title={im.note} />
+        {/*
+          上传过的文件。它们已经进了工作区 —— 这里只是让用户确认"带了什么"，
+          以及提供一个"从这次发送里去掉"的入口（注意：去掉只是不告诉 Agent，
+          文件仍在工作区里，可以在工作区面板里删）。
+        */}
+        {files.length > 0 ? (
+          <div className="ygg-files">
+            {files.map((f, i) => (
+              <div className="ygg-file" key={f.name} title={f.originalName ? '原文件名：' + f.originalName : f.name}>
+                <span className="ygg-file-kind">{f.kind}</span>
+                <span className="ygg-file-name">{f.name}</span>
                 <button
-                  className="ygg-image-del"
-                  title="移除这张图片"
-                  onClick={() => setImages((prev) => prev.filter((_, j) => j !== i))}
+                  className="ygg-file-del"
+                  title="这次不发给 Agent（文件仍在工作区里）"
+                  onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
                 >
                   ✕
                 </button>
@@ -359,8 +384,8 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
             {queue.map((q, i) => (
               <div className="ygg-queue-item" key={q.id}>
                 <span className="ygg-queue-idx">{i + 1}</span>
-                {q.images?.length ? <span className="ygg-queue-img">图 {q.images.length}</span> : null}
-                <span className="ygg-queue-text">{q.text || '（图片）'}</span>
+                {q.files?.length ? <span className="ygg-queue-img">{q.files.length} 个文件</span> : null}
+                <span className="ygg-queue-text">{q.text || '（文件）'}</span>
                 {queueTargets[i] ? <span className="ygg-queue-to">{queueTargets[i]}</span> : null}
                 <button
                   className="ygg-queue-del"
@@ -375,34 +400,60 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
         ) : null}
 
         <div className="ygg-compose-row">
+          {/*
+            文件选择器：粘贴/拖拽之外的正经入口（也能选到剪贴板拿不到的文件）。
+            multiple 且不过滤 accept —— 统一上传的意思就是什么文件都收。
+          */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const picked = Array.from(e.target.files ?? []);
+              // 清掉 value，否则连续选同一个文件不会再触发 change
+              e.target.value = '';
+              void addFiles(picked);
+            }}
+          />
+          <button
+            className="ygg-attach"
+            title="上传文件（也可以直接粘贴或拖进来）"
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <span className="ygg-attach-plus" />
+          </button>
           <textarea
             ref={areaRef}
             className="ygg-compose-area"
             value={text}
             placeholder={
-              busy ? '排队发送…' : images.length > 0 ? '说说这张图要做什么…' : '描述你想让 Yggdrasil 做什么…'
+              busy ? '排队发送…' : files.length > 0 ? '说说这些文件要做什么…' : '描述你想让 Yggdrasil 做什么…'
             }
             rows={1}
             spellCheck={false}
             onChange={(e) => setText(e.target.value)}
             onPaste={(e) => {
-              // 截图直接 Ctrl+V 粘进来。有图片时不要让它变成文字。
-              const files = imageFilesFromClipboard(e.clipboardData);
-              if (files.length > 0) {
+              /*
+               * 粘贴：**任何文件都接**，不再只挑图片。
+               * 截图走的是剪贴板里的图片项，和以前一样；但复制一个 PDF / 文本片段
+               * 现在也能直接进来（以前会被当纯文字插进输入框）。
+               */
+              const picked = filesFromClipboard(e.clipboardData);
+              if (picked.length > 0) {
                 e.preventDefault();
-                void addImages(files);
+                void addFiles(picked);
               }
             }}
             onDragOver={(e) => {
               if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault();
             }}
             onDrop={(e) => {
-              const files = Array.from(e.dataTransfer?.files ?? []).filter((f) =>
-                f.type.startsWith('image/'),
-              );
-              if (files.length > 0) {
+              // 拖拽：同样是任意文件，不再按 MIME 过滤掉非图片。
+              const picked = Array.from(e.dataTransfer?.files ?? []);
+              if (picked.length > 0) {
                 e.preventDefault();
-                void addImages(files);
+                void addFiles(picked);
               }
             }}
             onCompositionStart={() => {
@@ -429,7 +480,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
              * 输入框里有内容时才保持"加入队列"（那时用户显然是想再发一条）。
              */
             className={'ygg-compose-send' + (busy ? ' is-queue' : '') + (canStop ? ' is-stop' : '')}
-            disabled={!canStop && !text.trim() && images.length === 0}
+            disabled={!canStop && !text.trim() && files.length === 0}
             title={canStop ? '停止本轮（会清空排队）' : busy ? '加入队列' : '发送'}
             onClick={canStop ? () => stopRun(session.id) : submit}
           >
@@ -462,9 +513,11 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
               {detail ? <span className="ygg-compose-detail">{detail}</span> : null}
             </>
           ) : null}
-          {!busy && (imageError || images.length > 0) ? (
+          {!busy && (uploadError || files.length > 0) ? (
             <span className="ygg-compose-hint">
-              {imageError ? imageError : images.length + ' 张图片将随请求发出'}
+              {uploadError
+            ? uploadError
+            : files.length + ' 个文件已存入工作区 —— Agent 会按需用 ws_read 读取'}
             </span>
           ) : null}
         </div>
