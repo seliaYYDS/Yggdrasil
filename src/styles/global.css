@@ -1291,8 +1291,48 @@ button:focus:not(:focus-visible) { outline: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ygg-fg);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
+.ygg-ws-name:hover { color: var(--ygg-accent-hi); }
+.ygg-ws-name.on { color: var(--ygg-accent-hi); text-decoration: underline; }
 .ygg-ws-kind { color: var(--ygg-accent-hi); font-size: 10px; }
 .ygg-ws-row:nth-child(odd) { background: color-mix(in srgb, var(--ygg-surface-2) 45%, transparent); }
 .ygg-ws-size { color: var(--ygg-fg-muted); font-size: 10px; min-width: 52px; text-align: right; }
 .ygg-ws-usage { color: var(--ygg-fg-muted); font-size: 10px; margin-left: auto; }
+
+/* 工作区预览：展开区（图片真的画出来、文本原样、其他二进制说明原因） */
+.ygg-ws-preview {
+  padding: 7px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ygg-ws-image {
+  max-width: 100%;
+  max-height: 220px;
+  object-fit: contain;
+  align-self: flex-start;
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  background: var(--ygg-bg);
+}
+.ygg-ws-text {
+  margin: 0;
+  padding: 7px;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--ygg-fg);
+  background: var(--ygg-bg);
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+}
+.ygg-ws-meta { font-size: 10px; color: var(--ygg-fg-muted); }

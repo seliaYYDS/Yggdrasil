@@ -131,6 +131,40 @@ export function workspaceBackendKind(): 'idb' | 'memory' {
   return workspaceBackend().kind;
 }
 
+/*
+ * **工作区变更信号**。
+ *
+ * 面板要"实时"看到 Agent 写进来的东西，但它不该去轮询 IndexedDB ——
+ * 轮询既有延迟又白耗电。所以所有写路径（putEntry / deleteEntry / clearWorkspace）
+ * 在改完之后**打一下这个信号**，面板订阅它即可。
+ *
+ * 刻意做成"版本号 + 订阅函数"而不是直接依赖 store：
+ * 工作区是独立于 store 的一块（它有自己的后端与生命周期），
+ * 让它反过来把 store 引进来会形成环。面板自己去接这个信号，方向是干净的。
+ */
+let revision = 0;
+const listeners = new Set<() => void>();
+
+export function workspaceRevision(): number {
+  return revision;
+}
+
+export function onWorkspaceChange(fn: () => void): () => void {
+  listeners.add(fn);
+  return () => listeners.delete(fn);
+}
+
+function bump(): void {
+  revision += 1;
+  for (const fn of [...listeners]) {
+    try {
+      fn();
+    } catch {
+      /* 一个订阅者出错不该影响别人 */
+    }
+  }
+}
+
 /** 名字规则：和插件端点一样宽，但不允许路径分隔符（它不是文件系统）。 */
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/;
 
@@ -172,18 +206,22 @@ export async function putEntry(entry: WorkspaceEntry): Promise<void> {
     );
   }
   await workspaceBackend().set(entry);
+  // 写进去了 -> 通知面板（实时刷新靠这个，不靠轮询）
+  bump();
 }
 
 export async function deleteEntry(name: string): Promise<boolean> {
   const had = await getEntry(name);
   if (!had) return false;
   await workspaceBackend().del(name);
+  bump();
   return true;
 }
 
 export async function clearWorkspace(): Promise<number> {
   const all = await listWorkspace();
   await workspaceBackend().clear();
+  bump();
   return all.length;
 }
 
