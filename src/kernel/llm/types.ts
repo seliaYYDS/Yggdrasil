@@ -31,6 +31,27 @@ export interface LlmSettings {
    * 具体每一档的差别集中在 src/kernel/security.ts 的表里（界面说明与执行检查读同一份）。
    */
   securityLevel?: SecurityLevel;
+  /**
+   * 模型的上下文窗口（token）。**0 / 未填 = 未知**。
+   *
+   * 它只用来做一件事：给对话历史加一道"按估算 token"的闸
+   * （见 agentRuntime 的 historyMessages）—— 未知时行为与以前完全一样。
+   * 从 `/models` 拿到元数据、或从常见模型表里查到时会自动填上。
+   */
+  contextWindow?: number;
+  /**
+   * 单次回复的最大输出 token。**0 / 未填 = 不发 max_tokens**（由服务商用自己的默认值）。
+   *
+   * 注意：有些推理模型把思维链也算进这个额度，填小了会出现"有思考、没正文"。
+   */
+  maxTokens?: number;
+  /**
+   * 该模型能不能收图片。**默认开**。
+   *
+   * 关掉之后：发给模型的消息里**不含图片块**（带图的记忆仍然留着，只是这一轮不送），
+   * 于是纯文本模型不会再因为收到图片而整条失败。
+   */
+  vision?: boolean;
 }
 
 export const DEFAULT_SETTINGS: LlmSettings = {
@@ -42,6 +63,10 @@ export const DEFAULT_SETTINGS: LlmSettings = {
   imageRelay: '',
   adultMode: false,
   securityLevel: 'normal',
+  // 默认模型是 gpt-4o-mini：128k 窗口 / 16k 输出 / 支持识图。
+  contextWindow: 128000,
+  maxTokens: 16384,
+  vision: true,
 };
 
 /** 多模态消息的内容块（OpenAI 兼容格式）。 */

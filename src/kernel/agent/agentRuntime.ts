@@ -110,6 +110,7 @@ function pushMemory(originId: NodeId, sessionId: string, message: Message): void
 }
 
 function historyMessages(nodeId: NodeId, sessionId: string, input: string): ChatMessage[] {
+  const settings = useDesktopStore.getState().settings;
   /*
    * 整块裁剪，不要一条一条滑：发出去的历史越长，每次"滑动"作废的前缀就越多。
    * 允许涨到上限 + 余量，再一次性削回上限。
@@ -125,10 +126,32 @@ function historyMessages(nodeId: NodeId, sessionId: string, input: string): Chat
     all.length > MAX_HISTORY_MESSAGES + HISTORY_TRIM_SLACK
       ? all.slice(-MAX_HISTORY_MESSAGES)
       : all.slice();
+  // 先去掉"这一轮的请求"（它下面单独发），再算历史预算 —— 预算只管历史。
   if (list.length > 0 && list[list.length - 1].content === input) list.pop();
+  /*
+   * 第二道闸：**按估算 token** 再削一次（只在知道上下文窗口时生效）。
+   *
+   * 条数上限（14 条）管不住"长度"：几条带图或带长文本的消息就能顶满一个 64k 窗口。
+   * 这里从最新往回装，装不下就丢掉最老的整块；**至少留最新那条**，
+   * 否则"上一轮说了什么"会整段消失。只减不增 —— 不知道窗口时完全不受影响。
+   */
+  const budget = historyTokenBudget(settings.contextWindow);
+  if (budget > 0 && list.length > 1) {
+    let used = 0;
+    let keep = list.length;
+    for (let i = list.length - 1; i >= 0; i -= 1) {
+      const content = list[i].content;
+      used += estimateTokens(typeof content === 'string' ? content : JSON.stringify(content));
+      if (used > budget) {
+        keep = Math.max(1, list.length - 1 - i);
+        break;
+      }
+    }
+    if (keep < list.length) list.splice(0, list.length - keep);
+  }
   return list
     .filter((m: Message) => m.role !== 'system')
-    .map((m: Message) => ({ role: m.role, content: userContent(m.content, m.images) }));
+    .map((m: Message) => ({ role: m.role, content: userContent(m.content, m.images, settings.vision !== false) }));
 }
 
 /*
@@ -156,8 +179,21 @@ export interface RunOptions {
  * 没有图片就是纯文本；有图片时拼成多模态内容块（OpenAI 兼容格式）。
  * 抽成独立函数是为了能直接单测形状。
  */
-export function userContent(text: string, images?: string[]): ChatMessage['content'] {
-  const list = (images ?? []).filter((u) => typeof u === 'string' && u.startsWith('data:image/'));
+/**
+ * 历史能用掉多少 token：上下文窗口的 20%。
+ *
+ * 剩下的份额留给系统提示、快照与这一轮的观察回灌 —— 那几块都比历史大，
+ * 而且是"每轮都在用"的部分。窗口未知时返回 0（= 不加这道闸，行为与以前一样）。
+ */
+function historyTokenBudget(contextWindow?: number): number {
+  if (!contextWindow || contextWindow <= 0) return 0;
+  return Math.round(contextWindow * 0.2);
+}
+
+export function userContent(text: string, images?: string[], allowVision = true): ChatMessage['content'] {
+  // 关掉"视觉"就不带图片块：纯文本模型收到图片会整条失败（见 visionHint）。
+  // 带图的记忆仍然留着，只是这一轮不送 —— 用户改回开关就能重新看到它们。
+  const list = (allowVision ? images ?? [] : []).filter((u) => typeof u === 'string' && u.startsWith('data:image/'));
   if (list.length === 0) return text;
   const parts: ContentPart[] = [{ type: 'text', text }];
   for (const url of list) parts.push({ type: 'image_url', image_url: { url } });
@@ -411,7 +447,7 @@ async function runReply(
     },
     ...historyMessages(originId, sessionId, input),
     // 不加【本次请求】标记 —— 那是给 act 档多轮执行用的；这里就是普通的对话上下文。
-    { role: 'user', content: userContent(input, images) },
+    { role: 'user', content: userContent(input, images, store.settings.vision !== false) },
   ];
 
   let text = '';

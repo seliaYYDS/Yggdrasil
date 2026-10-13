@@ -3,6 +3,8 @@ import { useDesktopStore } from '../store/desktopStore';
 import { PanelWindow } from './PanelWindow';
 import { SECURITY_LEVELS, describePolicy, policyFor, type SecurityLevel } from '../kernel/security';
 import { Switch } from './Switch';
+import { listModels } from '../kernel/llm/client';
+import { PROVIDER_PRESETS, formatTokens, providerFor, readTokenCount, type RemoteModel } from '../kernel/llm/presets';
 
 type Section = 'general' | 'llm';
 
@@ -18,12 +20,54 @@ export function SettingsPanel() {
   const settings = useDesktopStore((s) => s.settings);
   const setSettings = useDesktopStore((s) => s.setSettings);
   const [section, setSection] = useState<Section>('llm');
+  /** 从 `/models` 拉回来的列表；null = 还没拉过。 */
+  const [models, setModels] = useState<RemoteModel[] | null>(null);
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState('');
 
   if (!open) return null;
 
   const adultOn = settings.adultMode === true;
+  const visionOn = settings.vision !== false;
   const level: SecurityLevel = (settings.securityLevel ?? 'normal') as SecurityLevel;
   const policy = policyFor(level);
+
+  /**
+   * 选中一个模型：写进 Model，并把它的三个参数一起填上。
+   *
+   * 拿不到的项**不动**（可能是用户自己填的），不要用空值覆盖 —— 猜错比留空糟得多。
+   */
+  const applyModel = (m: RemoteModel): void => {
+    setSettings({
+      model: m.id,
+      ...(m.contextWindow ? { contextWindow: m.contextWindow } : {}),
+      ...(m.maxTokens ? { maxTokens: m.maxTokens } : {}),
+      ...(typeof m.vision === 'boolean' ? { vision: m.vision } : {}),
+    });
+  };
+
+  const pullModels = (): void => {
+    setFetching(true);
+    setFetchError('');
+    void (async () => {
+      try {
+        const list = await listModels(settings);
+        setModels(list);
+        // 当前模型就在列表里：顺手把它缺的参数补上（补不到就保持原样）。
+        const hit = list.find((m) => m.id === settings.model);
+        if (hit) applyModel(hit);
+      } catch (e) {
+        setModels(null);
+        setFetchError((e as Error).message);
+      } finally {
+        setFetching(false);
+      }
+    })();
+  };
+
+  /** 当前地址落在哪个预设上（认不出就是"自定义"）。 */
+  const currentProvider = providerFor(settings.baseUrl);
+  const providerValue = currentProvider && currentProvider.baseUrl ? currentProvider.id : '';
 
   return (
     <PanelWindow panel="settings" title="设置" minW={300} minH={280} onClose={() => setOpen(false)}>
@@ -90,6 +134,25 @@ export function SettingsPanel() {
           </div>
         ) : (
           <div className="ygg-form">
+            {/* 预设只做一件事：把必须一字不差的 Base 地址填对。填完仍然可改。 */}
+            <div className="ygg-field">
+              <label className="ygg-label">入口</label>
+              <select
+                className="ygg-select"
+                value={providerValue}
+                onChange={(e) => {
+                  const p = PROVIDER_PRESETS.find((x) => x.id === e.target.value);
+                  if (p && p.baseUrl) setSettings({ baseUrl: p.baseUrl });
+                }}
+              >
+                <option value="">自定义</option>
+                {PROVIDER_PRESETS.filter((p) => p.baseUrl).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="ygg-field">
               <label className="ygg-label">Base</label>
               <input
@@ -109,17 +172,78 @@ export function SettingsPanel() {
                 spellCheck={false}
               />
             </div>
+            {/* 模型：始终可以手填，也可以从 /models 拉一份列表挑 */}
             <div className="ygg-field">
               <label className="ygg-label">Model</label>
+              <div className="ygg-row-gap">
+                <input
+                  className="ygg-input"
+                  style={{ flex: 1, minWidth: 0 }}
+                  value={settings.model}
+                  onChange={(e) => setSettings({ model: e.target.value })}
+                  spellCheck={false}
+                />
+                <button className="ygg-btn ghost tiny" disabled={fetching} onClick={pullModels}>
+                  {fetching ? '获取中…' : '获取列表'}
+                </button>
+              </div>
+              {models ? (
+                <select
+                  className="ygg-select"
+                  style={{ marginTop: 5 }}
+                  value={models.some((m) => m.id === settings.model) ? settings.model : ''}
+                  onChange={(e) => {
+                    const m = models.find((x) => x.id === e.target.value);
+                    if (m) applyModel(m);
+                  }}
+                >
+                  <option value="">{models.length} 个模型</option>
+                  {models.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.id + (m.contextWindow ? ' · ' + formatTokens(m.contextWindow) : '')}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              {fetchError ? (
+                <div className="ygg-hint" style={{ color: 'var(--ygg-danger)' }}>
+                  {fetchError}
+                </div>
+              ) : null}
+            </div>
+            {/*
+              三个模型参数：拉列表或从预设挑中模型时自动填；接口没给、表里也没有的留空
+              （留空 = 未知 / 由服务商决定，不猜）。
+            */}
+            <div className="ygg-field">
+              <label className="ygg-label">上下文窗口</label>
               <input
                 className="ygg-input"
-                value={settings.model}
-                onChange={(e) => setSettings({ model: e.target.value })}
+                inputMode="numeric"
+                placeholder="未知"
+                value={settings.contextWindow ? String(settings.contextWindow) : ''}
+                onChange={(e) => setSettings({ contextWindow: readTokenCount(e.target.value) })}
                 spellCheck={false}
               />
-              <div className="ygg-hint">
-                识图需要视觉模型（gpt-4o / claude-3.5 / qwen-vl 等）；纯文本模型收到图片会失败。
-              </div>
+            </div>
+            <div className="ygg-field">
+              <label className="ygg-label">最大输出</label>
+              <input
+                className="ygg-input"
+                inputMode="numeric"
+                placeholder="服务商默认"
+                value={settings.maxTokens ? String(settings.maxTokens) : ''}
+                onChange={(e) => setSettings({ maxTokens: readTokenCount(e.target.value) })}
+                spellCheck={false}
+              />
+            </div>
+            <div className="ygg-field">
+              <Switch
+                on={visionOn}
+                onChange={(v) => setSettings({ vision: v })}
+                label="视觉（可收图片）"
+                title="关掉后消息里不带图片块；纯文本模型不会再因为收到图片而整条失败"
+              />
             </div>
             <div className="ygg-field">
               <label className="ygg-label">Temperature {settings.temperature.toFixed(2)}</label>
@@ -132,6 +256,9 @@ export function SettingsPanel() {
                 value={settings.temperature}
                 onChange={(e) => setSettings({ temperature: Number(e.target.value) })}
               />
+            </div>
+            <div className="ygg-hint">
+              窗口 / 最大输出 / 视觉：获取或选中模型时自动填；留空即未知，由服务商决定。
             </div>
           </div>
         )}

@@ -24,7 +24,7 @@ export const SEED_PART_INFO: { id: SeedPart; label: string; hint: string }[] = [
   { id: 'interface', label: '界面', hint: '主题样式、界面插槽（背景/标题栏/效果层）、面板与输入框的位置与层级' },
   { id: 'components', label: '组件', hint: '所有组件的源码、位置尺寸、挂件/锁定状态、局部样式，以及 agent 的职责与能力开关' },
   { id: 'history', label: 'Agent 历史', hint: '对话记忆与"已经做过的事"账本（依附于组件与输入框，需同时勾选其一）' },
-  { id: 'settings', label: '设置', hint: 'Base / 模型 / 温度 / 图片中转 / 成人模式（API Key 默认不含）' },
+  { id: 'settings', label: '设置', hint: '连接、模型与各项参数（API Key 默认不含）' },
 ];
 
 /** 运行时用的持久化快照（就是 store.snapshot() 的返回形状）。 */

@@ -1,9 +1,18 @@
 import { LlmError, type ChatMessage, type LlmSettings } from './types';
+import { parseModelsPayload, type RemoteModel } from './presets';
 
 function endpoint(baseUrl: string): string {
   const base = baseUrl.trim().replace(/\/+$/, '');
   if (base.endsWith('/chat/completions')) return base;
   return `${base}/chat/completions`;
+}
+
+/** `/models` 的地址：与 chat/completions 同源，只是尾巴上那个路径不同。 */
+function modelsEndpoint(baseUrl: string): string {
+  const base = baseUrl.trim().replace(/\/+$/, '');
+  const tail = '/chat/completions';
+  if (base.endsWith(tail)) return base.slice(0, -tail.length) + '/models';
+  return base + '/models';
 }
 
 /**
@@ -96,6 +105,8 @@ export async function chatStream(
     body: JSON.stringify({
       model: settings.model,
       temperature: settings.temperature,
+      // 用户填了"最大输出"才发 max_tokens；没填就用服务商自己的默认值。
+      ...(settings.maxTokens && settings.maxTokens > 0 ? { max_tokens: settings.maxTokens } : {}),
       stream: true,
       messages,
       // 请求在流末尾附带用量。OpenAI 兼容端点支持；不支持的服务商会忽略它（那就走估算）。
@@ -186,4 +197,39 @@ export async function chatStream(
  */
 export function estimateTokens(text: string): number {
   return Math.round(text.length * 0.5);
+}
+
+/**
+ * 拉取这个入口的模型列表（OpenAI 兼容的 GET /models）。
+ *
+ * 三个参数**能拿到就带回来**：有的服务端（OpenRouter、vLLM、部分聚合入口）会在列表里
+ * 附上 context_length / max_completion_tokens / input_modalities；拿不到就查已知模型表
+ * （见 presets.ts），再查不到就留空 —— 由用户在设置里填。不猜。
+ */
+export async function listModels(settings: LlmSettings, signal?: AbortSignal): Promise<RemoteModel[]> {
+  const base = settings.baseUrl.trim();
+  if (!base) throw new LlmError('请先填 Base 地址。');
+  if (!settings.apiKey.trim()) throw new LlmError('请先填 Key —— 拉模型列表要带鉴权。');
+  let res: Response;
+  try {
+    res = await fetch(modelsEndpoint(base), {
+      headers: { Authorization: 'Bearer ' + settings.apiKey.trim() },
+      signal,
+    });
+  } catch (e) {
+    throw new LlmError('连不上这个地址：' + (e as Error).message);
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new LlmError('获取模型列表失败 ' + res.status + ' ' + res.statusText + ' ' + detail.slice(0, 200));
+  }
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch {
+    throw new LlmError('这个地址没有返回 JSON —— 它可能不是 OpenAI 兼容的 /models 入口。');
+  }
+  const list = parseModelsPayload(payload);
+  if (list.length === 0) throw new LlmError('模型列表是空的（这个入口可能不支持 /models）。');
+  return list;
 }
