@@ -2,9 +2,11 @@ import { registerInterface } from '../registry/interfaceRegistry';
 import { embedMarkers } from '../workspace/embed';
 import { fail, ok, strOr, tokensOf } from '../bus/opContext';
 import { compileComponent, compileTool } from '../../host/compile';
+import { clearConsole, readConsole } from '../../host/consoleErrors';
 import { defaultWindows, defaultWindowsText, desktop, useDesktopStore } from '../../store/desktopStore';
 import { getTool, registerTool, toolCatalog } from '../registry/toolRegistry';
 import { sanitizeTokens } from '../../theme/engine';
+import { policyFor } from '../security';
 import {
   clearSurfaceSource,
   getSurfaceDef,
@@ -19,7 +21,7 @@ import { MAX_NODES, themeText, toolCatalogText, treeText } from '../agent/prompt
 import { capScopeConflict, capSummary, DEFAULT_ACT_CAPS, parseCaps } from '../agent/caps';
 import { newNodeId } from '../ids';
 import { isAgentNode } from '../types';
-import type { ComponentNode, JsonSchema, YggNode } from '../types';
+import type { ComponentNode, DerivationOp, JsonSchema, YggNode } from '../types';
 
 function asSchema(v: unknown): JsonSchema {
   if (v && typeof v === 'object' && !Array.isArray(v)) return v as JsonSchema;
@@ -176,6 +178,50 @@ function surfaceDetailText(def: ReturnType<typeof getSurfaceDef> & object): stri
  * 再 inspect before="component" 看当前源码，最后用 patch_source 定点改。
  * 不给 Agent 看日志的话，它只能靠猜 —— 那就会变成"整段重写"。
  */
+/**
+ * 控制台输出（浏览器的 console.* 与未捕获异常）。
+ *
+ * 与 `before="logs"` 的分工：logs 是**运行时账本**（谁调了什么操作、失败在哪儿），
+ * console 是**页面控制台**（组件里自己打的 console.log、未捕获的异常、Promise 拒绝）。
+ * "组件是空白的 / 点不动" 这种问题要的是后者 —— 账本里只有"创建成功"。
+ */
+function consoleText(op: DerivationOp): string {
+  const limit = Number(op.limit);
+  const level = typeof op.level === 'string' ? op.level : undefined;
+  const entries = readConsole(Number.isFinite(limit) && limit > 0 ? limit : 60, level);
+  if (entries.length === 0) return '(no console output' + (level ? ' at level ' + level : '') + ')';
+  const s = desktop();
+  return entries
+    .map((e) => {
+      const when = new Date(e.at).toLocaleTimeString('zh-CN', { hour12: false });
+      return '[' + when + '] ' + e.level + ' ' + redactSecrets(e.text, s);
+    })
+    .join('\n');
+}
+
+/**
+ * 控制台输出里的密钥遮蔽。
+ *
+ * 控制台是**原样留档**的：谁都能往里面打东西（宿主、插件、生成组件），
+ * 于是"把 Key 打出来"这种事迟早会发生。安全档位不允许工具读密钥时，
+ * 这里把当前 Key 与插件的 secret 字段值抹成 ***（与 visibleFields 同一条规矩）。
+ */
+function redactSecrets(text: string, s: ReturnType<typeof desktop>): string {
+  if (policyFor(s.settings.securityLevel).exposeSecretsToTools) return text;
+  const secrets: string[] = [];
+  if (s.settings.apiKey) secrets.push(s.settings.apiKey);
+  for (const plugin of s.plugins) {
+    for (const [k, v] of Object.entries(plugin.values ?? {})) {
+      if (v && plugin.fields.find((f) => f.key === k)?.secret) secrets.push(v);
+    }
+  }
+  let out = text;
+  for (const secret of secrets) {
+    if (secret.length >= 6) out = out.split(secret).join('***');
+  }
+  return out;
+}
+
 function logsText(): string {
   const logs = desktop().logs;
   if (logs.length === 0) return '(no logs)';
@@ -377,7 +423,7 @@ export function registerCoreInterfaces(): void {
     kind: 'inspect',
     label: '查看界面结构',
     description:
-      'Inspect the interface. before: windows (viewport + every window) / component id= (one page full state **and source**) / tool id= (tool source) / surface = (slot state, current source and built-in implementation) / agent id= (role text, ledger, recent messages) / logs (**runtime errors are recorded here**) / agents / tree / tokens / surfaces / tools / all.',
+      'Inspect the interface. before: windows (viewport + every window) / component id= (one page full state **and source**) / tool id= (tool source) / surface = (slot state, current source and built-in implementation) / agent id= (role text, ledger, recent messages) / logs (**runtime ledger**: which operation ran and failed where) / **console** (the browser console itself: console.log / warn / error and uncaught exceptions — narrow with level="error"|"warn", cap with limit, wipe with clear=true) / agents / tree / tokens / surfaces / tools / all.',
     example: { kind: 'inspect', before: 'component', id: 'n_xxx' },
     cap: 'desktop',
     handler: (op) => {
@@ -397,6 +443,21 @@ export function registerCoreInterfaces(): void {
       if (part === 'all' || part === 'surfaces') chunks.push('## Surface slots\n' + surfacesText());
       if (part === 'all' || part === 'tools') chunks.push('## Tools\n' + toolCatalogText(toolCatalog()));
       if (part === 'all' || part === 'logs') chunks.push('## Logs\n' + logsText());
+      // 控制台**不并进 all**：它是排查具体问题时才要看的东西，塞进"全都给我"里只是占上下文。
+      if (part === 'console') {
+        if (op.clear === true) {
+          clearConsole();
+          chunks.push('## Console output\n(cleared; new lines from now on)');
+        } else {
+          chunks.push(
+            '## Console output\n' +
+              consoleText(op) +
+              '\n(last ' +
+              String(Number.isFinite(Number(op.limit)) && Number(op.limit) > 0 ? Number(op.limit) : 60) +
+              ' lines; narrow with level="error"|"warn", or wipe with clear=true)',
+          );
+        }
+      }
       if (part === 'agent') {
         const aid = strOr(op.id, '');
         const a = aid ? s.nodes[aid] : undefined;
