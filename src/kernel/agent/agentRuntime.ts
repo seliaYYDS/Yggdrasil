@@ -13,7 +13,7 @@ import type {
 import { newId } from '../ids';
 import { chatStream, estimateTokens, type LlmUsage } from '../llm/client';
 import type { ChatMessage, ContentPart } from '../llm/types';
-import { parsePlan } from './parse';
+import { nativeCallsFromArgs, parsePlan, planFromNativeCalls } from './parse';
 import {
   buildObservationPrompt,
   buildReplyPrompt,
@@ -235,6 +235,19 @@ const CURRENT_REQUEST_TAG = '[CURRENT REQUEST]';
 const MAX_RECOVERIES = 3;
 
 /**
+ * 像不像模型自己的原生工具调用标记。
+ *
+ * 只用来决定回灌时**要不要点名这个错**：解析层认得出的形式早就被翻译成 ops 了
+ * （见 parse.ts），走到"仍然失败"说明是它认不出的变体（标签被截断、格式怪……）。
+ * 这时唯一的出路是明确告诉模型"这个协议没有工具调用语法"，
+ * 否则它只会用同一种写法把恢复机会一次次耗光。
+ */
+function looksLikeToolCall(text: string): boolean {
+  const t = text.toLowerCase();
+  return t.includes('invoke name=') || t.includes('parameter name=') || t.includes('tool_calls');
+}
+
+/**
  * 观察结果的滚动预算（字符）。超过就丢掉最老的几条。
  * 取 40000 —— 大约能留住 3~4 次默认长度的抓取，够多步任务用，单次请求也不会失控。
  */
@@ -259,6 +272,8 @@ interface StreamHandlers {
 interface CallOk {
   ok: true;
   text: string;
+  /** 服务端走原生工具调用时，调用在这里（正文通常是空的）。见 parse.ts 的 nativeCallsFromArgs。 */
+  toolCalls: { name: string; arguments: string }[];
   /** 服务端报的用量；没报就是 null（上层按字符估算）。 */
   usage: LlmUsage | null;
   /** 这一次（含重试后成功的那次）的耗时。 */
@@ -294,7 +309,7 @@ async function chatWithRetry(
         onThinking: handlers.onThinking,
         signal: ctl.signal,
       });
-      return { ok: true, text: out.text, usage: out.usage, ms: out.ms };
+      return { ok: true, text: out.text, toolCalls: out.toolCalls, usage: out.usage, ms: out.ms };
     } catch (e) {
       lastError = (e as Error).message;
       if (stopSignal?.aborted) return { ok: false, error: '已停止', stopped: true };
@@ -710,7 +725,16 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         }
         const raw = call.text;
 
-        const parsed = parsePlan(raw);
+        /*
+         * 正文不是计划时，先看网关有没有把调用放进 tool_calls（那种情况下正文是空的）。
+         * 两条来源走**同一个**翻译器：解析层只认一种计划形状，模型用哪种信封都能跑
+         * （为什么必须有这一层，见 parse.ts 的 extractNativeCalls）。
+         */
+        const nativeFromArgs = nativeCallsFromArgs(call.toolCalls ?? []);
+        let parsed = parsePlan(raw);
+        if ((!parsed.ok || !parsed.plan) && nativeFromArgs.length > 0) {
+          parsed = planFromNativeCalls(nativeFromArgs, raw);
+        }
         if (!parsed.ok || !parsed.plan) {
           // 解析失败也交给 Agent 自己修：把错误与原始输出片段回灌，下一轮重来。
           const err = parsed.error ?? '解析失败';
@@ -735,6 +759,14 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             pushObservations([
               'Your previous output was not a valid plan; parsing failed: ' + err,
               'Raw output fragment: ' + raw.slice(0, 300),
+              // 翻译器认得出的形式走不到这里；认不出的必须**点名**，否则模型会一直重犯。
+              ...(looksLikeToolCall(raw)
+                ? [
+                    'Your reply was written in native tool-call syntax (a call block with named parameters).' +
+                      ' This protocol declares no tools and never uses that syntax: put every call into ops' +
+                      ' as a JSON object, e.g. { "kind": "ws_read", "name": "note.txt" }.',
+                  ]
+                : []),
               'Output one JSON object only, and kind must be one of the available operations.',
             ]);
             notifyRetry(round, '指令格式错误，正在让其自行修复：' + err);
@@ -746,6 +778,20 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: err });
         }
         const plan = parsed.plan;
+        /*
+         * 翻译来的计划：**告诉模型它是怎么被处理的**。
+         *
+         * 只执行、不吭声，模型下一轮还会用同一种语法（它并不知道我们收下了）。
+         * 这条 observation 会跟着本轮结果一起进下一轮的提示词，于是它改用 ops。
+         */
+        if (parsed.via === 'native') {
+          const kinds = plan.ops.map((o) => o.kind).join(', ');
+          pushObservations([
+            'Your reply used native tool-call syntax instead of a plan; it was translated into ops and executed: ' + kinds + '.',
+            'Put those calls into the ops array next time, e.g. { "kind": "ws_read", "name": "note.txt" }.',
+          ]);
+          store.log('warn', '工具调用语法 → ops: ' + kinds);
+        }
         // 收尾时把这一步标记成完成，并把全文（思考 / 原始输出）留在 trace 上 ——
         // 之前这一支忘了把 status 改成 ok，轨迹里会一直显示"进行中"。
         const finalizeModel = (msg: string): void => {

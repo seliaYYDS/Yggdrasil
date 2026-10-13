@@ -20,6 +20,15 @@ export interface LlmUsage {
 /** 一次流式调用的结果。 */
 export interface StreamResult {
   text: string;
+  /**
+   * 服务端走**原生工具调用**时，调用从这里出来（此时 text 通常是空的）。
+   *
+   * 这个应用不声明 tools，所以正常路径永远是"正文里写 JSON 计划"；但有的网关/模型会
+   * 自己按工具调用回答 —— 不给它们一个出口，这些回复只会变成 "empty content" 直接失败。
+   * 这里保持 arguments 的**原始 JSON 文本**，由解析层统一翻译成 ops
+   * （见 parse.ts 的 nativeCallsFromArgs）。
+   */
+  toolCalls: { name: string; arguments: string }[];
   /** 服务端报的用量；没报就是 null。 */
   usage: LlmUsage | null;
   /** 这次调用从发出到读完流的耗时（毫秒）。token/s 用它算。 */
@@ -45,10 +54,20 @@ interface UsageChunk {
   prompt_tokens_details?: { cached_tokens?: number };
 }
 
+/**
+ * 流式工具调用的分片。
+ * name 一般一次给全，arguments 是**逐段拼**的 JSON 文本（必须累加，不能覆盖）。
+ */
+interface StreamToolCall {
+  index?: number;
+  function?: { name?: string; arguments?: string };
+}
+
 interface StreamDelta {
   content?: string | null;
   reasoning_content?: string | null;
   reasoning?: string | null;
+  tool_calls?: StreamToolCall[];
 }
 
 interface StreamChunk {
@@ -103,6 +122,7 @@ export async function chatStream(
   const decoder = new TextDecoder();
   let buffer = '';
   let full = '';
+  const toolCalls: { name: string; arguments: string }[] = [];
   let usage: LlmUsage | null = null;
 
   for (;;) {
@@ -142,12 +162,20 @@ export async function chatStream(
         full += delta;
         options.onDelta?.(delta);
       }
+      // 原生工具调用：按 index 归位，arguments 逐段拼起来（网关会把一段 JSON 拆成很多片）。
+      for (const part of d?.tool_calls ?? []) {
+        const idx = typeof part.index === 'number' ? part.index : toolCalls.length;
+        const slot = (toolCalls[idx] ??= { name: '', arguments: '' });
+        if (part.function?.name) slot.name = part.function.name;
+        if (part.function?.arguments) slot.arguments += part.function.arguments;
+      }
     }
   }
 
-  if (!full.trim()) throw new LlmError('The LLM returned empty content.');
+  // 只有正文和工具调用都空才算"没返回内容" —— 否则原生工具调用会被误判成空回复。
+  if (!full.trim() && toolCalls.length === 0) throw new LlmError('The LLM returned empty content.');
   const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-  return { text: full, usage, ms: Math.max(1, Math.round(endedAt - startedAt)) };
+  return { text: full, toolCalls, usage, ms: Math.max(1, Math.round(endedAt - startedAt)) };
 }
 
 /**
