@@ -541,7 +541,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
              * 而且"读一半"的提示比不显示更糟。所以只保留最有用的一句。
              */
             <span className="ygg-compose-idle" title="输入你的想法，Agent 会自己拆解成组件与工具；也可以直接粘贴或拖入文件">
-              输入想法开始，或粘贴 / 拖入文件
+              Enter 发送 · Shift + Enter 换行
             </span>
           ) : null}
         </div>

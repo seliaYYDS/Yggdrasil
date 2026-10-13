@@ -83,9 +83,8 @@ export function SettingsPanel() {
                 spellCheck={false}
               />
               <div className="ygg-hint">
-                只在直连失败时用（跨域读图是浏览器硬规则）。它只递字节，不识别、不存储；
-                地址里可写 {'{url}'}。自建中转见仓库里的 <code>tools/image-relay-worker.js</code>。
-                <strong>第三方公共代理能看到你取的每一张图。</strong>
+                直连失败时才用；地址里用 {'{url}'} 占位。第三方代理能看到你取的图；
+                自建见 <code>tools/image-relay-worker.js</code>。
               </div>
             </div>
           </div>

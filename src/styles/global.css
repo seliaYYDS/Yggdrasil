@@ -119,33 +119,21 @@ button:focus:not(:focus-visible) { outline: none; }
 /*
  * 关闭动画（淡出 + 收束）。
  *
- * 为什么写成**两个类**：浏览器只有在"起始态被真正计算过一次"之后，才会对随后的
- * 属性变化做过渡。如果同一次样式重算里既加"正在关闭"又把它设成透明，
- * 浏览器看到的只是"最终态" —— 结果是没有过渡，窗口等 260ms 后凭空消失
- * （用户反复反馈"看不到关闭动画"就是这个原因）。
+ * 用 **animation** 而不是 transition：动画只要类被加上，就一定会从第一个关键帧开始播，
+ * 不依赖"起始态先被浏览器真正计算过一次"。之前的 transition 两段式（先 is-dying，
+ * rAF 下一帧再加 is-gone 把 opacity 归零）在真实渲染里始终没能插值 ——
+ * 用户看到的就是"等一会儿，然后窗口凭空消失"。
  *
- * 所以分成两步，由 WindowFrame 驱动：
- *   .is-dying —— 先接管动画：**必须 animation: none**。窗口元素带着
- *                `animation: ygg-window-in … both`，带 fill 的动画值在层叠上压过普通声明，
- *                不关掉它，下面的 opacity/transform 根本轮不到生效。
- *                同时把 transition 换成"只过渡 opacity 与 transform"，并保持 opacity: 1。
- *   .is-gone  —— 下一帧再加：把 opacity 归零、稍微收束，这次才真的产生过渡。
- *
- * 两个类都在 260ms（DEATH_MS）后随元素一起消失，时间对得上。
+ * 动画在层叠上也高于元素的行内样式（最小化途中被关掉的窗口带着行内 transform/opacity，
+ * 照样能播完这段淡出）。节奏与 DEATH_MS 一致：播完（260ms）才真正删除元素。
  */
 .ygg-window.is-dying {
-  /* 关键：关掉入场动画，否则它的 fill 值会一直盖住下面的 opacity/transform */
-  animation: none;
-  opacity: 1;
-  transform: none;
+  animation: ygg-window-out var(--ygg-t-slow) var(--ygg-ease-in) both;
   pointer-events: none;
-  transition:
-    opacity var(--ygg-t-slow) var(--ygg-ease-in),
-    transform var(--ygg-t-slow) var(--ygg-ease-in);
 }
-.ygg-window.is-dying.is-gone {
-  opacity: 0;
-  transform: scale(.97);
+@keyframes ygg-window-out {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: scale(.97); }
 }
 
 /* ---------------- 桌面：世界树的根系 ---------------- */
@@ -182,17 +170,7 @@ button:focus:not(:focus-visible) { outline: none; }
     opacity var(--ygg-t) var(--ygg-ease);
 }
 /* 悬停：描边向金色靠一点，先于聚焦给出"能点"的反馈 */
-/*
- * 悬停：**不再把整窗描边点亮**。
- *
- * 以前是 hover 时把 border-color 往金色调 —— 后果是"鼠标停在哪，哪个窗口就在发光"，
- * 看起来像所有窗口都处于聚焦态，用户分不清哪个才是当前窗口。
- * 现在悬停只提亮**标题栏**（那才是"这里能点 / 能拖"的提示），
- * 边框亮度只由聚焦状态决定：聚焦 = 亮金，其余 = 暗金。
- */
-.ygg-window:hover:not(.is-focused) > .ygg-titlebar {
-  background-color: color-mix(in srgb, var(--ygg-surface-2) 88%, var(--ygg-accent) 12%);
-}
+.ygg-window:hover:not(.is-focused) { border-color: color-mix(in srgb, var(--ygg-accent-dim) 55%, var(--ygg-accent)); }
 /* 聚焦 = 枝条被点亮 */
 .ygg-window.is-focused { border-color: var(--ygg-accent); box-shadow: var(--ygg-glow); }
 .ygg-window.is-focused > .ygg-titlebar .ygg-winbtn { color: var(--ygg-fg); }

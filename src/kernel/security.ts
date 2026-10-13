@@ -50,7 +50,7 @@ export const SECURITY_POLICIES: Record<SecurityLevel, SecurityPolicy> = {
   high: {
     level: 'high',
     label: '高',
-    summary: '禁止执行插件自带的 js 工具；只接受**已签名**的插件；插件读不到你的密钥。',
+    summary: '只收已签名的插件，插件代码不执行。',
     allowPluginTools: false,
     requireSignature: true,
     exposeSecretsToTools: false,
@@ -61,7 +61,7 @@ export const SECURITY_POLICIES: Record<SecurityLevel, SecurityPolicy> = {
   normal: {
     level: 'normal',
     label: '标准',
-    summary: '允许 js 工具（在无网络的 Worker 里执行）；单次调用最多 10 个请求；插件读不到密钥以外的字段。',
+    summary: '默认。插件 js 工具可用，但戴配额与遮蔽。',
     allowPluginTools: true,
     requireSignature: false,
     exposeSecretsToTools: false,
@@ -72,7 +72,7 @@ export const SECURITY_POLICIES: Record<SecurityLevel, SecurityPolicy> = {
   weak: {
     level: 'weak',
     label: '宽松',
-    summary: '允许 js 工具与更多请求（单次 50 个）；插件可以读到密钥。',
+    summary: '放宽配额，密钥对插件工具可见。',
     allowPluginTools: true,
     requireSignature: false,
     exposeSecretsToTools: true,
@@ -83,7 +83,7 @@ export const SECURITY_POLICIES: Record<SecurityLevel, SecurityPolicy> = {
   none: {
     level: 'none',
     label: '不限制',
-    summary: '不再追加配额与遮蔽；未签名的插件、任意次数的请求都放行。**Worker 隔离仍然存在**。',
+    summary: '不追加配额与遮蔽；Worker 隔离仍在。',
     allowPluginTools: true,
     requireSignature: false,
     exposeSecretsToTools: true,
@@ -104,26 +104,21 @@ export function policyFor(level: unknown): SecurityPolicy {
   return SECURITY_POLICIES[isSecurityLevel(level) ? level : DEFAULT_SECURITY_LEVEL];
 }
 
-/** 界面上的一行说明：这一档到底做了什么、哪些地方会被挡。 */
+/**
+ * 界面上的说明：**两行** ——一句这档的定位，一行具体差别。
+ *
+ * 说明曾经摊成五行（js 工具 / 联网配额 / 密钥 / 签名各一行），
+ * 面板里读起来像一张表 —— 用户反馈"太长太罗嗦"。具体差别其实四个字段就够，
+ * 用「·」压成一行；定位句交给 summary。
+ */
 export function describePolicy(p: SecurityPolicy): string[] {
-  const lines: string[] = [p.summary];
-  lines.push(
-    p.allowPluginTools
-      ? '插件 js 工具：允许执行（仍在无 DOM、无网络的 Worker 里）'
-      : '插件 js 工具：**禁止执行**',
-  );
-  lines.push(
-    p.fetchPerCall === 0
-      ? '插件联网配额：不适用（工具被禁用）'
-      : p.fetchPerCall === Infinity
-        ? '插件联网配额：不限制每次调用的请求数'
-        : '插件联网配额：每次调用最多 ' + p.fetchPerCall + ' 个请求',
-  );
-  lines.push(
-    p.exposeSecretsToTools
-      ? '密钥（secret 字段）：插件工具**可以**读到'
-      : '密钥（secret 字段）：插件工具读不到（返回空）',
-  );
-  lines.push(p.requireSignature ? '未签名的插件：**拒绝安装**' : '未签名的插件：允许安装');
-  return lines;
+  const net =
+    p.fetchPerCall === 0 ? '不适用' : p.fetchPerCall === Infinity ? '不限' : '≤' + p.fetchPerCall + ' 次/调用';
+  return [
+    p.summary,
+    (p.allowPluginTools ? 'js 工具 可执行' : 'js 工具 禁止') +
+      ' · 联网 ' + net +
+      ' · 密钥 ' + (p.exposeSecretsToTools ? '可读' : '不可读') +
+      ' · 未签名插件 ' + (p.requireSignature ? '拒装' : '可装'),
+  ];
 }

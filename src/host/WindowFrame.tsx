@@ -113,15 +113,6 @@ export function WindowFrame({
   // 关闭淡出：面板与输入框由 store.requestClose 标记，组件由 removeNode 标记 ——
   // 统一在这里读，调用方不用各自传一遍。
   const dyingNow = useDesktopStore((s) => !!s.dying[id]);
-  /*
-   * 关闭动画的第二段。
-   *
-   * 见 global.css 里 .is-dying / .is-gone 的说明：必须**分两帧**——
-   * 第一帧只加 .is-dying（关掉入场动画、保持 opacity: 1），
-   * 强制一次样式计算之后再加 .is-gone 把 opacity 归零，浏览器才会真的做过渡。
-   * 同一帧里做完，浏览器只看到"最终态"，就等于没有动画。
-   */
-  const [gone, setGone] = useState(false);
   const setResizing = useDesktopStore((s) => s.setResizing);
   const [lunge, setLunge] = useState(false);
   /** 挂载那一刻决定：从任务栏展开的窗口不再播入场动画，改播"长回原位"。 */
@@ -152,21 +143,6 @@ export function WindowFrame({
     const raf = window.requestAnimationFrame(() => setSettled(true));
     return () => window.cancelAnimationFrame(raf);
   }, [restoring]);
-
-  /**
-   * 关闭：两帧驱动（第一帧接管动画，第二帧才真正淡出）。
-   *
-   * 用 rAF 而不是 setTimeout(0)：要的是"浏览器至少渲染过一帧起始态"，
-   * rAF 正好保证这一点（setTimeout 可能被合并进同一次渲染）。
-   */
-  useEffect(() => {
-    if (!dying) {
-      setGone(false);
-      return;
-    }
-    const raf = window.requestAnimationFrame(() => setGone(true));
-    return () => window.cancelAnimationFrame(raf);
-  }, [dying]);
 
   /** 窗口中心指向任务栏锚点的位移 + 缩到很小。收进去与展开共用同一段换算。 */
   const flyToTaskbar =
@@ -325,7 +301,6 @@ export function WindowFrame({
         (isWidget ? ' is-widget' : '') +
         (newborn ? ' is-newborn' : '') +
         (dying || dyingNow ? ' is-dying' : '') +
-        (gone ? ' is-gone' : '') +
         (pinned ? ' is-fixed' : '') +
         (focused ? ' is-focused' : '') +
         (drag ? ' is-dragging' : '') +
