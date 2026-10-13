@@ -50,10 +50,36 @@ const MAX_FILE_BYTES = 16 * 1024 * 1024;
 interface WsWriteData {
   /** 文本内容。 */
   text?: string;
-  /** 二进制内容（ArrayBuffer / 类型化数组）。 */
+  /** 二进制内容（ArrayBuffer / 类型化数组 / Blob）。 */
   bytes?: unknown;
   /** 二进制时的类型。 */
   mime?: string;
+}
+
+/**
+ * 把脚本传进来的"内容"归一成 { text } 或 { bytes }。
+ *
+ * 这里原来**只认** { text } / { bytes } 两种显式形状（理由是裸值有歧义）。但实践里
+ * 模型天然会写 `write(name, "字符串")` / `write(name, 字节)` —— 于是脚本每次都在
+ * **最后一步**炸掉，整次加工（读、转换、算）全部白做：用户反馈"ws_run 极易报错、
+ * 完全没法按预期改工作区里的文件"就是这个。
+ *
+ * 歧义只存在于"一个孤立的值到底是内容还是文件名"这种**没有位置**的场合；
+ * write 的第二个参数位置本身就是内容，所以收下裸值是安全的：
+ *   string           → { text }
+ *   ArrayBuffer / 视图 → { bytes }
+ *   Blob             → { bytes }，并用 blob.type 当 mime
+ *                      （canvas / OffscreenCanvas 转码的产物就是 Blob，它自带类型）
+ */
+async function normalizeWriteData(raw: unknown): Promise<WsWriteData> {
+  if (typeof raw === 'string') return { text: raw };
+  if (raw instanceof ArrayBuffer) return { bytes: raw };
+  if (ArrayBuffer.isView(raw)) return { bytes: raw };
+  if (typeof Blob !== 'undefined' && raw instanceof Blob) {
+    const mime = raw.type;
+    return { bytes: new Uint8Array(await raw.arrayBuffer()), ...(mime ? { mime } : {}) };
+  }
+  return (raw ?? {}) as WsWriteData;
 }
 
 export function registerWorkspaceRunInterface(): void {
@@ -61,15 +87,19 @@ export function registerWorkspaceRunInterface(): void {
     kind: 'ws_run',
     label: '运行脚本',
     description:
-      '**Run a small script against the workspace** (your scratch bench). Use it to transform content in place instead of building a component for it — parsing, converting, rewriting, combining, computing. The script is a function expression with **the same signature as every other script in this system: async (args, ctx) => { ... }** (args is empty here). In ctx you get: ctx.workspace.list() / .read(name) / .write(name, data) / .delete(name), ctx.log(...), and ctx.fetch(...) — but **ws_run has no host allow-list, so fetch always fails here**; fetch web content with ws_write(url) first. **The return value is NOT an output channel**: put results into the workspace with ctx.workspace.write and deliver them by embedding in a component. Runs in a Worker with no DOM and no network of its own.',
+      '**Run a small script against the workspace** (your scratch bench). Use it to transform content in place instead of building a component for it — parsing, converting, rewriting, combining, computing. The script is a function expression with **the same signature as every other script in this system: async (args, ctx) => { ... }** (args is empty here). In ctx you get: ctx.workspace.list(); ctx.workspace.read(name) — **a text file comes back as a string, a binary one as { bytes: ArrayBuffer, mime, size }** (it is neither a Blob nor a data URL: build the Blob yourself, new Blob([r.bytes], { type: r.mime })); ctx.workspace.write(name, data) — data is a string, bytes (ArrayBuffer / typed array / Blob), or the explicit { text } / { bytes, mime }; ctx.workspace.delete(name); plus ctx.log(...) and ctx.fetch(...) — but **ws_run has no host allow-list, so fetch always fails here**; fetch web content with ws_write(url) first. **The return value is NOT an output channel**: put results into the workspace with ctx.workspace.write and deliver them by embedding in a component. Runs in a Worker with no DOM and no network of its own.',
     example: {
       kind: 'ws_run',
       script:
         'async (args, ctx) => {\n' +
+        '  // text file -> a plain string\n' +
         '  const txt = await ctx.workspace.read("raw.txt");\n' +
         '  const lines = String(txt).split("\\n").filter((l) => l.trim());\n' +
-        '  await ctx.workspace.write("clean.txt", lines.join("\\n"));\n' +
-        '  ctx.log("写回 " + lines.length + " 行");\n' +
+        '  await ctx.workspace.write("clean.txt", lines.join("\\n"));  // a string is text content\n' +
+        '  // binary file -> { bytes, mime, size }; pass the bytes straight back\n' +
+        '  const img = await ctx.workspace.read("shot.png");\n' +
+        '  await ctx.workspace.write("copy.png", { bytes: img.bytes, mime: img.mime });\n' +
+        '  ctx.log("整理 " + lines.length + " 行");\n' +
         '}',
     },
     mutates: true,
@@ -122,7 +152,7 @@ export function registerWorkspaceRunInterface(): void {
               throw new Error('一次调用最多写 ' + MAX_WRITES + ' 次文件（已经写满了）。');
             }
             if (!validName(name)) throw new Error('名字不合法：' + name);
-            const data = (req.data ?? {}) as WsWriteData;
+            const data = await normalizeWriteData(req.data);
             const existing = await getEntry(name);
             const replacing = existing?.size ?? 0;
 
@@ -147,11 +177,16 @@ export function registerWorkspaceRunInterface(): void {
               if (raw instanceof ArrayBuffer) bytes = new Uint8Array(raw);
               else if (ArrayBuffer.isView(raw)) bytes = new Uint8Array(raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength));
               /*
-               * 只认 { text } / { bytes } 两种显式形状，**不接受裸字符串或裸字节**。
-               * 理由：裸值有歧义（一个字符串到底是文本内容，还是文件名/URL？），
-               * 而显式形状让脚本与宿主都不会猜错；报错里也会把这个形状写清楚。
+               * 走到这里说明给的东西连归一化都认不出来（不是文本、不是字节、也不是
+               * { text } / { bytes } 这两种显式形状）。报错里把**能用的形状**写全，
+               * 模型下一次才知道该给什么。
                */
-              else throw new Error('write 的 data 只能是 { text } 或 { bytes }。');
+              else {
+                throw new Error(
+                  'write 的 data 只能是文本（string）、字节（ArrayBuffer / 类型化数组 / Blob），' +
+                    '或者 { text } / { bytes, mime } 这样的显式形状。',
+                );
+              }
               size = bytes.length;
               if (size === 0) throw new Error('write 的字节是空的。');
               if (size > MAX_FILE_BYTES) throw new Error('字节太多（' + formatBytes(size) + '）。');
