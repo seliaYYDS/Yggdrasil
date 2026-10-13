@@ -571,7 +571,7 @@ export function describeManifest(m: PluginManifest): string[] {
           const ref = h.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}$/);
           if (!ref) return h;
           const f = (m.fields ?? []).find((x) => x.key === ref[1]);
-          return '你在插件面板里填的「' + (f?.label ?? ref[1]) + '」';
+          return '插件面板里的「' + (f?.label ?? ref[1]) + '」';
         })
         .join('、'),
   );

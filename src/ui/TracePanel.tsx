@@ -99,7 +99,7 @@ export function TracePanel() {
           <div className="ygg-seg">
             <button
               className={view === 'steps' && filter === 'all' ? 'on' : ''}
-              title="全部步骤（点一下只看全部）"
+              title="全部步骤"
               onClick={() => pickFilter('all')}
             >
               步骤 {merged.length}
@@ -120,7 +120,7 @@ export function TracePanel() {
             </button>
             <button
               className={view === 'log' ? 'on' : ''}
-              title="运行日志（点一下切到日志视图）"
+              title="运行日志"
               onClick={() => setView(view === 'log' ? 'steps' : 'log')}
             >
               日志 {logs.length}
@@ -128,7 +128,7 @@ export function TracePanel() {
           </div>
           <button
             className="ygg-trace-clear"
-            title="清空轨迹与日志，并清除 Agent 记忆（组件与界面本身不动）"
+            title="清空轨迹、日志与 Agent 记忆"
             disabled={merged.length === 0 && logs.length === 0}
             onClick={clearTraces}
           >
@@ -137,7 +137,7 @@ export function TracePanel() {
         </div>
 
         {view === 'steps' && merged.length > 0 ? (
-          <div className="ygg-panel-hint">点任意一行展开：模型的思考、原始输出与接口返回内容</div>
+          <div className="ygg-panel-hint">点一行展开：思考 / 模型原始输出 / 返回内容</div>
         ) : null}
 
         {view === 'log' ? (
@@ -213,11 +213,6 @@ export function TracePanel() {
                     ) : null}
 
                     {!isOpen && step.message ? <div className="ygg-step-msg">{step.message}</div> : null}
-                    {!isOpen && (step.thinking || step.raw) ? (
-                      <div className="ygg-step-hint">
-                        {step.thinking ? '有思考内容 · ' : ''}点开看全文
-                      </div>
-                    ) : null}
                     {isOpen && step.message ? <div className="ygg-step-msg">{step.message}</div> : null}
                   </div>
                 );

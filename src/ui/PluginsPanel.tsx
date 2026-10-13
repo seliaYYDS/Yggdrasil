@@ -122,14 +122,14 @@ export function PluginsPanel() {
       }
       setUpdateNote((m) => ({ ...m, [id]: '发现新版本 ' + info.latest + '，正在取回…' }));
       if (!info.url) {
-        setUpdateNote((m) => ({ ...m, [id]: '新版本 ' + info.latest + '，但更新信息里没给下载地址。' }));
+        setUpdateNote((m) => ({ ...m, [id]: '新版本 ' + info.latest + '，更新信息里没有下载地址。' }));
         return;
       }
       const res = await fetch(info.url);
       if (!res.ok) throw new Error('下载新版本失败：HTTP ' + res.status);
       const bytes = new Uint8Array(await res.arrayBuffer());
       await read(info.url.split('/').pop() || plugin.id + PLUGIN_EXT, bytes);
-      setUpdateNote((m) => ({ ...m, [id]: '新版本 ' + info.latest + ' 已取回，请在下面确认安装。' }));
+      setUpdateNote((m) => ({ ...m, [id]: '新版本 ' + info.latest + ' 已取回，在下面确认安装。' }));
     } catch (e) {
       setUpdateNote((m) => ({ ...m, [id]: (e as Error).message }));
     } finally {
@@ -153,7 +153,7 @@ export function PluginsPanel() {
           <button className="ygg-btn ghost" onClick={() => void onDemo()}>装示例</button>
         </div>
         <div className="ygg-hint">
-          支持 {PLUGIN_EXT}（zip）与单文件 json。装之前先给你看清单 —— 解析阶段不执行包里的东西。
+          支持 {PLUGIN_EXT}（zip）与单文件 json。安装前先显示权限清单。
         </div>
 
         {error ? <div className="ygg-plugin-error">{error}</div> : null}
@@ -168,7 +168,7 @@ export function PluginsPanel() {
             </ul>
             {pendingDiff.length > 0 ? (
               <div className="ygg-plugin-error" style={{ color: 'var(--ygg-accent-hi)' }}>
-                <strong>这是一次升级，和上一版比它多要了这些：</strong>
+                <strong>比上一版多要的权限：</strong>
                 <ul className="ygg-plugin-lines" style={{ marginTop: 4 }}>
                   {pendingDiff.map((l, i) => (
                     <li key={i}>{l}</li>
@@ -177,7 +177,7 @@ export function PluginsPanel() {
               </div>
             ) : null}
             <div className="ygg-hint">
-              装上后这些操作会变成 Agent 可调的接口，它只能访问白名单里的主机；随时可以关掉。
+              装上后这些操作可由 Agent 调用，只能访问白名单主机。
             </div>
             <div className="ygg-row-gap" style={{ marginTop: 8 }}>
               <button className="ygg-btn primary" onClick={confirm}>安装</button>
@@ -212,7 +212,7 @@ export function PluginsPanel() {
               {p.tools.length ? (
                 <>
                   <br />
-                  js 工具：{p.tools.map((t) => t.name).join('、')}（在 Worker 里隔离执行）
+                  js 工具：{p.tools.map((t) => t.name).join('、')}（隔离执行）
                 </>
               ) : null}
               {p.ui.length ? (
@@ -242,7 +242,7 @@ export function PluginsPanel() {
                       className="ygg-input"
                       type={f.secret ? 'password' : f.type === 'url' ? 'url' : 'text'}
                       value={p.values[f.key] ?? ''}
-                      placeholder={f.placeholder ?? (f.secret ? '只存在本地，不会进提示词' : '')}
+                      placeholder={f.placeholder ?? (f.secret ? '只存在本地' : '')}
                       spellCheck={false}
                       onChange={(e) => setValue(p.id, f.key, e.target.value)}
                     />
@@ -270,7 +270,7 @@ export function PluginsPanel() {
               <button className="ygg-btn tiny danger" onClick={() => uninstall(p.id)}>卸载</button>
             </div>
             {guideOf === p.id ? (
-              <pre className="ygg-plugin-guide">{p.guide || '（这个插件没有 guide.md）'}</pre>
+              <pre className="ygg-plugin-guide">{p.guide || '（没有指南）'}</pre>
             ) : null}
           </div>
         ))}

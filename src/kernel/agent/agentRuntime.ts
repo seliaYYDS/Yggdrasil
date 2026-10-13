@@ -221,10 +221,9 @@ function visionHint(images: string[], error: string): string {
   return (
     '\n\n' +
     (looksVision
-      ? '这个报错看起来和图片有关：**当前模型大概率不支持识图**。'
-      : '这次请求带了 ' + images.length + ' 张图片。如果模型不支持识图，就会像这样整条失败。') +
-    '请在右上角设置里换一个支持视觉的模型（例如 gpt-4o / claude-3.5 / qwen-vl）再试；' +
-    '换成纯文本模型时，先把图片去掉。'
+      ? '报错与图片有关：当前模型可能不支持识图。'
+      : '这次请求带了 ' + images.length + ' 张图片；模型不支持识图时会整条失败。') +
+    '可在设置里换一个支持视觉的模型（gpt-4o / claude-3.5 / qwen-vl）。'
   );
 }
 
@@ -440,10 +439,10 @@ async function runReply(
   };
 
   // 停止要排在"失败"前面：它是用户意图，不是故障。
-  if (!call.ok && call.stopped) return failReply('已停止', '你按了停止，这一轮没有继续。', '已停止');
+  if (!call.ok && call.stopped) return failReply('已停止', '已按停止。', '已停止');
   if (!call.ok) return failReply('模型回复失败', call.error, call.error);
   const reply = call.text.trim();
-  if (!reply) return failReply('模型没有返回内容', '这次调用没有拿到任何文本。', '空内容');
+  if (!reply) return failReply('模型没有返回内容', '这次调用没有返回文本。', '空内容');
   recordUsage(sessionId, call, messages.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : 0), 0), reply);
 
   // 回复写进记忆：这就是"它说过的话"，组件从这里渲染。
@@ -924,7 +923,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
      */
     if (okCount === 0 && failCount === 0 && totalAdded === 0) {
       useDesktopStore.getState().setFeedback(
-        mkFeedback('fail', '没有产生任何改动', '模型这一轮没有给出可执行的指令，界面上什么都没变。换个说法再说一次通常就好了。'),
+        mkFeedback('fail', '没有产生任何改动', '模型这一轮没有给出可执行的指令，界面没有变化。可以换一种说法再试。'),
       );
       return finish({ ok: false, added: 0, rounds: rounds.length, okCount: 0, failCount: 0, error: '空指令' });
     }

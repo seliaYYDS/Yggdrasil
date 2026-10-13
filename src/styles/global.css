@@ -1022,13 +1022,6 @@ button:focus:not(:focus-visible) { outline: none; }
   border-radius: var(--ygg-radius);
   padding: 8px 10px;
 }
-.ygg-step-hint {
-  font-size: 9px;
-  letter-spacing: .1em;
-  color: var(--ygg-accent-dim);
-  margin-top: 3px;
-  padding-left: 16px;
-}
 .ygg-step-msg {
   font-size: 11px;
   margin-top: 3px;

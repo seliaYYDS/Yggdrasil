@@ -79,7 +79,7 @@ function ExportSeed() {
           <input type="checkbox" checked={withKey} onChange={(e) => setWithKey(e.target.checked)} />
           <span>
             包含 API Key（敏感）
-            <span className="desc">默认不含。勾上之后这个文件就是你的密钥，别发给别人。</span>
+            <span className="desc">默认不含；勾上后文件里包含密钥。</span>
           </span>
         </label>
         {done ? <div className="ygg-seed-warn" style={{ color: 'var(--ygg-ok)' }}>{done}</div> : null}
@@ -170,11 +170,11 @@ function ImportSeed() {
               </label>
             ))}
             <div className="ygg-seed-warn">
-              <strong>导入会覆盖上面勾选的区块</strong>（没勾的、以及文件里没有的区块保持不动）。
+              <strong>导入会覆盖勾选的区块</strong>（其余保持不动）。
               {parts.length === 0
-                ? ' 一项都没勾 —— 现在导入等于什么都不做。'
+                ? ' 一项都没勾。'
                 : parts.includes('components') || parts.includes('history')
-                  ? ' 导入之后原来的组件与对话记忆就找不回来了 —— 想留就先导出一份。'
+                  ? ' 导入会覆盖原有组件与对话记忆。'
                   : ' 这次不会动到组件与对话记忆。'}
             </div>
           </>

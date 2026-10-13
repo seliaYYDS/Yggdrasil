@@ -131,7 +131,7 @@ export function WorkspacePanel() {
 
   const remove = async (name: string) => {
     await deleteEntry(name);
-    setNote('已删除 ' + name + '（已嵌进组件的内容不受影响）。');
+    setNote('已删除 ' + name);
     if (previewName === name) {
       setPreviewName('');
       setPreview(null);
@@ -141,7 +141,7 @@ export function WorkspacePanel() {
 
   const clearAll = async () => {
     const n = await clearWorkspace();
-    setNote('已清空 ' + n + ' 个文件。已嵌进组件的内容不受影响。');
+    setNote('已清空 ' + n + ' 个文件');
     setPreviewName('');
     setPreview(null);
     setPreviewUrl('');
@@ -153,8 +153,7 @@ export function WorkspacePanel() {
     <PanelWindow panel="workspace" title="工作区" minW={340} minH={300} onClose={() => setOpen(false)}>
       <div className="ygg-panel-body">
         <div className="ygg-hint" style={{ marginTop: 0 }}>
-          Agent 的临时加工台。嵌进组件的内容是复制过去的，所以这里删掉不会弄坏界面。
-          你只能看和删；点文件名展开。
+          Agent 的临时加工台。内容嵌进组件时是复制，删除这里的文件不影响界面。
         </div>
 
         <div className="ygg-row-gap" style={{ marginTop: 8 }}>
@@ -203,14 +202,13 @@ export function WorkspacePanel() {
                         <pre className="ygg-ws-text">
                           {previewText.slice(0, PREVIEW_CHARS)}
                           {previewText.length > PREVIEW_CHARS
-                            ? '\n… 还有 ' + (previewText.length - PREVIEW_CHARS) + ' 字符（这里只预览前 ' + PREVIEW_CHARS + '）'
+                            ? '\n… 还有 ' + (previewText.length - PREVIEW_CHARS) + ' 字符'
                             : ''}
                         </pre>
                       ) : (
                         // 其他二进制：如实说不能看，并给一个能落地的下一步。
                         <div className="ygg-hint">
-                          这个文件是 {pv.mime || pv.kind}，界面里看不了。可以让 Agent 用 <code>ws_read</code> 处理它，
-                          或者直接嵌进组件（写 <code>@ws/{pv.name}</code>）。
+                          {pv.mime || pv.kind}，无法在这里预览。
                         </div>
                       )}
                       <div className="ygg-ws-meta">

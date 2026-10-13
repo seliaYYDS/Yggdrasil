@@ -108,7 +108,7 @@ export function InspectorPanel() {
                   <span className="name">{node.name}</span>
                   {isAgent ? <span className="kind" title="带 agent 能力">agent</span> : null}
                   {node.kind === 'component' && node.frame === 'widget' ? (
-                    <span className="kind" title="挂件：没有标题栏，靠右下角按钮操控">挂件</span>
+                    <span className="kind" title="挂件：无标题栏，用右下角按钮操控">挂件</span>
                   ) : null}
                   {node.kind === 'component' && node.locked ? (
                     <span className="kind" title="已锁定：不可删除">已锁</span>
@@ -141,7 +141,7 @@ export function InspectorPanel() {
                   {node.kind === 'component' ? (
                     <button
                       className="ygg-winbtn"
-                      title={'状态：' + node.status + '（点击切换 显示/最小化/关闭）'}
+                      title={'状态：' + node.status + '（点击切换）'}
                       onClick={(e) => {
                         e.stopPropagation();
                         cycleStatus(node);
@@ -162,8 +162,8 @@ export function InspectorPanel() {
                       className={'ygg-winbtn' + (node.fixed ? ' is-active' : '')}
                       title={
                         node.fixed
-                          ? '已固定：鼠标移上去不再显示操控按钮（点击取消）'
-                          : '固定：不再显示操控按钮（点击固定）'
+                          ? '已固定（点击取消）'
+                          : '固定'
                       }
                       onClick={(e) => {
                         e.stopPropagation();
@@ -177,7 +177,7 @@ export function InspectorPanel() {
                   {node.kind === 'component' ? (
                     <button
                       className={'ygg-winbtn' + (node.locked ? ' is-active' : '')}
-                      title={node.locked ? '已锁定：不可删除（点击解锁）' : '锁定：不可删除（点击锁定）'}
+                      title={node.locked ? '已锁定：不可删除（点击解锁）' : '锁定：不可删除'}
                       onClick={(e) => {
                         e.stopPropagation();
                         updateNode(node.id, { locked: !node.locked });

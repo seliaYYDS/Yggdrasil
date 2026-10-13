@@ -43,7 +43,7 @@ export function ConsoleErrorPrompt() {
   return (
     <div className="ygg-overlay" onClick={dismiss}>
       <div className="ygg-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="ygg-confirm-text">控制台出现报错，要让 Agent 尝试修复吗？</div>
+        <div className="ygg-confirm-text">控制台出现报错，让 Agent 尝试修复？</div>
         <pre className="ygg-log ygg-code ygg-error-text">{prompt.text}</pre>
         <div className="ygg-modal-actions">
           <button className="ygg-btn ghost" onClick={dismiss}>

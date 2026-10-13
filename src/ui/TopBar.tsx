@@ -39,7 +39,6 @@ function TopRight() {
   const setTraceOpen = useDesktopStore((s) => s.setTraceOpen);
   const setResetOpen = useDesktopStore((s) => s.setResetOpen);
   const addSession = useDesktopStore((s) => s.addSession);
-  const storageNote = useDesktopStore((s) => s.storageNote);
   const traceCount = useDesktopStore((s) => s.sessions.reduce((n, ses) => n + ses.trace.length, 0));
   const sessionCount = useDesktopStore((s) => s.sessions.length);
   const runningCount = useDesktopStore((s) => s.sessions.filter((ses) => ses.status.running).length);
@@ -48,7 +47,7 @@ function TopRight() {
     <div className="ygg-topbar">
       <button
         className="ygg-topbtn"
-        title={sessionCount >= MAX_SESSIONS ? '已达输入框上限' : '再开一个输入框（可并行干活）'}
+        title={sessionCount >= MAX_SESSIONS ? '已达输入框上限' : '新建输入框'}
         disabled={sessionCount >= MAX_SESSIONS}
         onClick={() => addSession()}
       >
@@ -57,17 +56,17 @@ function TopRight() {
       </button>
       <button
         className="ygg-topbtn"
-        title={'执行轨迹 · ' + storageNote}
+        title="执行轨迹"
         onClick={() => setTraceOpen(true)}
       >
         <TraceIcon />
         {traceCount > 0 ? <span className="badge">{traceCount}</span> : null}
-        {runningCount > 0 ? <span className="pulse" title={runningCount + ' 个任务在跑'} /> : null}
+        {runningCount > 0 ? <span className="pulse" title={runningCount + ' 个任务运行中'} /> : null}
       </button>
       <button className="ygg-topbtn" title="节点树" onClick={() => setTreeOpen(true)}>
         <NodesIcon />
       </button>
-      <button className="ygg-topbtn" title="工作区（Agent 的临时加工台）" onClick={() => setWorkspaceOpen(true)}>
+      <button className="ygg-topbtn" title="工作区" onClick={() => setWorkspaceOpen(true)}>
         <WorkspaceIcon />
       </button>
       <button className="ygg-topbtn" title="插件" onClick={() => setPluginsOpen(true)}>

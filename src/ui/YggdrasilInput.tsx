@@ -212,7 +212,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
     let room = MAX_UPLOAD_FILES - pending.length;
     for (const file of incoming) {
       if (room <= 0) {
-        notes.push('最多 ' + MAX_UPLOAD_FILES + ' 个文件，多余的没接。');
+        notes.push('最多 ' + MAX_UPLOAD_FILES + ' 个文件，超出的已忽略。');
         break;
       }
       const bad = checkFileLocally(file);
@@ -345,7 +345,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
         {shotMine ? (
           <button
             className="ygg-pending"
-            title="浏览器要求由用户手势触发截图；点了之后这张图会直接进入 Agent 的上下文"
+            title="点击后截取当前画面"
             onClick={() => {
               clearPendingShot();
               void (async () => {
@@ -407,7 +407,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
                 <span className="ygg-file-name">{f.name}</span>
                 <button
                   className="ygg-file-del"
-                  title="不要这个文件了"
+                  title="移除"
                   onClick={() => setPending((prev) => prev.filter((_, j) => j !== i))}
                 >
                   ✕
@@ -446,8 +446,8 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
               busy
                 ? '排队发送…'
                 : pending.length > 0
-                  ? '说说这些文件要做什么…（发送时才上传到工作区）'
-                  : '描述你想让 Yggdrasil 做什么…（也可以直接粘贴或拖入文件）'
+                  ? '这些文件要做什么…（发送时才上传）'
+                  : '描述任务…（可粘贴或拖入文件）'
             }
             rows={1}
             spellCheck={false}
@@ -525,7 +525,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
             <span className="ygg-compose-hint">
               {uploadError
             ? uploadError
-            : pending.length + ' 个文件将在发送时存入工作区 —— Agent 会按需用 ws_read 读取'}
+            : pending.length + ' 个文件将在发送时存入工作区'}
             </span>
           ) : null}
           {/*
@@ -540,7 +540,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
              * 提示要**短**：这一行右边还有用量指标，太长就会被截断，
              * 而且"读一半"的提示比不显示更糟。所以只保留最有用的一句。
              */
-            <span className="ygg-compose-idle" title="输入你的想法，Agent 会自己拆解成组件与工具；也可以直接粘贴或拖入文件">
+            <span className="ygg-compose-idle" title="可直接粘贴或拖入文件">
               Enter 发送 · Shift + Enter 换行
             </span>
           ) : null}

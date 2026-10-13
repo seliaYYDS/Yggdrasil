@@ -66,7 +66,7 @@ export function SettingsPanel() {
                 on={adultOn}
                 onChange={(v) => setSettings({ adultMode: v })}
                 label="成人模式"
-                title="涉及性 / 情色时按正当题材处理，不回避、不说教（服务商自己的策略仍绕不过）"
+                title="成人内容按正当题材处理；服务商策略仍可能拒绝"
               />
             </div>
             {/*
@@ -78,12 +78,12 @@ export function SettingsPanel() {
               <input
                 className="ygg-input"
                 value={settings.imageRelay ?? ''}
-                placeholder="留空 = 不中转，只直连读取"
+                placeholder="留空 = 直连读取"
                 onChange={(e) => setSettings({ imageRelay: e.target.value })}
                 spellCheck={false}
               />
               <div className="ygg-hint">
-                直连失败时才用；地址里用 {'{url}'} 占位。第三方代理能看到你取的图；
+                直连失败时才用；地址里用 {'{url}'} 占位。第三方代理能看到经过的图片；
                 自建见 <code>tools/image-relay-worker.js</code>。
               </div>
             </div>
@@ -118,7 +118,7 @@ export function SettingsPanel() {
                 spellCheck={false}
               />
               <div className="ygg-hint">
-                识图需要视觉模型（gpt-4o / claude-3.5 / qwen-vl 等）；纯文本模型收到图片会整条失败。
+                识图需要视觉模型（gpt-4o / claude-3.5 / qwen-vl 等）；纯文本模型收到图片会失败。
               </div>
             </div>
             <div className="ygg-field">
