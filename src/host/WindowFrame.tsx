@@ -52,6 +52,14 @@ interface Props {
   frame?: 'window' | 'widget';
   /** 挂件固定后连操控按钮都不显示（也就动不了）。 */
   fixed?: boolean;
+  /**
+   * 整窗的拖放（输入框用它做"拖文件进来上传"）。
+   *
+   * 为什么放在窗口层而不是输入行上：用户拖文件过来是希望"扔进这个窗口"，
+   * 不会精确瞄准那一行文字；落点太小就会出现"我明明拖进来了却没反应"。
+   * 只有显式传了它的窗口才接拖放，别的窗口不受影响。
+   */
+  onDropFiles?: (files: File[]) => void;
   /** 正在播"被收走"的淡出动画：淡出结束后才真正删除。 */
   dying?: boolean;
   /** 刚派生出来：入场动画更慢、带一点延迟，让派生连线先到。 */
@@ -86,10 +94,13 @@ export function WindowFrame({
   dying,
   newborn,
   children,
+  onDropFiles,
 }: Props) {
   const isWidget = frame === 'widget';
   /** 挂件固定后连操控按钮都不出，避免误碰。 */
   const pinned = isWidget && fixed === true;
+  /** 有文件正拖在这个窗口上方（用一圈高亮让"松手会落在这里"看得出来）。 */
+  const [dropping, setDropping] = useState(false);
   const [drag, setDrag] = useState<DragMode | null>(null);
   const origin = useRef({ x: 0, y: 0, px: 0, py: 0 });
   /** 拖动中是否按着 Shift（= 网格吸附）。用 ref 记，pointermove 里比对，避免反复写 store。 */
@@ -296,7 +307,8 @@ export function WindowFrame({
         (minimized ? ' is-minimized' : '') +
         (leaving ? ' is-leaving' : '') +
         // 从任务栏展开的窗口整个生命周期都不播入场动画，避免动画结束后又被它顶一下。
-        (fromTaskbar ? ' is-restoring' : '')
+        (fromTaskbar ? ' is-restoring' : '') +
+        (dropping ? ' is-dropping' : '')
       }
       style={{
         left: rect.x,
@@ -310,6 +322,51 @@ export function WindowFrame({
       }}
       // 聚焦提升用 capture；拖动判定在同一个 handler 里做，
       // 两者都挂在容器上，不受插槽被替换的影响。
+      /*
+       * 拖放（输入框用它做"拖文件进来上传"）。
+       * - dragenter / dragover 都要 preventDefault：默认行为是不接受拖放，不拦就没有 drop。
+       * - 只认真的带文件的拖动（拖窗口等内部拖动不该点亮）。
+       * - drop 时 stopPropagation，避免和别的落点打架。
+       */
+      onDragEnter={
+        onDropFiles
+          ? (e) => {
+              if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return;
+              e.preventDefault();
+              setDropping(true);
+            }
+          : undefined
+      }
+      onDragOver={
+        onDropFiles
+          ? (e) => {
+              if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return;
+              e.preventDefault();
+              if (!dropping) setDropping(true);
+            }
+          : undefined
+      }
+      onDragLeave={
+        onDropFiles
+          ? (e) => {
+              // 移到子元素上也会触发 leave：用 relatedTarget 是否还在窗口内来区分。
+              if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+              setDropping(false);
+            }
+          : undefined
+      }
+      onDrop={
+        onDropFiles
+          ? (e) => {
+              if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return;
+              e.preventDefault();
+              e.stopPropagation();
+              setDropping(false);
+              const list = Array.from(e.dataTransfer?.files ?? []);
+              if (list.length > 0) onDropFiles(list);
+            }
+          : undefined
+      }
       onPointerDownCapture={onPointerDown}
       data-ygg-node={id}
     >

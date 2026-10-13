@@ -103,8 +103,6 @@ export function inputMinHeight(
 export function YggdrasilInput({ session }: { session: InputSession }) {
   const [text, setText] = useState('');
   const areaRef = useRef<HTMLTextAreaElement>(null);
-  /** 文件选择器的隐藏 input（粘贴/拖拽之外的正经入口）。 */
-  const fileInputRef = useRef<HTMLInputElement>(null);
   /** 输入法正在拼字。拼字期间的回车是"确认候选词"，不是"发送"。 */
   const composing = useRef(false);
   const [areaH, setAreaH] = useState(LINE_H);
@@ -274,6 +272,8 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
       minW={300}
       minH={70}
       minHeightCss={needed}
+      // 整个窗口都是落点：拖文件过来不用瞄准那一行文字。
+      onDropFiles={(list) => void addFiles(list)}
     >
       <div className="ygg-compose">
         {/*
@@ -400,35 +400,16 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
         ) : null}
 
         <div className="ygg-compose-row">
-          {/*
-            文件选择器：粘贴/拖拽之外的正经入口（也能选到剪贴板拿不到的文件）。
-            multiple 且不过滤 accept —— 统一上传的意思就是什么文件都收。
-          */}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const picked = Array.from(e.target.files ?? []);
-              // 清掉 value，否则连续选同一个文件不会再触发 change
-              e.target.value = '';
-              void addFiles(picked);
-            }}
-          />
-          <button
-            className="ygg-attach"
-            title="上传文件（也可以直接粘贴或拖进来）"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <span className="ygg-attach-plus" />
-          </button>
           <textarea
             ref={areaRef}
             className="ygg-compose-area"
             value={text}
             placeholder={
-              busy ? '排队发送…' : files.length > 0 ? '说说这些文件要做什么…' : '描述你想让 Yggdrasil 做什么…'
+              busy
+                ? '排队发送…'
+                : files.length > 0
+                  ? '说说这些文件要做什么…'
+                  : '描述你想让 Yggdrasil 做什么…（也可以直接粘贴或拖入文件）'
             }
             rows={1}
             spellCheck={false}
@@ -440,17 +421,6 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
                * 现在也能直接进来（以前会被当纯文字插进输入框）。
                */
               const picked = filesFromClipboard(e.clipboardData);
-              if (picked.length > 0) {
-                e.preventDefault();
-                void addFiles(picked);
-              }
-            }}
-            onDragOver={(e) => {
-              if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault();
-            }}
-            onDrop={(e) => {
-              // 拖拽：同样是任意文件，不再按 MIME 过滤掉非图片。
-              const picked = Array.from(e.dataTransfer?.files ?? []);
               if (picked.length > 0) {
                 e.preventDefault();
                 void addFiles(picked);
