@@ -41,6 +41,26 @@ export function Desktop() {
   }, []);
 
   /*
+   * 点到**窗口之外**就解除聚焦。
+   *
+   * 窗口自己的聚焦在 WindowFrame 的 onPointerDownCapture 里做，所以这里挂在
+   * document 的**捕获阶段**：先清空，被点到的那个窗口随后会把自己再设回来。
+   * 于是"点桌面背景 / 任务栏空白 / 右上角按钮组"都能让上一个窗口暗下去。
+   *
+   * 以前没有任何地方会把 focusedId 清空 —— `focus(null)` 这条分支一直是死代码，
+   * 窗口一旦聚焦就永远亮着。
+   */
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (t && typeof t.closest === 'function' && t.closest('.ygg-window')) return;
+      focus(null);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [focus]);
+
+  /*
    * 运行时报错上报必须是**稳定引用**：ComponentHost 用了 memo，
    * 每次渲染都新建一个闭包会让比较永远失败，等于没 memo。
    * 所以这里传 id / name 作为参数，而不是为每个窗口各造一个箭头函数。

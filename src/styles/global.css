@@ -202,9 +202,15 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 .ygg-window.is-dragging { cursor: grabbing; }
 .ygg-window.is-dragging .ygg-titlebar { cursor: grabbing; }
-/* 拖动 / 缩放时不参与过渡，手感才跟得住指针 */
-.ygg-window.is-dragging,
-.ygg-window.is-dragging > .ygg-titlebar { transition: none; }
+/*
+ * 拖动 / 缩放时**不再关掉过渡**。
+ *
+ * 这里原来写的是 transition: none（"手感才跟得住指针"），但窗口的过渡列表里
+ * 根本没有 left / top / width / height —— 位置与尺寸本来就不过渡，
+ * 这条规则拦不住任何东西。它唯一的效果是：**按下标题栏的那一刻**
+ * （按下 = 开始拖动 = 同时聚焦）把聚焦反馈的过渡一起压掉，
+ * 于是标题栏底色与窗口描边都是硬切 —— 这就是"focus 时 header 变色没有过渡"。
+ */
 /* 窗口内容在拖动期间不要被选中 */
 .ygg-window.is-dragging .ygg-window-body { user-select: none; }
 

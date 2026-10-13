@@ -38,7 +38,11 @@ export function Taskbar() {
           key={k}
           className="ygg-task"
           title="恢复"
-          onClick={() => requestRestore('panel-' + k)}
+          onClick={() => {
+            // 与下面两类条目一致：恢复也把它抬到最上层。
+            requestRestore('panel-' + k);
+            focus('panel-' + k);
+          }}
         >
           <span className="ygg-task-dot is-minimized" />
           {PANEL_TITLES[k]}
