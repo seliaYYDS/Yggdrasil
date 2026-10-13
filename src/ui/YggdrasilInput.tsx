@@ -11,8 +11,10 @@ import { stopRun, submitInput } from '../kernel/agent/scheduler';
 import { QueueIcon, SendIcon, StopIcon } from './icons';
 import { captureScreen } from '../host/screen';
 import { WindowFrame } from '../host/WindowFrame';
+import { formatBytes } from '../kernel/workspace/store';
 import {
   MAX_UPLOAD_FILES,
+  checkFileLocally,
   filesFromClipboard,
   uploadedFilesNote,
   uploadFiles,
@@ -107,13 +109,16 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   const composing = useRef(false);
   const [areaH, setAreaH] = useState(LINE_H);
   /**
-   * 已上传到工作区的文件（粘贴 / 拖拽 / 选择）。
+   * **待发送**的文件（还没入库）。
    *
-   * **它们不再直接进提示词**：上传只是把文件放进工作区，内容由 Agent 主动 ws_read。
-   * 这里保留一份列表只是为了在输入框上显示"这次带了什么"、以及提交时告诉 Agent
-   * 有哪些文件可读（只说名字，不塞内容）。
+   * 关键点：粘贴/拖入时**只把它们拿在手里**，不进工作区、也不进任何存储 ——
+   * 因为用户可能只是想看看、或者根本没打算发（"我粘错了"）。
+   * 真正的写入发生在**点发送**那一刻（见 submit）。
+   *
+   * 这样也避免了：随手粘一张图就在工作区里留一个文件、还得去面板里删掉。
    */
-  const [files, setFiles] = useState<UploadedFile[]>([]);
+  const [pending, setPending] = useState<File[]>([]);
+  /** 本地就能判定的问题（空文件 / 太大），在还没发送时就显示出来。 */
   const [uploadError, setUploadError] = useState('');
 
   /*
@@ -154,45 +159,78 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   // 正在跑、或者还有排队项没消化完，都算"忙"：此时提交进入队列而不是被拒。
   const busy = running || queue.length > 0;
 
-  /** 提交。读 DOM 当前值（输入法状态可能滞后），确认收下才清空。 */
+  /**
+   * 提交。**文件是在这里才真正写进工作区的**。
+   *
+   * 顺序很重要：先把文件上传成功，再把这条消息交给调度器 ——
+   * 否则 Agent 收到的"有哪些文件"和实际在工作区里的东西可能对不上。
+   * 失败的文件**留在输入框里**（连同原因），让用户可以重试，而不是悄悄消失。
+   */
   const submit = () => {
     const el = areaRef.current;
     const raw = (el ? el.value : text).trim();
     // 只有文件没有文字也应该能发（"看看这个"）。
-    if (!raw && files.length === 0) return;
-    /*
-     * 上传过的文件**不把内容塞进请求**，只在文字前面加一段"有哪些文件可读"。
-     * Agent 需要什么就用 ws_read 去读 —— 这样上下文不会被上传物撑满，
-     * 也不会出现"每轮都重发一张图"。
-     */
-    const value = files.length > 0 ? uploadedFilesNote(files) + '\n\n' + raw : raw;
-    const accepted = submitInput(value, { sessionId: session.id });
-    if (accepted) {
-      setText('');
-      setFiles([]);
-      setUploadError('');
-    }
+    if (!raw && pending.length === 0) return;
+    void (async () => {
+      let uploaded: UploadedFile[] = [];
+      if (pending.length > 0) {
+        const res = await uploadFiles(pending);
+        uploaded = res.ok;
+        // 失败的留在框里：用户看得见原因，也能再点一次发送重试。
+        setPending(res.failed.map((f) => f.file));
+        setUploadError(res.errors.join('\n'));
+        if (uploaded.length === 0) {
+          // 一个都没成功：这次不发了，让用户先解决文件的问题。
+          return;
+        }
+      } else {
+        setUploadError('');
+      }
+      /*
+       * 文件只是名字进请求（内容由 Agent 主动 ws_read）——
+       * 这样上下文不会被上传物撑满，也不会出现"每轮都重发一张图"。
+       */
+      const value = uploaded.length > 0 ? uploadedFilesNote(uploaded) + '\n\n' + raw : raw;
+      const accepted = submitInput(value, { sessionId: session.id });
+      if (accepted) {
+        setText('');
+        if (uploaded.length > 0) setPending([]);
+      }
+    })();
   };
 
   /**
-   * 粘贴 / 拖拽 / 选择的文件：**直接写进工作区**。
+   * 粘贴 / 拖入的文件：**只拿在手里，不写任何存储**。
    *
-   * 不再有"图片专用"这条路：图片、文本、PDF、压缩包统一走这里。
-   * 失败的文件单独报告，不影响成功的那些。
+   * 写入发生在点发送那一刻（submit）。这里能做的只有本地检查（空/太大），
+   * 但那些检查已经足够挡住最常见的错误，而且是**立刻**给出反馈的。
    */
-  const addFiles = async (incoming: File[]) => {
+  const holdFiles = (incoming: File[]) => {
     if (incoming.length === 0) return;
-    setUploadError('');
-    const room = MAX_UPLOAD_FILES - files.length;
-    if (room <= 0) {
-      setUploadError('最多 ' + MAX_UPLOAD_FILES + ' 个文件');
-      return;
+    const notes: string[] = [];
+    const accepted: File[] = [];
+    let room = MAX_UPLOAD_FILES - pending.length;
+    for (const file of incoming) {
+      if (room <= 0) {
+        notes.push('最多 ' + MAX_UPLOAD_FILES + ' 个文件，多余的没接。');
+        break;
+      }
+      const bad = checkFileLocally(file);
+      if (bad) {
+        notes.push((file.name || 'file') + '：' + bad);
+        continue;
+      }
+      accepted.push(file);
+      room -= 1;
     }
-    const { ok, errors } = await uploadFiles(incoming.slice(0, room));
-    if (ok.length > 0) setFiles((prev) => [...prev, ...ok]);
-    const notes = [...errors];
-    if (incoming.length > room) notes.push('最多 ' + MAX_UPLOAD_FILES + ' 个文件，多余的已忽略');
-    setUploadError(notes.join('\n'));
+    if (accepted.length > 0) {
+      setPending((prev) => [...prev, ...accepted]);
+      setUploadError(notes.join('\n'));
+    } else if (notes.length > 0) {
+      setUploadError(notes.join('\n'));
+    } else {
+      setUploadError('');
+    }
   };
 
   /** 输入框按内容自适应：量出内容自然高度（1~6 行），写成 min-height。 */
@@ -210,9 +248,9 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
     setAreaH(next);
   }, [text]);
 
-  const needed = inputMinHeight(areaH, queue.length, pendingOpen.length, files.length);
+  const needed = inputMinHeight(areaH, queue.length, pendingOpen.length, pending.length);
   /** 生成中且输入框为空 → 发送按钮变成停止。 */
-  const canStop = busy && !text.trim() && files.length === 0;
+  const canStop = busy && !text.trim() && pending.length === 0;
 
   /*
    * 右下角那三个数的**实际宽度**要告诉状态行，让它留出对应的右边距。
@@ -273,7 +311,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
       minH={70}
       minHeightCss={needed}
       // 整个窗口都是落点：拖文件过来不用瞄准那一行文字。
-      onDropFiles={(list) => void addFiles(list)}
+      onDropFiles={holdFiles}
     >
       <div className="ygg-compose">
         {/*
@@ -361,16 +399,16 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           以及提供一个"从这次发送里去掉"的入口（注意：去掉只是不告诉 Agent，
           文件仍在工作区里，可以在工作区面板里删）。
         */}
-        {files.length > 0 ? (
+        {pending.length > 0 ? (
           <div className="ygg-files">
-            {files.map((f, i) => (
-              <div className="ygg-file" key={f.name} title={f.originalName ? '原文件名：' + f.originalName : f.name}>
-                <span className="ygg-file-kind">{f.kind}</span>
+            {pending.map((f, i) => (
+              <div className="ygg-file" key={f.name + i} title={f.name + '（' + formatBytes(f.size) + '，发送时才上传）'}>
+                <span className="ygg-file-kind">待上传</span>
                 <span className="ygg-file-name">{f.name}</span>
                 <button
                   className="ygg-file-del"
-                  title="这次不发给 Agent（文件仍在工作区里）"
-                  onClick={() => setFiles((prev) => prev.filter((_, j) => j !== i))}
+                  title="不要这个文件了"
+                  onClick={() => setPending((prev) => prev.filter((_, j) => j !== i))}
                 >
                   ✕
                 </button>
@@ -407,8 +445,8 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
             placeholder={
               busy
                 ? '排队发送…'
-                : files.length > 0
-                  ? '说说这些文件要做什么…'
+                : pending.length > 0
+                  ? '说说这些文件要做什么…（发送时才上传到工作区）'
                   : '描述你想让 Yggdrasil 做什么…（也可以直接粘贴或拖入文件）'
             }
             rows={1}
@@ -423,7 +461,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
               const picked = filesFromClipboard(e.clipboardData);
               if (picked.length > 0) {
                 e.preventDefault();
-                void addFiles(picked);
+                holdFiles(picked);
               }
             }}
             onCompositionStart={() => {
@@ -450,7 +488,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
              * 输入框里有内容时才保持"加入队列"（那时用户显然是想再发一条）。
              */
             className={'ygg-compose-send' + (busy ? ' is-queue' : '') + (canStop ? ' is-stop' : '')}
-            disabled={!canStop && !text.trim() && files.length === 0}
+            disabled={!canStop && !text.trim() && pending.length === 0}
             title={canStop ? '停止本轮（会清空排队）' : busy ? '加入队列' : '发送'}
             onClick={canStop ? () => stopRun(session.id) : submit}
           >
@@ -483,11 +521,11 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
               {detail ? <span className="ygg-compose-detail">{detail}</span> : null}
             </>
           ) : null}
-          {!busy && (uploadError || files.length > 0) ? (
+          {!busy && (uploadError || pending.length > 0) ? (
             <span className="ygg-compose-hint">
               {uploadError
             ? uploadError
-            : files.length + ' 个文件已存入工作区 —— Agent 会按需用 ws_read 读取'}
+            : pending.length + ' 个文件将在发送时存入工作区 —— Agent 会按需用 ws_read 读取'}
             </span>
           ) : null}
         </div>

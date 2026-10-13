@@ -38,10 +38,23 @@ export interface UploadedFile {
   size: number;
 }
 
+export interface UploadedFailure {
+  /** 原来那个文件 —— 失败时**要还给调用方**，让用户可以重试（而不是丢掉）。 */
+  file: File;
+  error: string;
+}
+
 export interface UploadResult {
   ok: UploadedFile[];
-  /** 没进去的，带人能看懂的原因。 */
+  /** 没进去的，带人能看懂的原因（字符串形式，便于直接显示）。 */
   errors: string[];
+  /**
+   * 失败的文件本身。
+   *
+   * 为什么要把 File 带回来：调用方（输入框）在失败时应当**保留这些文件**、
+   * 把原因显示出来让用户重试；只给一句错误字符串的话，文件就悄悄消失了。
+   */
+  failed: UploadedFailure[];
 }
 
 /**
@@ -92,15 +105,21 @@ export async function uniqueName(wanted: string): Promise<string> {
 export async function uploadFiles(files: File[]): Promise<UploadResult> {
   const ok: UploadedFile[] = [];
   const errors: string[] = [];
+  const failed: UploadedFailure[] = [];
+  /** 记一条失败：错误字符串给人看，File 还给调用方重试。 */
+  const reject = (file: File, error: string) => {
+    errors.push((file.name || 'file') + '：' + error);
+    failed.push({ file, error });
+  };
   for (const file of files.slice(0, MAX_UPLOAD_FILES)) {
     const original = file.name || 'file';
     try {
       if (file.size === 0) {
-        errors.push(original + '：是空文件，跳过了。');
+        reject(file, '是空文件，跳过了。');
         continue;
       }
       if (file.size > MAX_UPLOAD_BYTES) {
-        errors.push(original + '：' + formatBytes(file.size) + ' 超过单文件上限 ' + formatBytes(MAX_UPLOAD_BYTES) + '。');
+        reject(file, formatBytes(file.size) + ' 超过单文件上限 ' + formatBytes(MAX_UPLOAD_BYTES) + '。');
         continue;
       }
       const wanted = sanitizeFileName(original);
@@ -130,13 +149,27 @@ export async function uploadFiles(files: File[]): Promise<UploadResult> {
       });
     } catch (e) {
       // 最常见的是"没有 IndexedDB，只能存文本" —— 那是环境限制，要说清楚。
-      errors.push(original + '：' + (e as Error).message);
+      reject(file, (e as Error).message);
     }
   }
   if (files.length > MAX_UPLOAD_FILES) {
     errors.push('一次最多上传 ' + MAX_UPLOAD_FILES + ' 个文件，多余的已忽略。');
   }
-  return { ok, errors };
+  return { ok, errors, failed };
+}
+
+/**
+ * 上传前的**本地**检查：不碰存储，只回答"这个文件能不能收"。
+ *
+ * 输入框需要在用户还没发送时就能显示"这个文件收不了"（太大/空的），
+ * 而不是等到发送那一刻才说 —— 那时用户已经在等结果了。
+ */
+export function checkFileLocally(file: File): string | null {
+  if (file.size === 0) return '是空文件。';
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return formatBytes(file.size) + ' 超过单文件上限 ' + formatBytes(MAX_UPLOAD_BYTES) + '。';
+  }
+  return null;
 }
 
 /** 提交给 Agent 时用的那句话：告诉它文件在哪、以及"要主动读"。 */
