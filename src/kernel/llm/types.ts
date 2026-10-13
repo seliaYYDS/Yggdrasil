@@ -52,6 +52,14 @@ export interface LlmSettings {
    * 于是纯文本模型不会再因为收到图片而整条失败。
    */
   vision?: boolean;
+  /**
+   * 上下文压缩阈值（%）。**默认 85。**
+   *
+   * 一轮请求的估算长度超过"窗口 × 这个百分比"时，先把旧历史交给模型压成一段摘要
+   * （目标 / 已做 / 未做 / 关键事实），再从摘要继续跑 —— 而不是把最老的消息丢掉。
+   * 见 src/kernel/agent/compact.ts。
+   */
+  compactAt?: number;
 }
 
 export const DEFAULT_SETTINGS: LlmSettings = {
@@ -67,6 +75,7 @@ export const DEFAULT_SETTINGS: LlmSettings = {
   contextWindow: 128000,
   maxTokens: 16384,
   vision: true,
+  compactAt: 85,
 };
 
 /** 多模态消息的内容块（OpenAI 兼容格式）。 */

@@ -12,8 +12,16 @@ import type {
 } from '../types';
 import { newId } from '../ids';
 import { chatStream, estimateTokens, type LlmUsage } from '../llm/client';
-import type { ChatMessage, ContentPart } from '../llm/types';
+import type { ChatMessage, ContentPart, LlmSettings } from '../llm/types';
 import { nativeCallsFromArgs, parsePlan, planFromNativeCalls } from './parse';
+import {
+  buildSummaryMessages,
+  compactedMemory,
+  compactThresholdTokens,
+  estimateTokensOf,
+  renderTranscript,
+  splitForCompaction,
+} from './compact';
 import {
   buildObservationPrompt,
   buildReplyPrompt,
@@ -94,6 +102,50 @@ function sessionMemory(originId: NodeId, sessionId: string): Message[] {
   return isAgentic(node) ? node.agent.messages : [];
 }
 
+/**
+ * 旧历史压成一段摘要，写回记忆。
+ *
+ * 失败**不抛**：压缩只是"省上下文"的手段，它自己不该变成新的失败点 ——
+ * 返回 compacted:false，调用方退回"丢最老的历史"继续跑。
+ */
+async function compactMemory(
+  originId: NodeId,
+  sessionId: string,
+  settings: LlmSettings,
+  signal?: AbortSignal,
+): Promise<{ compacted: boolean; before: number; after: number; error?: string }> {
+  const memory = sessionMemory(originId, sessionId);
+  const before = memory.length;
+  const { head, tail } = splitForCompaction(memory);
+  if (head.length === 0) return { compacted: false, before, after: before, error: '没有可压缩的历史' };
+  let call;
+  try {
+    // 压缩不需要流式回调（界面上只看到一条"压缩上下文"的轨迹），给一个空实现。
+    call = await chatWithRetry(settings, buildSummaryMessages(renderTranscript(head)), { onDelta: () => {} }, 2, signal);
+  } catch (e) {
+    return { compacted: false, before, after: before, error: (e as Error).message };
+  }
+  if (!call.ok) return { compacted: false, before, after: before, error: call.error };
+  const summary = call.text.trim();
+  if (!summary) return { compacted: false, before, after: before, error: '摘要为空' };
+  replaceMemory(originId, sessionId, compactedMemory(summary, tail));
+  return { compacted: true, before, after: tail.length + 1 };
+}
+
+/** 整体替换这个会话的记忆（上下文压缩后用）。 */
+function replaceMemory(originId: NodeId, sessionId: string, messages: Message[]): void {
+  const store = useDesktopStore.getState();
+  if (originId === store.rootId) {
+    store.replaceSessionMessages(sessionId, messages);
+    return;
+  }
+  const node = store.nodes[originId];
+  if (!isAgentic(node)) return;
+  store.updateFacet(originId, {
+    messages: messages.length > MAX_STORED_MESSAGES ? messages.slice(-MAX_STORED_MESSAGES) : messages,
+  });
+}
+
 /** 把一条消息写进这个会话的记忆。 */
 function pushMemory(originId: NodeId, sessionId: string, message: Message): void {
   const store = useDesktopStore.getState();
@@ -109,41 +161,49 @@ function pushMemory(originId: NodeId, sessionId: string, message: Message): void
   });
 }
 
-function historyMessages(nodeId: NodeId, sessionId: string, input: string): ChatMessage[] {
+/**
+ * 这一轮要发的对话历史。
+ *
+ * **长度由"压缩"管，不再按条数削**：以前卡死 14 条，长任务跑到中段就把最老的
+ * （往往正是目标与已经做完的事）丢掉 —— 模型于是忘事、重复做、或者干脆收工。
+ * 现在：
+ *   - 知道窗口（设置里填了 contextWindow）→ 不按条数削，全部带上。真的溢出时先压缩
+ *     （见 compactMemory），压缩不成才用 budgetTokens 兜底丢最老的；
+ *   - 不知道窗口 → 退回老上限：连窗口都不知道时，保守一点好过把请求顶爆。
+ */
+function historyMessages(
+  nodeId: NodeId,
+  sessionId: string,
+  input: string,
+  /** 历史能占的 token 上限；0 = 不设（压缩成功或窗口未知时都是 0）。 */
+  budgetTokens = 0,
+): ChatMessage[] {
   const settings = useDesktopStore.getState().settings;
-  /*
-   * 整块裁剪，不要一条一条滑：发出去的历史越长，每次"滑动"作废的前缀就越多。
-   * 允许涨到上限 + 余量，再一次性削回上限。
-   */
   const all = sessionMemory(nodeId, sessionId);
   /*
    * ⚠ **必须先复制再动**：这份数组就是会话记忆本身，下面那个 `pop()` 会把真实记忆删掉。
-   * 之前写的是 `sessionMemory(...).slice(-MAX)`，slice 恰好复制了一份才没出事；
-   * 改成"没超上限就原样用"之后，`pop()` 直接作用在记忆上 ——
-   * 结果是每轮开头刚写进去的那条请求又被弹出去，会话记忆永远是空的。
    */
   const list =
-    all.length > MAX_HISTORY_MESSAGES + HISTORY_TRIM_SLACK
-      ? all.slice(-MAX_HISTORY_MESSAGES)
-      : all.slice();
-  // 先去掉"这一轮的请求"（它下面单独发），再算历史预算 —— 预算只管历史。
+    budgetTokens > 0
+      ? all.slice()
+      : all.length > MAX_HISTORY_MESSAGES + HISTORY_TRIM_SLACK
+        ? all.slice(-MAX_HISTORY_MESSAGES)
+        : all.slice();
+  // 先去掉"这一轮的请求"（它下面单独发），预算只管历史。
   if (list.length > 0 && list[list.length - 1].content === input) list.pop();
   /*
-   * 第二道闸：**按估算 token** 再削一次（只在知道上下文窗口时生效）。
-   *
-   * 条数上限（14 条）管不住"长度"：几条带图或带长文本的消息就能顶满一个 64k 窗口。
-   * 这里从最新往回装，装不下就丢掉最老的整块；**至少留最新那条**，
-   * 否则"上一轮说了什么"会整段消失。只减不增 —— 不知道窗口时完全不受影响。
+   * **溢出兜底**：整份请求已经到阈值，而压缩没能把记忆变短（没有 key / 摘要失败 /
+   * 某一轮单独就超了）。这时从最新往回装，装不下就丢最老的整块 ——
+   * 宁可丢历史，也不要让这一轮因为超出窗口而失败。正常路径（压缩成功）不会走到这里。
    */
-  const budget = historyTokenBudget(settings.contextWindow);
-  if (budget > 0 && list.length > 1) {
+  if (budgetTokens > 0 && list.length > 0) {
     let used = 0;
     let keep = list.length;
     for (let i = list.length - 1; i >= 0; i -= 1) {
       const content = list[i].content;
       used += estimateTokens(typeof content === 'string' ? content : JSON.stringify(content));
-      if (used > budget) {
-        keep = Math.max(1, list.length - 1 - i);
+      if (used > budgetTokens) {
+        keep = i + 1;
         break;
       }
     }
@@ -179,17 +239,6 @@ export interface RunOptions {
  * 没有图片就是纯文本；有图片时拼成多模态内容块（OpenAI 兼容格式）。
  * 抽成独立函数是为了能直接单测形状。
  */
-/**
- * 历史能用掉多少 token：上下文窗口的 20%。
- *
- * 剩下的份额留给系统提示、快照与这一轮的观察回灌 —— 那几块都比历史大，
- * 而且是"每轮都在用"的部分。窗口未知时返回 0（= 不加这道闸，行为与以前一样）。
- */
-function historyTokenBudget(contextWindow?: number): number {
-  if (!contextWindow || contextWindow <= 0) return 0;
-  return Math.round(contextWindow * 0.2);
-}
-
 export function userContent(text: string, images?: string[], allowVision = true): ChatMessage['content'] {
   // 关掉"视觉"就不带图片块：纯文本模型收到图片会整条失败（见 visionHint）。
   // 带图的记忆仍然留着，只是这一轮不送 —— 用户改回开关就能重新看到它们。
@@ -664,13 +713,57 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         const systemPrompt = buildSystemPrompt(promptInput);
         const snapshotPrompt = buildSnapshotPrompt(promptInput);
 
-        const messages: ChatMessage[] = [
-          { role: 'system', content: systemPrompt },
-          ...historyMessages(originId, sessionId, input),
-          // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
-          // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
-          { role: 'user', content: userContent(CURRENT_REQUEST_TAG + '\n' + input + uploadNote) },
+        const systemMessage: ChatMessage = { role: 'system', content: systemPrompt };
+        // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
+        // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
+        const requestMessage: ChatMessage = {
+          role: 'user',
+          content: userContent(CURRENT_REQUEST_TAG + '\n' + input + uploadNote),
+        };
+        const tailMessage: ChatMessage = {
+          role: 'user',
+          content:
+            (observationLog.length > 0 ? buildObservationPrompt(observationLog) + '\n\n' : '') + snapshotPrompt,
+        };
+        /** 历史能占多少 token：阈值减去系统提示 / 请求 / 观察快照这几块的估算。 */
+        const historyBudget = (): number => {
+          const threshold = compactThresholdTokens(store.settings.contextWindow, store.settings.compactAt);
+          if (threshold <= 0) return 0;
+          return Math.max(0, threshold - estimateTokensOf([systemMessage, requestMessage, tailMessage]));
+        };
+        const buildMessages = (budgetTokens: number): ChatMessage[] => [
+          systemMessage,
+          ...historyMessages(originId, sessionId, input, budgetTokens),
+          requestMessage,
+          tailMessage,
         ];
+        /*
+         * 先**完整**拼一份（不削历史）再看有没有到阈值：
+         * 顺序反了的话，"按预算削历史"会抢在压缩前面动手 —— 那就又变回了截断。
+         */
+        let messages = buildMessages(0);
+        const thresholdTokens = compactThresholdTokens(store.settings.contextWindow, store.settings.compactAt);
+        if (thresholdTokens > 0 && estimateTokensOf(messages) > thresholdTokens) {
+          const res = await compactMemory(originId, sessionId, store.settings, signal);
+          // 压成功 → 记忆短了，重拼；压不成 → 重拼时给历史一个预算兜底。
+          messages = buildMessages(res.compacted ? 0 : historyBudget());
+          pushStep({
+            id: newId(),
+            runId,
+            round,
+            index: -4,
+            kind: 'compact',
+            label: '压缩上下文',
+            summary: res.compacted ? '旧历史已压成摘要' : '压缩失败，退回丢弃最老的历史',
+            status: res.compacted ? 'ok' : 'fail',
+            message: res.compacted
+              ? res.before + ' 条 → ' + res.after + ' 条；请求约 ' + estimateTokensOf(messages) + ' token'
+              : res.error ?? '未知原因',
+            startedAt: Date.now(),
+            endedAt: Date.now(),
+          });
+          store.log(res.compacted ? 'info' : 'warn', res.compacted ? 'compact ' + res.before + ' → ' + res.after + ' 条' : 'compact ✕ ' + (res.error ?? '未知'));
+        }
         /*
          * **最快的缓存前缀**：稳定系统提示 → 历史 → 本次请求 → 观察回灌 → 本轮的快照。
          *

@@ -4,6 +4,7 @@ import { capsAllow, CAP_HINTS, CAP_LABELS } from './caps';
 import { interfaceCatalog } from '../registry/interfaceRegistry';
 import { surfacesText } from '../registry/surfaceRegistry';
 import { pluginsText } from '../plugin/runtime';
+import { SUMMARY_TAG as COMPRESS_TAG } from './compact';
 
 /** 发给模型的历史条数上限。 */
 export const MAX_HISTORY_MESSAGES = 14;
@@ -257,23 +258,20 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     'Only JSON (first char "{", last char "}"); "kind" must come from the list above, never invent one.',
     'A few hard rules:',
     '- An empty ops list **means nothing happened this round**; it is only acceptable when the user asked for no change;',
-    '- When a task needs several rounds (fetch a page then write the component, create then adjust) set continue to',
-    '  true and do only what this round is for. **There is no round limit**, but every round must make real progress:',
-    '  two consecutive rounds with identical ops and identical results are treated as a spin and stop the run;',
-    '- When unsure about the current state, first emit an inspect (before="windows" or "all") and use continue to act',
-    '  on the next round;',
-    '- The **concrete payload** returned by every operation is fed back to you in full next round (page text, direct',
-    '  image links, link lists, structure snapshots) — so never re-run an operation just to "take another look";',
     '- **You only ever handle the message tagged [CURRENT REQUEST]**: earlier user messages are **already handled**',
     '  historical requests, so do not execute them again unless the user explicitly asks this time (that is the root',
     '  cause of "did the previous task all over again"); to change something use update_component on the existing',
     '  component, and only create a new one when explicitly asked to redo it;',
-    '- **The "Current windows" / "Current agents" in the last message are live snapshots and the only source of',
-    '  truth**: the history may contain stale descriptions, so always trust the snapshot (it sits last, which is the',
-    '  present state).',
+    '- When unsure about the current state, inspect first (before="windows" or "all") and act next round;',
+    '- The **concrete payload** returned by every operation comes back to you in full next round (page text, image',
+    '  links, structure snapshots) — never re-run an operation just to "take another look";',
+    '- **The last message is the live snapshot and the only source of truth** for the current state; the history may',
+    '  be stale or compressed.',
     '',
     'Examples of op elements (only the most common ones; see the operation list above for the rest):',
     examples,
+    '',
+    ...longTaskRules(),
     '',
     ...componentRules(on('net')),
     ...windowRules(),
@@ -380,6 +378,31 @@ export function buildSnapshotPrompt(input: SystemPromptInput): string {
 }
 
 /**
+ * 长任务的纪律。
+ *
+ * 这一节是为用户反馈的"干到一半就停手 / 忘了目标"加的：以前多轮的规则散在输出格式那几条里，
+ * 只说了"可以 continue"，没说"什么时候不许停"。另外上下文压缩之后，模型必须知道
+ * [EARLIER CONVERSATION — COMPRESSED] 是它自己的记忆，而不是用户的新要求 —— 也写在这里。
+ */
+function longTaskRules(): string[] {
+  return [
+    '## Long tasks: do not stop halfway',
+    '- **A round that went well is not a finished task.** Before you stop, re-read the message tagged',
+    '  [CURRENT REQUEST] clause by clause ("and", "each", "with", numbers, language) — if any part is not visible on',
+    '  the interface yet, set continue true and do the next part.',
+    '- Work in slices that leave the desktop usable (create → fill → wire → adjust). Do not end a round on a',
+    '  half-built component that the next round is supposed to finish.',
+    '- Put the goal and what is still missing into reasoning **every round**, in one short sentence — it is the plan',
+    '  the user reads in the trace and the thread you keep when history gets compressed.',
+    '- **There is no round limit.** A round may be small; it must make real progress. Two rounds in a row with the',
+    '  same ops and the same results are read as spinning and stop the run — when a round produced nothing useful,',
+    '  say so in reasoning and change the approach instead of repeating it.',
+    '- A message tagged **' + COMPRESS_TAG + '** is *your own* compressed memory of earlier rounds: treat it as',
+    '  established facts, never as a new request, and do not rebuild the things it lists as DONE.',
+  ];
+}
+
+/**
  * 这一节是整个提示词里最重要的约束。
  * Agent 没有任何"直接说给用户听"的通道：它的输出只能落成 ops。
  */
@@ -391,10 +414,8 @@ function noVisibleOutputRules(): string[] {
     'So to deliver something, make it visible on the interface — render delivered content with create_component;',
     'errors and explanations belong inside a component too. **Text alone with empty ops means nothing happened**, and',
     'the user will think the system is broken.',
-    '⚠ **"Make the user see it" is not the same as "build something that thinks"**: the vast majority of tasks need a',
-    'plain component only. Never attach agent capability just to "say something" — it makes simple tasks slow and',
-    'roundabout. Typical phrasings: "what can you do" → build a window listing your abilities; a greeting → one',
-    'lightweight window; reporting a finished task → use update_component to write the result into the relevant component.',
+    'Most tasks need a **plain component** and nothing else — "what can you do" is a window listing your abilities,',
+    'not an agent. When to attach capability is decided in "Agent capability" below.',
   ];
 }
 
@@ -415,10 +436,8 @@ function ledgerRules(ledger?: string[], nodes?: Record<string, YggNode>): string
   });
   return [
     '## What you have already done (kept across reloads)',
-    '- These are things you **really did**, including the component ids you created. To change them, edit the source',
-    '  with `patch_source` — do not create an "improved version" (that leaves two windows).',
-    '- This is **history**, not the current interface state; for the current state always trust the "Current windows"',
-    '  snapshot.',
+    '- These are things you **really did**, including the component ids you created — change them in place, never by',
+    '  creating an "improved version" (that leaves two windows).',
     '- Anything marked **deleted by the user** was **removed by the user** — deleted means not wanted. **Do not rebuild',
     '  it to "catch up"** unless the user explicitly asks for it again this time.',
     '- The other entries still exist; do not create them again — change them with update_component / set_node_tokens.',
@@ -484,9 +503,8 @@ function windowRules(): string[] {
     '- Create → `create_component` (optional pos/size, otherwise it lands in a free spot); delete entirely →',
     '  `remove_node` (children go too); just tuck away → `set_window_state` with minimized / closed (the user can',
     '  restore it from the taskbar).',
-    '- Inspect → `inspect before="windows"` for all of them; `before="component" id=...` for one page full state and',
-    '  source (look before you change, never guess); **a page is erroring → `before="logs"`** (errors thrown while a',
-    '  component runs are only recorded there).',
+    '- Inspect → `before="windows"` for all, `before="component" id=...` for one page (source included) — look before',
+    '  you change, never guess. A page that errors → `before="logs"` (runtime errors are only recorded there).',
     '- Adjust → `update_component`: pos/size, dx dy dw dh, center, fill, align, focus, z.',
     '- Batch layout → `arrange_windows` (grid / cascade / stack) — more reliable than computing each coordinate.',
     '- **Coordinates follow the "Desktop viewport" section**; geometry is clamped into the viewport, so coordinates off',
@@ -511,13 +529,11 @@ function styleRules(): string[] {
     '  overwrite; only whitelisted --ygg- variables are accepted.',
     '- It changes **one component only** and requires its id. Changing the whole theme is a different switch (see',
     '  "Global changes"). Example: make a dashboard cool-toned → write --ygg-surface / --ygg-border / --ygg-accent for it.',
-    '- Flat is the default: --ygg-glow and --ygg-shadow are both none; only write them when the user explicitly asks',
-    '  for glow / neon / depth.',
+    '- Flat is the default: write --ygg-glow / --ygg-shadow only when the user asks for glow / neon / depth.',
     '- Fonts are theme variables too: --ygg-font (body) / --ygg-font-display (headings) / --ygg-font-mono (monospace).',
     '  They are long font stacks, so they are **not listed in the style snapshot below** — read them with',
     '  `inspect before="tokens"` when you need to change them.',
-    '- There is no such thing as a "current theme": styling means assigning variables, so never put a theme name in',
-    '  ops. Never rebuild or delete the user components just to change a style.',
+    'There is no such thing as a "current theme": never put a theme name in ops.',
   ];
 }
 
@@ -565,10 +581,9 @@ function surfaceRules(): string[] {
     '- **Never replace a critical slot**: `window.titlebar` carries dragging, minimising, deleting and focusing, so',
     '  replacing it takes those away from every window; the executor rejects the attempt. To change how a window looks,',
     '  use `update_component` or `set_node_tokens`.',
-    '- The background must not swallow mouse events (never intercept clicks in its root), or windows become unclickable.',
-    '- General principle: your changes affect appearance and content only — never remove host interactions (drag,',
-    '  click, scroll, typing). Do not put `pointer-events:none` on your own root container and do not intercept',
-    '  onMouseDown there. When unsure, inspect first and prefer a different approach.',
+    '- Never break host interactions (drag, click, scroll, typing): no `pointer-events:none` on your own root and no',
+    '  intercepting onMouseDown there — the background especially must not swallow clicks, or windows become',
+    '  unclickable. When unsure, inspect first.',
   ];
 }
 
@@ -646,8 +661,6 @@ function agentRules(): string[] {
     '- An agent renders **exactly like a plain component**: one source decides the interface and capability carries no',
     '  interface — do not expect a chat box to appear, and do not give it a special look or a title marker just because',
     '  it is called an agent.',
-    '- Windows: minimized keeps state / closed unmounts (both restorable from the taskbar); clicking raises the layer,',
-    '  and the z of update_component sets it explicitly.',
   ];
 }
 
@@ -658,8 +671,7 @@ function agentRules(): string[] {
 function browserRules(): string[] {
   return [
     '## The real browser (not the same thing as the in-app desktop)',
-    '- In-app desktop: every component is a window, driven with create_component / update_component / arrange_windows;',
-    '  sizes are in the "Desktop viewport" section.',
+    'This is the **real browser**, not the in-app desktop (that one is "Driving the desktop").',
     '- Real browser: use `browser_*` — `browser_info` reads the browser viewport / window / screen / pixel ratio /',
     '  fullscreen; `browser_open` opens a tab (with width/height, a window); `browser_pages` lists the pages this',
     '  app opened; `browser_close` closes them; `browser_resize` resizes them.',
@@ -695,14 +707,13 @@ function netRules(): string[] {
     '  returned links.',
     '- **Actually use** what you fetched (render it into a component, compute with it) instead of stopping at fetching,',
     '  and **do not paste a whole page into the component source** — extract the fields you need first.',
-    '- For long bodies raise `maxChars` (default 12000 / max 60000) instead of fetching the same page again; the',
-    '  response states the total body length.',
+    '- Fetch results arrive **in full** next round (body + direct image links + links); for long bodies raise',
+    '  `maxChars` (default 12000 / max 60000) instead of fetching the same page twice. Never carry on from the mere',
+    '  words "I fetched it".',
     '- **When hunting for images, do not repeatedly fetch JS gallery pages** (script-rendered pages such as Baidu image',
     '  search usually contain no image addresses): prefer the direct image links in the response, or look for a JSON',
     '  endpoint, og:image, or the detail pages themselves.',
-    '- Fetch results arrive **in full** next round (body + direct image links + links) — do not carry on from the mere',
-    '  words "I fetched it".',
-    '- **A networking task should not attach agent capability.**',
+
   ];
 }
 

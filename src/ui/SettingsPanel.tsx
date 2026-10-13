@@ -3,6 +3,7 @@ import { useDesktopStore } from '../store/desktopStore';
 import { PanelWindow } from './PanelWindow';
 import { SECURITY_LEVELS, describePolicy, policyFor, type SecurityLevel } from '../kernel/security';
 import { Switch } from './Switch';
+import { readPercent } from '../kernel/agent/compact';
 import { listModels } from '../kernel/llm/client';
 import { PROVIDER_PRESETS, formatTokens, providerFor, readTokenCount, type RemoteModel } from '../kernel/llm/presets';
 
@@ -223,6 +224,17 @@ export function SettingsPanel() {
                 placeholder="未知"
                 value={settings.contextWindow ? String(settings.contextWindow) : ''}
                 onChange={(e) => setSettings({ contextWindow: readTokenCount(e.target.value) })}
+                spellCheck={false}
+              />
+            </div>
+            <div className="ygg-field">
+              <label className="ygg-label">压缩阈值 %</label>
+              <input
+                className="ygg-input"
+                inputMode="numeric"
+                placeholder="85"
+                value={settings.compactAt ? String(settings.compactAt) : ''}
+                onChange={(e) => setSettings({ compactAt: readPercent(e.target.value) })}
                 spellCheck={false}
               />
             </div>

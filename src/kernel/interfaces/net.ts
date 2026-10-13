@@ -90,7 +90,7 @@ export function registerNetInterfaces(): void {
     kind: 'view_image',
     label: '看图',
     description:
-      '**Read an image into your context** (fetch bytes → base64 → **your own vision**; no third-party recognition). Usage: get a direct image link with fetch_url → view_image → you can see it next round → then decide how to write the component. Requires a vision-capable model (a text-only model fails the whole round); bytes are read directly and an image host that disallows cross-origin reads falls back to the image relay configured in settings (that relay only forwards bytes, it does no recognition). One image = one message in the context (it takes space, so do not look at many at once).',
+      '**Read an image into your context** (bytes → base64 → **your own vision**; no third-party recognition): fetch a direct image link with fetch_url, then view_image, and you see it next round. Needs a vision-capable model (a text-only one fails the round); a host that refuses cross-origin reads falls back to the image relay from settings. One image = one message, so do not look at many at once.',
     example: { kind: 'view_image', url: 'https://example.com/a.png', note: 'homepage hero' },
     mutates: false,
     cap: 'net',

@@ -775,6 +775,11 @@ interface DesktopState {
   ) => void;
   /** 追加一条消息到这个会话的记忆（基底 agent 的对话按会话分开）。 */
   appendSessionMessage: (id: string, message: Message) => void;
+  /**
+   * 整体替换某个会话的记忆（上下文压缩后用）。
+   * 与 append 分开是有意的：压缩是"换掉整段历史"，不是再追加一条。
+   */
+  replaceSessionMessages: (id: string, messages: Message[]) => void;
   /** 清空这个会话的记忆。 */
   clearSessionMessages: (id: string) => void;
   /**
@@ -2029,6 +2034,17 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         const next = [...ses.messages, message];
         // 与 facet 记忆同一个上限：带图的消息是 base64，不封顶会无限涨。
         return { ...ses, messages: next.length > MAX_STORED_MESSAGES ? next.slice(-MAX_STORED_MESSAGES) : next };
+      }),
+    }));
+    schedulePersist();
+  },
+
+  replaceSessionMessages: (id, messages) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => {
+        if (ses.id !== id) return ses;
+        // 同样受存储上限约束：压缩本身不该成为绕过上限的口子。
+        return { ...ses, messages: messages.length > MAX_STORED_MESSAGES ? messages.slice(-MAX_STORED_MESSAGES) : messages };
       }),
     }));
     schedulePersist();

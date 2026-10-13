@@ -188,7 +188,7 @@ export function registerBrowserInterfaces(): void {
     kind: 'capture_screen',
     label: '抓取页面截图',
     description:
-      '**Ask for a real screenshot of the current page**; it is put into your context (you will see it next round). Use it to check what you actually built: overlap, overflow, wrong colours. ⚠ The browser requires screen capture to be triggered by a **user gesture**, so this call only registers a request: a "screenshot for the agent" button appears on the input box and **the user clicks it** before the image arrives. End your turn after calling it — do not call it repeatedly waiting for a result.',
+      '**Ask for a real screenshot of the current page** (it lands in your context; you see it next round) to check overlap / overflow / colours of what you built. ⚠ Capture is only allowed inside a **user gesture**, so this registers a request: a button appears on the input box and **the user clicks it**. End your turn after calling it.',
     example: { kind: 'capture_screen' },
     cap: 'browser',
     handler: (_op, ctx) => {
