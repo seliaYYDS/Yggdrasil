@@ -6,6 +6,7 @@ import { capOf, getInterface, interfacesFor } from '../registry/interfaceRegistr
 import { CAP_LABELS } from '../agent/caps';
 import { fail, ok, type OpContext, type OpResult } from './opContext';
 import { MAX_NODES } from '../agent/prompts';
+import { hideLongPayload } from '../workspace/hide';
 
 export interface OpOutcome {
   op: DerivationOp;
@@ -270,12 +271,22 @@ export function formatOutcomes(outcomes: OpOutcome[]): string[] {
     const body = (o.observation ?? '').trim();
     // 很多接口的 observation 与 message 本来就是同一句，别重复贴两遍。
     if (!body || body === o.message.trim()) return head;
+    /*
+     * 先用**隐藏协议**处理：把超长载荷（嵌入的图片 base64 之类）整块换成带序号的占位。
+     * 必须排在截断之前 —— 截断是按字符数切的，会把 base64 从中间腰斩，
+     * 得到一段既不是合法数据、又让人误以为"看到全部"的东西。
+     */
+    const hid = hideLongPayload(body);
+    const shown = hid.text;
+    const note = hid.hidden.length
+      ? '\n(这一条里有 ' + hid.hidden.length + ' 块大内容被隐藏，见上面的 #序号；需要就调 ws_hidden(ref)。)'
+      : '';
     const clipped =
-      body.length > MAX_OBSERVATION_CHARS
-        ? body.slice(0, MAX_OBSERVATION_CHARS) +
-          '\n... (this result was too long and has been truncated; original length ' + body.length + ' characters)'
-        : body;
-    return head + '\n' + clipped;
+      shown.length > MAX_OBSERVATION_CHARS
+        ? shown.slice(0, MAX_OBSERVATION_CHARS) +
+          '\n... (this result was too long and has been truncated; original length ' + shown.length + ' characters)'
+        : shown;
+    return head + '\n' + clipped + note;
   });
 }
 

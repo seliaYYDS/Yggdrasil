@@ -1,4 +1,5 @@
 import { registerInterface } from '../registry/interfaceRegistry';
+import { embedMarkers } from '../workspace/embed';
 import { fail, ok, strOr, tokensOf } from '../bus/opContext';
 import { compileComponent, compileTool } from '../../host/compile';
 import { defaultWindows, defaultWindowsText, desktop, useDesktopStore } from '../../store/desktopStore';
@@ -444,7 +445,7 @@ export function registerCoreInterfaces(): void {
     },
     mutates: true,
     cap: 'desktop',
-    handler: (op) => {
+    handler: async (op) => {
       const id = strOr(op.id, '');
       const surface = strOr(op.surface, '');
       if (!id && !surface) return fail('patch_source needs either id (edit a component) or surface (edit a slot).');
@@ -541,6 +542,10 @@ export function registerCoreInterfaces(): void {
         next = e.all ? next.split(e.find).join(e.replace) : next.replace(e.find, e.replace);
         notes.push('#' + (i + 1) + ' x' + hits);
       }
+      // 这次改动里可能引入 @ws/ 标记（例如把图片换成变量），统一在这里嵌入。
+      const emb = await embedMarkers(next);
+      if (emb.errors.length) return fail(emb.errors.join('\n'));
+      next = emb.source;
       if (next === current) {
         return fail('The source is unchanged after the replacement — did you write find and replace identically?');
       }

@@ -11,6 +11,7 @@ import {
 } from '../../store/desktopStore';
 import { unregisterTool } from '../registry/toolRegistry';
 import { enabledPlugins } from '../plugin/runtime';
+import { embedMarkers } from '../workspace/embed';
 import { sanitizeTokens } from '../../theme/engine';
 import type { ActCap, ComponentNode, DerivationOp, YggNode } from '../types';
 import { newNodeId } from '../ids';
@@ -163,7 +164,7 @@ function setDefaultWindowState(ref: string, state: 'active' | 'minimized' | 'clo
   return ok('Default window "' + win.title + '" is now ' + label + '.');
 }
 
-function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionId: string }) {
+async function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionId: string }) {
   const name = strOr(op.name, 'component');
   const store = useDesktopStore.getState();
   const id = newNodeId();
@@ -177,7 +178,13 @@ function createComponentNode(op: DerivationOp, ctx: { originId: string; sessionI
 
   // 只有一份源码：组件的 source。
   // Agent 能力不携带界面 —— 界面永远是组件自己的事。
-  const source = typeof op.source === 'string' ? op.source : '';
+  /*
+   * 嵌入：源码里的 @ws/名字 在这里被换成真实内容（复制，不是链接）。
+   * 同步接口，但替换要读 IndexedDB —— 所以这一个 handler 变成了 async。
+   */
+  const embed = await embedMarkers(typeof op.source === 'string' ? op.source : '');
+  if (embed.errors.length) return fail(embed.errors.join('\n'));
+  const source = embed.source;
 
   // 源码里从 "yggdrasil" 引入了 useAgent 并调用它，就等于声明"这个组件需要 agent 能力"。
   // 此时若没显式给 agent 字段，就自动接上 —— 否则 useAgent() 拿不到能力，
@@ -375,7 +382,7 @@ export function registerNodeInterfaces(): void {
     },
     mutates: true,
     cap: 'desktop',
-    handler: (op, ctx) => createComponentNode(op, ctx),
+    handler: async (op, ctx) => createComponentNode(op, ctx),
   });
 
   registerInterface({
@@ -386,7 +393,7 @@ export function registerNodeInterfaces(): void {
     example: { kind: 'plugin_ui', id: 'github', ui: 'repo_card', data: { owner: 'facebook', repo: 'react' } },
     mutates: true,
     cap: 'desktop',
-    handler: (op, ctx) => {
+    handler: async (op, ctx) => {
       const id = strOr(op.id, '');
       const name = strOr(op.ui, '');
       const plugin = enabledPlugins().find((p) => p.id === id);
@@ -409,7 +416,7 @@ export function registerNodeInterfaces(): void {
        */
       const data = op.data === undefined ? null : op.data;
       const source = 'const data = ' + JSON.stringify(data) + ';\n' + file + '\n';
-      const result = createComponentNode(
+      const result = await createComponentNode(
         { ...op, kind: 'create_component', name: plugin.name + ' · ' + ui.label, source } as DerivationOp,
         ctx,
       );
@@ -428,7 +435,7 @@ export function registerNodeInterfaces(): void {
     example: { kind: 'update_component', id: 'n_xxx', dx: 120, dy: 0, focus: true },
     mutates: true,
     cap: 'desktop',
-    handler: (op) => {
+    handler: async (op) => {
       /*
        * 先分流：`panel` 给的是**默认窗口**（常驻面板 / 输入框），它们不是节点。
        * 只认几何与 focus —— 它们没有源码、没有标题、没有挂件形态、也没有锁定。
@@ -448,7 +455,10 @@ export function registerNodeInterfaces(): void {
           desktop().log('error', 'comp ' + node.name + ' \u2715 ' + compiled.error);
           return fail('The changed source failed to compile, so this edit was dropped: ' + compiled.error);
         }
-        patch.source = op.source;
+        // 整段替换源码时也要嵌入（否则写进去的 @ws/ 标记永远是个字面量）。
+        const emb = await embedMarkers(op.source);
+        if (emb.errors.length) return fail(emb.errors.join('\n'));
+        patch.source = emb.source;
         touched.push('source');
         // 记下长度变化：用户能从日志看出这次是"整段重写"还是"定点修改"。
         desktop().log(

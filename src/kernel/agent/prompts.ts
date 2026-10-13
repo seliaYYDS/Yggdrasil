@@ -335,6 +335,21 @@ export function buildSnapshotPrompt(input: SystemPromptInput): string {
     on('tools') ? toolCatalogText(input.tools) : '',
     '',
     /*
+     * 工作区：只在开了 net 能力时才有意义（工作区的 op 全挂在 net 下）。
+     * 这里**只点出它存在与最重要的那条规则**（嵌入是复制、工作区是临时的），
+     * 具体用法在接口目录与各自 description 里 —— 提示词不是手册。
+     */
+    on('net') ? '## Scratch workspace (temporary)' : '',
+    on('net')
+      ? 'You have a temporary bench for files: put text or fetched bytes there with ws_write, read them back with\n' +
+        'ws_read, and clean up with ws_delete. It is **not** storage — it is not saved with the scene and the user\n' +
+        'can clear it at any time. To deliver something from it, put the marker "@ws/<name>" in a component source:\n' +
+        'the content is **copied in** at that moment, and after that the component and the workspace are unrelated\n' +
+        '(deleting the file will not break what you built). If a result contains a big payload you will see it as\n' +
+        '[#N ... hidden on purpose] instead of a wall of base64 — call ws_hidden(ref: N) to actually read it back.'
+      : '',
+    '',
+    /*
      * 已启用的插件：**每个只占一行**（名字 + 它提供的操作）。
      * 用法在插件的 guide.md 里，靠 plugin_docs 按需取 —— 把指南全铺在这里，
      * 装三个插件就等于每轮多几千字，而且这些字会进缓存前缀，一动全失效。

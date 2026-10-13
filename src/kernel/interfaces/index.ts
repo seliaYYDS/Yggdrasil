@@ -4,6 +4,7 @@ import { registerWindowInterfaces } from './windows';
 import { registerBrowserInterfaces } from './browser';
 import { registerNetInterfaces } from './net';
 import { registerPluginDocsInterface } from '../plugin/runtime';
+import { registerWorkspaceHiddenInterface, registerWorkspaceInterfaces } from '../workspace/interfaces';
 
 let done = false;
 
@@ -18,4 +19,7 @@ export function registerAllInterfaces(): void {
   registerNetInterfaces();
   // 插件文档是常驻接口（没有插件时它会如实说"没装插件"）—— 端点接口由插件自己动态登记。
   registerPluginDocsInterface();
+  // 工作区：给 Agent 的临时加工台（只有 Agent 能写，用户只能看/删）。
+  registerWorkspaceInterfaces();
+  registerWorkspaceHiddenInterface();
 }

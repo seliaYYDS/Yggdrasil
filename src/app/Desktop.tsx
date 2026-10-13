@@ -12,6 +12,7 @@ import { FxLayer } from '../ui/FxLayer';
 import { TracePanel } from '../ui/TracePanel';
 import { SettingsPanel } from '../ui/SettingsPanel';
 import { PluginsPanel } from '../ui/PluginsPanel';
+import { WorkspacePanel } from '../ui/WorkspacePanel';
 import type { ComponentNode } from '../kernel/types';
 
 export function Desktop() {
@@ -33,6 +34,7 @@ export function Desktop() {
       else if (s.treeOpen) s.setTreeOpen(false);
       else if (s.traceOpen) s.setTraceOpen(false);
       else if (s.pluginsOpen) s.setPluginsOpen(false);
+      else if (s.workspaceOpen) s.setWorkspaceOpen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -132,6 +134,7 @@ export function Desktop() {
         面板永远盖在所有窗口之上。这个坑踩过一次，别再把面板往外搬。
       */}
       <PluginsPanel />
+      <WorkspacePanel />
 
       <Taskbar />
     </div>

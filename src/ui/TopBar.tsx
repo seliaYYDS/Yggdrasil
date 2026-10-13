@@ -1,5 +1,5 @@
 import { useDesktopStore, MAX_SESSIONS } from '../store/desktopStore';
-import { ExportIcon, ImportIcon, NewInputIcon, NodesIcon, PluginIcon, ResetIcon, SettingsIcon, TraceIcon } from './icons';
+import { ExportIcon, ImportIcon, NewInputIcon, NodesIcon, PluginIcon, ResetIcon, SettingsIcon, TraceIcon, WorkspaceIcon } from './icons';
 
 /**
  * 固定在页面上方两组按钮。
@@ -34,6 +34,7 @@ export function TopBar() {
 function TopRight() {
   const setSettingsOpen = useDesktopStore((s) => s.setSettingsOpen);
   const setPluginsOpen = useDesktopStore((s) => s.setPluginsOpen);
+  const setWorkspaceOpen = useDesktopStore((s) => s.setWorkspaceOpen);
   const setTreeOpen = useDesktopStore((s) => s.setTreeOpen);
   const setTraceOpen = useDesktopStore((s) => s.setTraceOpen);
   const setResetOpen = useDesktopStore((s) => s.setResetOpen);
@@ -65,6 +66,9 @@ function TopRight() {
       </button>
       <button className="ygg-topbtn" title="节点树" onClick={() => setTreeOpen(true)}>
         <NodesIcon />
+      </button>
+      <button className="ygg-topbtn" title="工作区（Agent 的临时加工台）" onClick={() => setWorkspaceOpen(true)}>
+        <WorkspaceIcon />
       </button>
       <button className="ygg-topbtn" title="插件" onClick={() => setPluginsOpen(true)}>
         <PluginIcon />

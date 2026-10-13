@@ -1275,3 +1275,24 @@ button:focus:not(:focus-visible) { outline: none; }
   border: 1px solid var(--ygg-accent-dim);
   border-radius: var(--ygg-radius);
 }
+
+/* 工作区面板：一行一个文件（名字 / 种类 / 大小 / 删除） */
+.ygg-ws-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 0;
+  font-size: 11px;
+}
+.ygg-ws-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ygg-fg);
+}
+.ygg-ws-kind { color: var(--ygg-accent-hi); font-size: 10px; }
+.ygg-ws-row:nth-child(odd) { background: color-mix(in srgb, var(--ygg-surface-2) 45%, transparent); }
+.ygg-ws-size { color: var(--ygg-fg-muted); font-size: 10px; min-width: 52px; text-align: right; }
+.ygg-ws-usage { color: var(--ygg-fg-muted); font-size: 10px; margin-left: auto; }

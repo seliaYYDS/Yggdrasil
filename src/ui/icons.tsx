@@ -240,6 +240,17 @@ export function StopIcon(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+/** 工作区：一个抽屉/托盘（临时放东西的地方）。 */
+export function WorkspaceIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <Svg {...props}>
+      <path d="M2.4 5.6h11.2v6.4c0 .6-.4 1-1 1H3.4c-.6 0-1-.4-1-1V5.6z" />
+      <path d="M2.4 5.6 4.6 2.8h6.8l2.2 2.8" />
+      <path d="M6.2 8.6h3.6" />
+    </Svg>
+  );
+}
+
 /** 插件：一块拼图（接上去就能用）。 */
 export function PluginIcon(props: SVGProps<SVGSVGElement>) {
   return (

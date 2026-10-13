@@ -232,13 +232,14 @@ const K_PLUGINS = 'plugins';
 const RESETTABLE_KEYS = [K_NODES, K_ROOT, K_THEME, K_LOGS, K_PANELS, K_SESSIONS, 'z', 'panelZ', K_SURFACES];
 
 /** 常驻 UI 面板（输入框是会话，不在这里）。它们不是派生节点，不进派生树。 */
-export type PanelKey = 'inspector' | 'settings' | 'trace' | 'plugins';
+export type PanelKey = 'inspector' | 'settings' | 'trace' | 'plugins' | 'workspace';
 
 interface PanelRects {
   inspector: PanelRect;
   settings: PanelRect;
   trace: PanelRect;
   plugins: PanelRect;
+  workspace: PanelRect;
 }
 
 export const DEFAULT_PANELS: PanelRects = {
@@ -246,18 +247,20 @@ export const DEFAULT_PANELS: PanelRects = {
   settings: { x: 0, y: 0, w: 380, h: 388 },
   trace: { x: 0, y: 0, w: 360, h: 400 },
   plugins: { x: 0, y: 0, w: 420, h: 460 },
+  workspace: { x: 0, y: 0, w: 380, h: 400 },
 };
 
 /** 输入会话的默认尺寸：单行输入 + 一行状态，默认就该矮。 */
 export const DEFAULT_INPUT_RECT: PanelRect = { x: 24, y: 0, w: 560, h: 88 };
 
-export const ALL_PANELS: PanelKey[] = ['inspector', 'settings', 'trace', 'plugins'];
+export const ALL_PANELS: PanelKey[] = ['inspector', 'settings', 'trace', 'plugins', 'workspace'];
 
 export const DEFAULT_PANEL_Z: Record<PanelKey, number> = {
   inspector: 1,
   settings: 1,
   trace: 1,
   plugins: 1,
+  workspace: 1,
 };
 
 export const PANEL_TITLES: Record<PanelKey, string> = {
@@ -265,17 +268,19 @@ export const PANEL_TITLES: Record<PanelKey, string> = {
   settings: 'LLM',
   trace: 'Trace',
   plugins: '插件',
+  workspace: '工作区',
 };
 
 /** 面板键到矩形字段的映射。 */
 export const PANEL_RECT_KEY: Record<
   PanelKey,
-  'inspectorRect' | 'settingsRect' | 'traceRect' | 'pluginsRect'
+  'inspectorRect' | 'settingsRect' | 'traceRect' | 'pluginsRect' | 'workspaceRect'
 > = {
   inspector: 'inspectorRect',
   settings: 'settingsRect',
   trace: 'traceRect',
   plugins: 'pluginsRect',
+  workspace: 'workspaceRect',
 };
 
 /** 视口缩小时派生的窗口最少缩到这个尺寸（再小就没法用了）。 */
@@ -288,6 +293,7 @@ export const PANEL_LABELS: Record<PanelKey, string> = {
   plugins: '插件',
   settings: '设置',
   trace: 'Trace',
+  workspace: '工作区',
 };
 
 /** 各面板的尺寸下限，与 PanelWindow 传的 minW / minH 对齐。 */
@@ -296,6 +302,7 @@ export const PANEL_MIN: Record<PanelKey, { w: number; h: number }> = {
   settings: { w: 300, h: 280 },
   trace: { w: 320, h: 240 },
   plugins: { w: 340, h: 300 },
+  workspace: { w: 320, h: 260 },
 };
 
 /** 输入会话的尺寸下限。 */
@@ -353,6 +360,11 @@ export function resolvePanels(viewW: number, viewH: number): PanelRects {
       ...DEFAULT_PANELS.plugins,
       x: Math.max(24, viewW - DEFAULT_PANELS.plugins.w - 24),
       y: 72,
+    }),
+    workspace: place('workspace', {
+      ...DEFAULT_PANELS.workspace,
+      x: Math.max(24, viewW - DEFAULT_PANELS.workspace.w - 24),
+      y: 100,
     }),
   };
 }
@@ -643,6 +655,8 @@ interface DesktopState {
   traceOpen: boolean;
   /** 插件面板开着没。 */
   pluginsOpen: boolean;
+  /** 工作区面板开着没。 */
+  workspaceOpen: boolean;
   /** 已安装的插件（含用户填的值）。 */
   plugins: InstalledPlugin[];
   settings: LlmSettings;
@@ -653,6 +667,7 @@ interface DesktopState {
   settingsRect: PanelRect;
   traceRect: PanelRect;
   pluginsRect: PanelRect;
+  workspaceRect: PanelRect;
   minimizedPanels: Record<string, boolean>;
   panelZ: Record<PanelKey, number>;
   /** 桌面视口的像素尺寸。窗口的 pos / size 都在这个坐标系里。不进持久化。 */
@@ -751,6 +766,7 @@ interface DesktopState {
   setSettings: (patch: Partial<LlmSettings>) => void;
   setSettingsOpen: (open: boolean) => void;
   setPluginsOpen: (open: boolean) => void;
+  setWorkspaceOpen: (open: boolean) => void;
   /** 装一个已解析并通过校验的插件包。 */
   installPlugin: (pkg: PluginPackage, source: string) => InstalledPlugin;
   setPluginEnabled: (id: string, enabled: boolean) => void;
@@ -955,6 +971,7 @@ export function defaultWindows(s: DesktopState): DefaultWindow[] {
     settings: s.settingsOpen,
     trace: s.traceOpen,
     plugins: s.pluginsOpen,
+    workspace: s.workspaceOpen,
   };
   const out: DefaultWindow[] = ALL_PANELS.map((key) => {
     const id = 'panel-' + key;
@@ -1050,6 +1067,7 @@ export function snapshot(): PersistedRoot {
       settings: s.settingsRect,
       trace: s.traceRect,
       plugins: s.pluginsRect,
+      workspace: s.workspaceRect,
     },
     // 会话存几何、可见性，以及**它自己的对话记忆**；
     // 运行状态与排队项是瞬态，不落盘。
@@ -1126,6 +1144,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   feedback: null,
   traceOpen: false,
   pluginsOpen: false,
+  workspaceOpen: false,
   plugins: [],
   settings: { ...DEFAULT_SETTINGS },
   settingsOpen: false,
@@ -1135,6 +1154,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   settingsRect: resolvePanels(window.innerWidth, window.innerHeight).settings,
   traceRect: resolvePanels(window.innerWidth, window.innerHeight).trace,
   pluginsRect: resolvePanels(window.innerWidth, window.innerHeight).plugins,
+  workspaceRect: resolvePanels(window.innerWidth, window.innerHeight).workspace,
   minimizedPanels: {},
   panelZ: { ...DEFAULT_PANEL_Z },
   viewW: typeof window === 'undefined' ? 1280 : window.innerWidth,
@@ -1294,6 +1314,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       settingsRect: panels?.settings ?? fallback.settings,
       traceRect: panels?.trace ?? fallback.trace,
       pluginsRect: panels?.plugins ?? fallback.plugins,
+      workspaceRect: panels?.workspace ?? fallback.workspace,
       plugins: safePluginList,
       zCounter: z ?? 10 + Object.keys(safeNodes).length,
       panelZ: {
@@ -1561,6 +1582,10 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     set({ pluginsOpen: open });
     if (open) openPanel('plugins');
   },
+  setWorkspaceOpen: (open) => {
+    set({ workspaceOpen: open });
+    if (open) openPanel('workspace');
+  },
   setTreeOpen: (open) => {
     set({ treeOpen: open });
     if (open) openPanel('inspector');
@@ -1575,6 +1600,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     if (panel === 'inspector') get().setTreeOpen(open);
     else if (panel === 'trace') get().setTraceOpen(open);
     else if (panel === 'plugins') get().setPluginsOpen(open);
+    else if (panel === 'workspace') get().setWorkspaceOpen(open);
     else get().setSettingsOpen(open);
   },
 
@@ -1771,6 +1797,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         else if (key === 'trace') st.setTraceOpen(false);
         else if (key === 'settings') st.setSettingsOpen(false);
         else if (key === 'plugins') st.setPluginsOpen(false);
+        else if (key === 'workspace') st.setWorkspaceOpen(false);
       } else {
         st.removeSession(windowId);
       }
