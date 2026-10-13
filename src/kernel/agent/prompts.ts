@@ -342,7 +342,11 @@ export function buildSnapshotPrompt(input: SystemPromptInput): string {
     on('net') ? '## Scratch workspace (temporary)' : '',
     on('net')
       ? 'You have a temporary bench for files: put text or fetched bytes there with ws_write, read them back with\n' +
-        'ws_read, and clean up with ws_delete. It is **not** storage — it is not saved with the scene and the user\n' +
+        'ws_read, and **transform them with ws_run** — a small script whose input and output are both the workspace.\n' +
+        '⚠ **Do not build a component just to run a calculation** (parsing, converting, rewriting, combining, computing):\n' +
+        'that is what ws_run is for, and it leaves nothing behind on the desktop. A component is for *showing* a result.\n' +
+        'ws_run returns nothing usable — write the result back into the workspace and deliver it by embedding.\n' +
+        'and clean up with ws_delete. It is **not** storage — it is not saved with the scene and the user\n' +
         'can clear it at any time. To deliver something from it, put the marker "@ws/<name>" in a component source:\n' +
         'the content is **copied in** at that moment, and after that the component and the workspace are unrelated\n' +
         '(deleting the file will not break what you built). If a result contains a big payload you will see it as\n' +

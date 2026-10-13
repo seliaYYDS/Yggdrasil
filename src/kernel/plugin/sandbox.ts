@@ -36,6 +36,17 @@ export interface SandboxJob {
   logChars?: number;
   /** 桥接出去的请求；默认用全局 fetch。测试里可以换成桩。 */
   fetchImpl?: typeof fetch;
+  /**
+   * 工作区桥。**沙箱本身不认识工作区** —— 它只把脚本的 workspace 调用转发出去，
+   * 由调用方（workspace/run.ts）去读写真正的后端。
+   *
+   * 这样做的好处：沙箱保持"通用执行器"的身份（插件工具也可以复用它），
+   * 而"哪个执行环境能碰工作区"变成一个显式开关 —— 插件工具**不给**这个桥，
+   * 于是它们碰不到工作区（用户明确要求插件用不了）。
+   */
+  workspace?: (req: { op: string; name?: string; data?: unknown }) => Promise<unknown>;
+  /** 日志上限之外，还要不要额外限制脚本能写多少文件（防止一次调用刷爆工作区）。 */
+  maxWorkspaceWrites?: number;
 }
 
 export interface SandboxResult {
@@ -84,7 +95,7 @@ export const WORKER_SHIM = [
   'let logCap = 400;',
   "self.addEventListener('message', async (e) => {",
   '  const m = e.data || {};',
-  "  if (m.type === 'fetch-result') { const p = pending.get(m.id); if (p) { pending.delete(m.id); p(m.result); } return; }",
+  "  if (m.type === 'fetch-result' || m.type === 'ws-result') { const p = pending.get(m.id); if (p) { pending.delete(m.id); p(m.result); } return; }",
   "  if (m.type !== 'run') return;",
   '  // 断网：唯一出口是 ctx.fetch（主线程校验主机后代跑）',
   '  /*',
@@ -109,10 +120,29 @@ export const WORKER_SHIM = [
   '  try { if (typeof self.location !== "undefined") self.location = undefined; } catch (err) {}',
   '  quota = typeof m.maxFetches === "number" ? m.maxFetches : Infinity;',
   '  logCap = typeof m.logChars === "number" ? m.logChars : 400;',
+  '  // 工作区桥：只有主线程显式打开时才有（插件工具拿不到它）。',
+  '  const wsRpc = (op, payload) => new Promise((resolve, reject) => {',
+  '    const id = ++seq;',
+  '    pending.set(id, (r) => {',
+  "      if (!r) return reject(new Error('工作区调用没有结果'));",
+  '      if (r.error) return reject(new Error(r.error));',
+  '      resolve(r);',
+  '    });',
+  "    self.postMessage({ type: 'ws', id, op, payload: payload || null });",
+  '  });',
+  '  const workspaceApi = m.hasWorkspace',
+  '    ? {',
+  '        list: () => wsRpc("list", null),',
+  '        read: (name) => wsRpc("read", { name: String(name) }),',
+  '        write: (name, data) => wsRpc("write", { name: String(name), data }),',
+  '        delete: (name) => wsRpc("delete", { name: String(name) }),',
+  '      }',
+  '    : undefined;',
   '  const ctx = {',
   '    args: m.args,',
   '    fields: m.fields,',
   '    plugin: m.plugin,',
+  '    workspace: workspaceApi,',
   "    log: (t) => self.postMessage({ type: 'log', text: String(t).slice(0, logCap) }),",
   '    fetch: (url, init) => new Promise((resolve, reject) => {',
   '      if (fetched >= quota) {',
@@ -197,6 +227,20 @@ async function runInWorker(job: SandboxJob): Promise<SandboxResult> {
         logs.push(String(m.text).slice(0, job.logChars ?? 400));
         return;
       }
+      if (m.type === 'ws') {
+        // 工作区调用：交给注入的桥（沙箱不知道工作区是什么）。
+        if (!job.workspace) {
+          worker.postMessage({ type: 'ws-result', id: m.id, result: { error: '这个执行环境没有工作区访问权限。' } });
+          return;
+        }
+        try {
+          const result = await job.workspace({ op: String(m.op), ...(m.payload || {}) } as never);
+          worker.postMessage({ type: 'ws-result', id: m.id, result });
+        } catch (e) {
+          worker.postMessage({ type: 'ws-result', id: m.id, result: { error: (e as Error).message } });
+        }
+        return;
+      }
       if (m.type === 'fetch') {
         fetches += 1;
         // 双保险：Worker 侧已经拦过配额，这里再拦一次（万一 shim 没生效）。
@@ -221,6 +265,7 @@ async function runInWorker(job: SandboxJob): Promise<SandboxResult> {
       plugin: job.plugin,
       maxFetches: job.maxFetches ?? Infinity,
       logChars: job.logChars ?? 400,
+      hasWorkspace: !!job.workspace,
     });
   });
 }

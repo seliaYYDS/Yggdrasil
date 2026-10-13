@@ -238,6 +238,35 @@ function nodeText(n: YggNode): string {
   return lines.join('\n') + '\n\nSource:\n' + clipped;
 }
 
+export /**
+ * 把工具返回值变成能回灌的文本。
+ *
+ * 三件事：
+ * ① 能序列化就原样给（不再截断 —— 交给观察通道的隐藏协议与预算处理）；
+ * ② 不能序列化（循环引用、BigInt、函数…）**说清是什么问题**，而不是静默变成 undefined；
+ * ③ 二进制（ArrayBuffer / 类型化数组）**不能进文本上下文**，所以明确告诉模型
+ *    "它是什么、多大、以及要走哪条路"（嵌入组件 / 写进工作区），而不是丢掉或印出一堆乱码。
+ */
+function stringifyToolResult(value: unknown): string {
+  if (value === undefined) return "(工具没有返回值)";
+  if (value === null) return "null";
+  if (typeof value === "string") return value;
+  // 二进制：文本上下文里放不下它，如实说明并给出路
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) {
+    const size = value instanceof ArrayBuffer ? value.byteLength : (value as ArrayBufferView).byteLength;
+    return (
+      "(工具返回了二进制数据，" + size + " 字节。" +
+      "**字节进不了文本上下文** —— 要交付它就先写进工作区（让工具用 ws_run 的 ctx.workspace.write），" +
+      "再在组件源码里用 @ws/名字 嵌入。)"
+    );
+  }
+  try {
+    const text = JSON.stringify(value, null, 1);
+    return text === undefined ? String(value) : text;
+  } catch (e) {
+    return "(工具返回了无法序列化的值：" + (e as Error).message + " —— 请返回普通对象/数组/字符串。)";
+  }
+}
 export function registerCoreInterfaces(): void {
   registerInterface({
     kind: 'create_tool',
@@ -289,7 +318,8 @@ export function registerCoreInterfaces(): void {
   registerInterface({
     kind: 'call_tool',
     label: '调用工具',
-    description: 'Call an existing tool, by id or by name.', 
+    description:
+      'Call an existing tool, by id or by name. The result is fed back to you in full (large payloads are replaced by a numbered placeholder you can read back), so you do not need to print it again yourself. Binary results cannot enter the text context — write them into the workspace and embed them in a component instead.',
     example: { kind: 'call_tool', name: 'sum', args: { a: 1, b: 2 } },
     cap: 'tools',
     handler: async (op) => {
@@ -303,9 +333,20 @@ export function registerCoreInterfaces(): void {
       }
       try {
         const value = await tool.run(op.args);
-        const text = JSON.stringify(value) ?? 'undefined';
+        /*
+         * 结果要**完整**回灌给模型，而不是截到 400 字符。
+         *
+         * 这里原来是 message 截 400、observation 截 2000 —— 结果是：
+         * 工具算出来的东西**只有一小截能被看见**，稍大一点（更别说二进制）就等于没有。
+         * 一个"能跑但拿不到结果"的接口比没有更糟：模型会以为算完了，
+         * 却看不到任何东西，然后开始瞎猜。
+         *
+         * 现在交给**观察通道**统一处理：那里有隐藏协议（超长载荷整块换成带序号的占位，
+         * 可取回）与预算裁剪，比在各接口里各写一个 slice 更准也更一致。
+         */
+        const text = stringifyToolResult(value);
         desktop().log('op', 'tool ' + tool.name + ' \u2192 ' + text.slice(0, 160));
-        return ok('Tool "' + tool.name + '" returned: ' + text.slice(0, 400), { observation: text.slice(0, 2000) });
+        return ok('Tool "' + tool.name + '" returned', { observation: text });
       } catch (e) {
         desktop().log('error', 'tool ' + tool.name + ' \u2715 ' + (e as Error).message);
         return fail('Tool "' + tool.name + '" failed while running: ' + (e as Error).message);
