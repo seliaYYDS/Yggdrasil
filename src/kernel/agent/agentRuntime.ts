@@ -714,10 +714,20 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         if (!parsed.ok || !parsed.plan) {
           // 解析失败也交给 Agent 自己修：把错误与原始输出片段回灌，下一轮重来。
           const err = parsed.error ?? '解析失败';
+          /*
+           * **原文与思考必须一起写进这一步。**
+           *
+           * upsertSessionStep 是**整体替换**（不是合并），而 modelStep 本身没有这两个字段 ——
+           * 少了它们，流式阶段 flush 上去的 raw 就被这一步覆盖掉，轨迹里只剩一句
+           * "未返回合法指令"。用户看到的正是这个：格式一错就不知道模型到底写了什么，
+           * 而"是 JSON 语法错、还是压根没输出 JSON、还是把 JSON 包在解释里"只能看原文才分得清。
+           */
           pushStep({
             ...modelStep,
             status: 'fail',
             message: '未返回合法指令：' + err,
+            thinking: thinking ? thinking.slice(0, MAX_THINK_CHARS) : undefined,
+            raw: raw.slice(0, MAX_RAW_CHARS),
             endedAt: Date.now(),
           });
           store.log('error', 'parse ✕ ' + err);
