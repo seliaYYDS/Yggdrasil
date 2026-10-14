@@ -62,7 +62,12 @@ interface Props {
   onDropFiles?: (files: File[]) => void;
   /** 正在播"被收走"的淡出动画：淡出结束后才真正删除。 */
   dying?: boolean;
-  /** 刚派生出来：入场动画更慢、带一点延迟，让派生连线先到。 */
+  /**
+   * 刚派生出来：入场动画更慢、带一点延迟，让派生连线先到。
+   *
+   * **只影响挂载那一刻**（之后由内部的 entrance 状态接管）—— 调用方现算这个值不会
+   * 造成动画重播，但也别指望中途改它能换动画。
+   */
   newborn?: boolean;
   children: ReactNode;
 }
@@ -118,6 +123,23 @@ export function WindowFrame({
   /** 挂载那一刻决定：从任务栏展开的窗口不再播入场动画，改播"长回原位"。 */
   const [fromTaskbar] = useState(restoring);
   const [settled, setSettled] = useState(!restoring);
+  /*
+   * **入场动画的种类在挂载那一刻定下来，之后一辈子不变。**
+   *
+   * 为什么要"定下来"而不是每次渲染现算：动画只要 animation-name 变了，浏览器就会
+   * 从头重播。而 newborn 原来是按时间算的（Date.now() - createdAt < 1500），
+   * 于是**用户第一次点这个窗口**时——点击会触发聚焦、聚焦会触发重渲染——它刚好跨过
+   * 1.5 秒变成 false，is-newborn 被摘掉，animation 退回基类的 ygg-window-in，
+   * 完整的淡入就重播了一次。用户看到的就是"点一下，窗口闪一下"。
+   *
+   * 三种取值：
+   * - 'born'：刚派生出来的（曲线的动画先走 260ms，组件再浮现）
+   * - 'in'  ：普通新建
+   * - 'none'：从任务栏展开的 —— 它要播的是"长回原位"，不该再叠一个入场
+   */
+  const [entrance] = useState<'born' | 'in' | 'none'>(() =>
+    restoring ? 'none' : newborn ? 'born' : 'in',
+  );
 
   const move = useCallback((next: WindowRect) => onRect?.(next), [onRect]);
 
@@ -299,7 +321,8 @@ export function WindowFrame({
       className={
         'ygg-window' +
         (isWidget ? ' is-widget' : '') +
-        (newborn ? ' is-newborn' : '') +
+        // 入场类由挂载时定下的 entrance 决定，**不会**随重渲染变化（见上面的说明）。
+        (entrance === 'born' ? ' is-newborn' : entrance === 'in' ? ' is-entering' : '') +
         (dying || dyingNow ? ' is-dying' : '') +
         (pinned ? ' is-fixed' : '') +
         (focused ? ' is-focused' : '') +

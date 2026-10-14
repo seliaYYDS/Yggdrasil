@@ -116,21 +116,6 @@ button:focus:not(:focus-visible) { outline: none; }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/*
- * 关闭动画（淡出 + 收束）。
- *
- * 用 **animation** 而不是 transition：动画只要类被加上，就一定会从第一个关键帧开始播，
- * 不依赖"起始态先被浏览器真正计算过一次"。之前的 transition 两段式（先 is-dying，
- * rAF 下一帧再加 is-gone 把 opacity 归零）在真实渲染里始终没能插值 ——
- * 用户看到的就是"等一会儿，然后窗口凭空消失"。
- *
- * 动画在层叠上也高于元素的行内样式（最小化途中被关掉的窗口带着行内 transform/opacity，
- * 照样能播完这段淡出）。节奏与 DEATH_MS 一致：播完（260ms）才真正删除元素。
- */
-.ygg-window.is-dying {
-  animation: ygg-window-out var(--ygg-t-slow) var(--ygg-ease-in) both;
-  pointer-events: none;
-}
 @keyframes ygg-window-out {
   from { opacity: 1; transform: none; }
   to { opacity: 0; transform: scale(.97); }
@@ -162,12 +147,28 @@ button:focus:not(:focus-visible) { outline: none; }
   min-width: var(--ygg-win-min-w, 200px);
   min-height: var(--ygg-win-min-h, 120px);
   box-shadow: var(--ygg-shadow);
-  animation: ygg-window-in var(--ygg-t-slow) var(--ygg-ease-out) both;
   transition:
     border-color var(--ygg-t) var(--ygg-ease),
     background-color var(--ygg-t) var(--ygg-ease),
     box-shadow var(--ygg-t) var(--ygg-ease),
     opacity var(--ygg-t) var(--ygg-ease);
+}
+/*
+ * 入场动画**只由显式类提供**（is-entering / is-newborn），基类不带 animation。
+ *
+ * 为什么这是必须的：animation 一旦挂在基类上，任何一次 class 变化只要改变了
+ * animation-name，浏览器就会**从头重播一遍**。实测到的两个 bug 都是它造成的：
+ *
+ * - "新建的组件窗口在用户第一次点击时闪一下、又淡入一次"：newborn 原来是按时间算的
+ *   （Date.now() - createdAt < 1500），第一次点击触发重渲染时它刚好变 false，
+ *   is-newborn 被摘掉，animation 退回基类的 ygg-window-in —— 于是重播。
+ * - "最小化再展开后关闭动画消失"：展开的窗口带着 is-restoring（animation: none），
+ *   它与 is-dying 特异性相同而位置靠后，把关闭动画整个压掉了。
+ *
+ * 所以：**入场种类在挂载那一刻定下来，之后一辈子不变**（见 WindowFrame 的 entrance）。
+ */
+.ygg-window.is-entering {
+  animation: ygg-window-in var(--ygg-t-slow) var(--ygg-ease-out) both;
 }
 /* 悬停：描边向金色靠一点，先于聚焦给出"能点"的反馈 */
 .ygg-window:hover:not(.is-focused) { border-color: color-mix(in srgb, var(--ygg-accent-dim) 55%, var(--ygg-accent)); }
@@ -176,13 +177,17 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-window.is-focused > .ygg-titlebar .ygg-winbtn { color: var(--ygg-fg); }
 .ygg-window.is-minimized { opacity: .5; }
 /*
- * 最小化 = 收进左下角任务栏。
- * 关掉入场动画（它的 fill-mode 会一直占着 transform），只留 transform / opacity 两段过渡；
+ * 最小化 = 收进左下角任务栏；展开 = 从那里长回原位。两者共用一套，
  * 位移终点由 WindowFrame 按窗口矩形算好写在行内 style 上。
+ *
+ * 这里关掉入场动画：入场动画的 fill-mode 会一直占着 transform，不让位就轮不到过渡。
+ *
+ * `:not(.is-dying)` 是**必须**的：正在关闭的窗口可能同时带着 is-restoring（展开过的
+ * 窗口会一直留着那个类）。这两条规则与 .is-dying 特异性相同，不加排除就是"谁在后面谁赢"，
+ * 关闭动画会被这里的 animation: none 整个压掉 —— 那正是"最小化再展开后关闭没有动画"。
  */
-/* 收进去与展开共用一套：关掉入场动画，只留 transform / opacity 两段过渡。 */
-.ygg-window.is-leaving,
-.ygg-window.is-restoring {
+.ygg-window.is-leaving:not(.is-dying),
+.ygg-window.is-restoring:not(.is-dying) {
   animation: none;
   transform-origin: center center;
   will-change: transform, opacity;
@@ -194,12 +199,39 @@ button:focus:not(:focus-visible) { outline: none; }
     transform var(--ygg-t-slow) var(--ygg-ease-in),
     opacity var(--ygg-t-slow) var(--ygg-ease-in);
 }
-/* 展开：减速落位 */
-.ygg-window.is-restoring {
+/*
+ * 展开：减速落位。
+ *
+ * `:not(.is-leaving)` 与上面那个 `:not(.is-dying)` 是同一类问题：展开过的窗口会**一直**
+ * 带着 is-restoring，于是它之后再被最小化时，两条规则同时命中、特异性又相同 ——
+ * 靠顺序决定谁赢，而这条在后面，结果"收进去"用了落位的减速曲线，
+ * 应该用的是离开的加速曲线。加上排除，谁在做事谁说了算。
+ */
+.ygg-window.is-restoring:not(.is-leaving) {
   transition:
     transform var(--ygg-t-slow) var(--ygg-ease-out),
     opacity var(--ygg-t-slow) var(--ygg-ease-out);
 }
+/*
+ * 关闭动画（淡出 + 收束）。
+ *
+ * 用 **animation** 而不是 transition：动画只要类被加上，就一定会从第一个关键帧开始播，
+ * 不依赖"起始态先被浏览器真正计算过一次"。之前的 transition 两段式（先 is-dying，
+ * rAF 下一帧再加 is-gone 把 opacity 归零）在真实渲染里始终没能插值 ——
+ * 用户看到的就是"等一会儿，然后窗口凭空消失"。
+ *
+ * 动画在层叠上也高于元素的行内样式（最小化途中被关掉的窗口带着行内 transform/opacity，
+ * 照样能播完这段淡出）。节奏与 DEATH_MS 一致：播完（260ms）才真正删除元素。
+ *
+ * ⚠ **这条必须留在窗口状态规则的最后**：它与 is-entering / is-newborn / is-leaving /
+ * is-restoring 特异性相同（都是 .ygg-window + 一个状态类），靠顺序决定谁赢。
+ * 往上搬一层，"最小化再展开后关闭没有动画"就会回来。
+ */
+.ygg-window.is-dying {
+  animation: ygg-window-out var(--ygg-t-slow) var(--ygg-ease-in) both;
+  pointer-events: none;
+}
+
 .ygg-window.is-dragging { cursor: grabbing; }
 .ygg-window.is-dragging .ygg-titlebar { cursor: grabbing; }
 /*
