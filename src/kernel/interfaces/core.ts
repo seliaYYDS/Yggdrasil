@@ -4,7 +4,7 @@ import { fail, ok, strOr, tokensOf } from '../bus/opContext';
 import { compileComponent, compileTool } from '../../host/compile';
 import { clearConsole, readConsole } from '../../host/consoleErrors';
 import { defaultWindows, defaultWindowsText, desktop, useDesktopStore } from '../../store/desktopStore';
-import { getTool, registerTool, toolCatalog } from '../registry/toolRegistry';
+import { getTool, registerTool, toolCatalog, toolCap } from '../registry/toolRegistry';
 import { sanitizeTokens } from '../../theme/engine';
 import { policyFor } from '../security';
 import {
@@ -18,7 +18,7 @@ import {
   surfacesText,
 } from '../registry/surfaceRegistry';
 import { MAX_NODES, themeText, toolCatalogText, treeText } from '../agent/prompts';
-import { capScopeConflict, capSummary, DEFAULT_ACT_CAPS, parseCaps } from '../agent/caps';
+import { capScopeConflict, capSummary, CAP_LABELS, DEFAULT_ACT_CAPS, parseCaps } from '../agent/caps';
 import { newNodeId } from '../ids';
 import { isAgentNode } from '../types';
 import type { ComponentNode, DerivationOp, JsonSchema, YggNode } from '../types';
@@ -369,7 +369,7 @@ export function registerCoreInterfaces(): void {
       'Call an existing tool, by id or by name. The result is fed back to you in full (large payloads are replaced by a numbered placeholder you can read back), so you do not need to print it again yourself. Binary results cannot enter the text context — write them into the workspace and embed them in a component instead.',
     example: { kind: 'call_tool', name: 'sum', args: { a: 1, b: 2 } },
     cap: 'tools',
-    handler: async (op) => {
+    handler: async (op, ctx) => {
       const id = strOr(op.id, '');
       const name = strOr(op.name, '');
       let tool = id ? getTool(id) : undefined;
@@ -377,6 +377,31 @@ export function registerCoreInterfaces(): void {
       if (!tool) {
         const list = toolCatalog().map((t) => t.name + '(' + t.id + ')').join(', ') || '(no tools)';
         return fail('No such tool ' + (id || name) + '. Current tools: ' + list);
+      }
+      /*
+       * ⚠ **工具自己也带能力开关，必须在这里查。**
+       *
+       * 以前不用查，因为工具只有两种：内置的（calc / now / random，纯计算）与 Agent 自己
+       * 用 create_tool 造的（沙箱里没有网络）。两种情况都是"基础能力"，谁都能调。
+       *
+       * 现在插件可以往工具表里放**联网**的工具（cap 默认 net）。少了这一道，就会出现一个真实缺口：
+       * 一个没开 net 的 Agent 在提示词里看不到联网端点、调 fetch_url 也会被总线拒 ——
+       * 却能通过 call_tool 调插件工具去发请求。**能力开关必须跟着工具走，而不是只跟着 op 走。**
+       *
+       * 顺带说明为什么提示词裁剪不能替代它：工具目录（## Available tools）是按 Agent 的
+       * capabilities 拼的，但**光裁提示词不算数** —— 模型可能从别处见过这个工具名，猜着调。
+       */
+      const need = toolCap(tool.id);
+      if (need) {
+        const node = desktop().nodes[ctx.originId];
+        const caps = node && node.kind === 'component' ? node.agent?.caps : undefined;
+        if (caps && !caps.includes(need)) {
+          return fail(
+            'Tool "' + tool.name + '" needs the "' + (CAP_LABELS[need] ?? need) + '" capability, which you do not have. ' +
+              'It comes from a plugin, and it makes network requests. Ask the agent that created you to add caps: ["' +
+              need + '"] via set_agent_config.',
+          );
+        }
       }
       try {
         const value = await tool.run(op.args);

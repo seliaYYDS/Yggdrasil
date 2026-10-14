@@ -179,8 +179,16 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     hosts.push(h.toLowerCase());
   }
 
-  // 先报"缺 hosts"：否则会先撞上"端点不在空名单里"，后者更难懂。
-  if (hosts.length === 0) return bad('缺少 hosts 白名单（插件要访问哪些主机必须写清楚）。');
+  /*
+   * **空 hosts 的判定延后到解析完 endpoints / tools 之后**。
+   *
+   * 原来这里立刻要求非空。那对一个"只提供纯计算工具、根本不联网"的插件（cap: null）
+   * 就变成了硬性阻碍：它得凭空写一个用不到的主机名才能打包 —— 而安装确认里
+   * 会据此告诉用户"这个插件可以访问 api.example.com"，**那是一句假话**，
+   * 比没有白名单更糟。安全上也不需要它：名单为空时任何 ctx.fetch 都会被执行期拦下。
+   *
+   * 所以规则改成：**只有真的可能发请求时**才要求写清主机（见下面 tools 解析之后的检查）。
+   */
 
   const fieldsRaw = Array.isArray(m.fields) ? m.fields : [];
   const fields: PluginField[] = [];
@@ -240,12 +248,27 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     if (timeoutMs < 200 || timeoutMs > 30000) return bad('tool ' + tn + ' 的 timeoutMs 要在 200 到 30000 之间。');
     const cap = o.cap === undefined ? 'net' : (o.cap as ActCap | null);
     if (!CAPS.includes(cap)) return bad('tool ' + tn + ' 的 cap 不认识：' + String(o.cap));
+    // exposeAs 只认两个值；不写就是老行为（注册成 op）。
+    const exposeAs = o.exposeAs === undefined ? 'op' : o.exposeAs;
+    if (exposeAs !== 'op' && exposeAs !== 'tool') {
+      return bad('tool ' + tn + ' 的 exposeAs 只能是 "op" 或 "tool"（现在是 ' + JSON.stringify(o.exposeAs) + '）。');
+    }
+    const params = Array.isArray(o.params) ? (o.params as PluginParam[]) : [];
+    const paramsSchemaRaw = o.paramsSchema;
+    if (paramsSchemaRaw !== undefined && (typeof paramsSchemaRaw !== 'object' || paramsSchemaRaw === null || Array.isArray(paramsSchemaRaw))) {
+      return bad('tool ' + tn + ' 的 paramsSchema 必须是一个对象。');
+    }
+    if (exposeAs === 'tool' && params.length === 0 && paramsSchemaRaw === undefined) {
+      // 不是错，但值得提醒：没参数的工具在工具目录里只有一行说明。
+    }
     tools.push({
       name: tn,
       label,
       description: desc,
       file,
-      params: Array.isArray(o.params) ? (o.params as PluginParam[]) : [],
+      params,
+      exposeAs,
+      paramsSchema: paramsSchemaRaw as Record<string, unknown> | undefined,
       cap,
       timeoutMs,
       mutates: o.mutates === true,
@@ -310,6 +333,16 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
   const epsRaw = epsRawForNames;
   if (epsRaw.length === 0 && tools.length === 0) {
     return bad('至少要有一个 endpoint 或 tools，否则装它没有意义。');
+  }
+  /*
+   * 现在知道这个插件**到底会不会发请求**了：
+   * 有端点（端点天生要发请求），或某个工具的 cap 不是 null（没写 cap 就默认 net）。
+   * 只有这种情况才强制声明 hosts；纯计算插件允许写空数组。
+   */
+  const canReachNetwork =
+    epsRaw.length > 0 || tools.some((t) => (t.cap === undefined ? true : t.cap !== null));
+  if (hosts.length === 0 && canReachNetwork) {
+    return bad('缺少 hosts 白名单（这个插件会发请求，必须写清楚能访问哪些主机）。');
   }
   if (epsRaw.length > MAX_ENDPOINTS) return bad('endpoint 太多（' + epsRaw.length + ' 个，上限 ' + MAX_ENDPOINTS + '）。拆成两个插件，或只保留常用的。');
   const endpoints: PluginEndpoint[] = [];

@@ -103,6 +103,26 @@ export interface PluginTool {
   /** 包内路径，必须形如 tools/xxx.js。 */
   file: string;
   params?: PluginParam[];
+  /**
+   * 这个工具**怎么被 Agent 使用**（默认 'op'，向后兼容）：
+   *
+   * - `'op'` —— 注册成一个 op（kind 就是 `<插件id>.<名字>`）。适合"一步做完一件事"：
+   *   模型直接把它当操作调用，不需要先知道有哪些工具。**这是老行为，插件不用改。**
+   * - `'tool'` —— 注册成一个**真工具**，出现在提示词的 `## Available tools` 里，
+   *   由 `call_tool` 调用。与内置工具（calc / now / random）和 Agent 自己用 create_tool
+   *   造的工具**完全同列**。适合"可复用的原子能力"：模型看得见它的参数 schema、
+   *   能在一轮里调多次、结果和派生工具一样走完整回灌。
+   *
+   * 两者都能用；区别只是"模型怎么发现它、拿什么调它"。同一个工具也可以同时给两种？
+   * 不 —— 那会在提示词里出现两份说明、模型两条路都能走，反而容易写错。选一个。
+   */
+  exposeAs?: 'op' | 'tool';
+  /**
+   * exposeAs: 'tool' 时的参数 schema（JSON Schema）。**不写就按 params 自动生成一个**。
+   *
+   * 工具目录（## Available tools）里展示的就是它 —— 有 schema 模型才知道参数类型。
+   */
+  paramsSchema?: Record<string, unknown>;
   cap?: ActCap | null;
   /** 执行上限，默认 8000ms，最多 30000ms（超时就终止 Worker）。 */
   timeoutMs?: number;

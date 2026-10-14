@@ -1,0 +1,120 @@
+{
+  "id": "toolbox",
+  "name": "工具箱",
+  "version": "1.0",
+  "author": "Yggdrasil",
+  "minAppVersion": "0.1",
+  "description": "示例插件：向 Agent 提供**新工具**（与内置 calc / now 同列，用 call_tool 调），而不是新操作。",
+  "hosts": [],
+  "fields": [],
+  "endpoints": [],
+  "tools": [
+    {
+      "name": "text_stats",
+      "label": "文本统计",
+      "description": "Count characters / words / lines of a block of text and return the most frequent words. A **tool** (not an operation): it is listed under \"Available tools\" and you call it with call_tool. Use it when you would otherwise estimate counts by eye. No network.",
+      "file": "tools/text-stats.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "text",
+          "description": "the text to analyse",
+          "required": true
+        },
+        {
+          "name": "top",
+          "description": "how many frequent words to return (default 5)"
+        }
+      ],
+      "paramsSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "the text to analyse"
+          },
+          "top": {
+            "type": "string",
+            "description": "how many frequent words to return, default 5"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "cap": null,
+      "timeoutMs": 3000,
+      "example": {
+        "kind": "call_tool",
+        "name": "text_stats",
+        "args": {
+          "text": "the quick brown fox",
+          "top": "3"
+        }
+      }
+    },
+    {
+      "name": "slugify",
+      "label": "生成短名",
+      "description": "Turn a title into a url/id-safe slug (lowercase, ASCII, hyphen separated). A **tool**: call it with call_tool. Useful before naming a workspace file or a component id.",
+      "file": "tools/slugify.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "title",
+          "description": "the title to convert",
+          "required": true
+        }
+      ],
+      "paramsSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "the title to convert"
+          }
+        },
+        "required": [
+          "title"
+        ]
+      },
+      "cap": null,
+      "timeoutMs": 2000,
+      "example": {
+        "kind": "call_tool",
+        "name": "slugify",
+        "args": {
+          "title": "Hello World"
+        }
+      }
+    },
+    {
+      "name": "chunk",
+      "label": "切分数组",
+      "description": "A **tool** that splits an array into chunks of N. Call it with call_tool. Handy when you fetched a long list and want to lay it out in columns or paginate it.",
+      "file": "tools/chunk.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "items",
+          "description": "comma separated items",
+          "required": true
+        },
+        {
+          "name": "size",
+          "description": "chunk size, default 3"
+        }
+      ],
+      "cap": null,
+      "timeoutMs": 2000,
+      "example": {
+        "kind": "call_tool",
+        "name": "chunk",
+        "args": {
+          "items": "a,b,c,d,e",
+          "size": "2"
+        }
+      }
+    }
+  ]
+}

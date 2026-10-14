@@ -25,6 +25,10 @@ export interface ToolCatalogEntry {
   description: string;
   paramsSchema?: JsonSchema;
   builtin?: boolean;
+  /** 来自插件时记下插件 id（工具目录里把它标成 plugin，模型才知道这是谁带来的）。 */
+  pluginId?: string;
+  /** 这个工具需要的能力开关；undefined = 基础能力。用于按 Agent 的能力裁剪。 */
+  cap?: ActCap;
 }
 
 export function toolCatalogText(tools: ToolCatalogEntry[]): string {
@@ -32,7 +36,7 @@ export function toolCatalogText(tools: ToolCatalogEntry[]): string {
   return tools
     .map((t) => {
       const schema = t.paramsSchema ? JSON.stringify(t.paramsSchema) : '{}';
-      const tag = t.builtin ? 'builtin' : 'derived';
+      const tag = t.builtin ? 'builtin' : t.pluginId ? 'plugin' : 'derived';
       return '- [' + tag + '] id=' + t.id + ' name=' + t.name + ' — ' + t.description + '; params schema: ' + schema;
     })
     .join('\n');

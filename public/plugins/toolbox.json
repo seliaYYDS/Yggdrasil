@@ -1,0 +1,129 @@
+{
+  "format": "yggdrasil.plugin",
+  "manifest": {
+    "id": "toolbox",
+    "name": "工具箱",
+    "version": "1.0",
+    "author": "Yggdrasil",
+    "minAppVersion": "0.1",
+    "description": "示例插件：向 Agent 提供**新工具**（与内置 calc / now 同列，用 call_tool 调），而不是新操作。",
+    "hosts": [],
+    "fields": [],
+    "endpoints": [],
+    "tools": [
+      {
+        "name": "text_stats",
+        "label": "文本统计",
+        "description": "Count characters / words / lines of a block of text and return the most frequent words. A **tool** (not an operation): it is listed under \"Available tools\" and you call it with call_tool. Use it when you would otherwise estimate counts by eye. No network.",
+        "file": "tools/text-stats.js",
+        "exposeAs": "tool",
+        "params": [
+          {
+            "name": "text",
+            "description": "the text to analyse",
+            "required": true
+          },
+          {
+            "name": "top",
+            "description": "how many frequent words to return (default 5)"
+          }
+        ],
+        "paramsSchema": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "the text to analyse"
+            },
+            "top": {
+              "type": "string",
+              "description": "how many frequent words to return, default 5"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        },
+        "cap": null,
+        "timeoutMs": 3000,
+        "example": {
+          "kind": "call_tool",
+          "name": "text_stats",
+          "args": {
+            "text": "the quick brown fox",
+            "top": "3"
+          }
+        }
+      },
+      {
+        "name": "slugify",
+        "label": "生成短名",
+        "description": "Turn a title into a url/id-safe slug (lowercase, ASCII, hyphen separated). A **tool**: call it with call_tool. Useful before naming a workspace file or a component id.",
+        "file": "tools/slugify.js",
+        "exposeAs": "tool",
+        "params": [
+          {
+            "name": "title",
+            "description": "the title to convert",
+            "required": true
+          }
+        ],
+        "paramsSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "the title to convert"
+            }
+          },
+          "required": [
+            "title"
+          ]
+        },
+        "cap": null,
+        "timeoutMs": 2000,
+        "example": {
+          "kind": "call_tool",
+          "name": "slugify",
+          "args": {
+            "title": "Hello World"
+          }
+        }
+      },
+      {
+        "name": "chunk",
+        "label": "切分数组",
+        "description": "A **tool** that splits an array into chunks of N. Call it with call_tool. Handy when you fetched a long list and want to lay it out in columns or paginate it.",
+        "file": "tools/chunk.js",
+        "exposeAs": "tool",
+        "params": [
+          {
+            "name": "items",
+            "description": "comma separated items",
+            "required": true
+          },
+          {
+            "name": "size",
+            "description": "chunk size, default 3"
+          }
+        ],
+        "cap": null,
+        "timeoutMs": 2000,
+        "example": {
+          "kind": "call_tool",
+          "name": "chunk",
+          "args": {
+            "items": "a,b,c,d,e",
+            "size": "2"
+          }
+        }
+      }
+    ]
+  },
+  "guide": "# toolbox\n\nA demo plugin whose contribution is **new tools**, not new operations. Compare it with\n`status-board`, which contributes operations.\n\n## The difference that matters\n\n| | this plugin | `status-board` |\n| --- | --- | --- |\n| what the Agent sees | three entries under **Available tools**, tagged `[plugin]` | operations in the operation catalog |\n| how the Agent calls it | `call_tool` with a name and named arguments | writes the op kind directly |\n| why | these are re-usable primitives the Agent should discover and re-apply | these are \"do this one thing now\" actions |\n\nA plugin tool lands in the same list as the built-in `calc` / `now` / `random`, and as anything the\nAgent wrote itself with `create_tool`. Nothing about calling it is special — that is the point.\n\n## What it gives you\n\n| tool | what it returns |\n| --- | --- |\n| `text_stats` | `chars`, `lines`, `cjkChars`, `words`, `uniqueWords`, `frequentWords[]` |\n| `slugify` | `slug` (lowercase ASCII, hyphen separated) |\n| `chunk` | `chunks[][]`, `chunkCount`, `total` |\n\nAll three are pure computation: `cap` is `null`, so every Agent can use them, and the host allow-list\nis empty because none of them touches the network.\n\n## Workflow\n\n    call_tool with name \"text_stats\" and args { \"text\": \"<the text>\", \"top\": \"5\" }\n\nThen use the numbers you got back. **Do not estimate counts by eye when a tool can count them** — the\nwhole reason this is a tool rather than an operation is that the Agent can call it whenever it needs\narithmetic on text, including twice in one round.\n\n## Two traps this plugin documents\n\n1. `slugify` returns an empty slug for a Chinese title and says so, rather than inventing a pinyin\n   transliteration. Inventing one would look like a working feature while being a fabrication.\n2. `text_stats` reports `cjkChars` separately. Splitting on whitespace alone reports a whole paragraph\n   of Chinese as a single \"word\", which reads like a bug in the tool.\n",
+  "files": {
+    "tools/chunk.js": "/** 把一串东西切成若干块。工具形态，无网络。 */\nasync (args) => {\n  const items = String(args.items || '').split(',').map((x) => x.trim()).filter((x) => x !== '');\n  const size = Math.max(1, Math.min(50, Number(args.size) || 3));\n  if (items.length === 0) throw new Error('items 是空的 —— 用逗号分隔。');\n  const chunks = [];\n  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));\n  return { total: items.length, size, chunks, chunkCount: chunks.length };\n}\n",
+    "tools/slugify.js": "/** 把标题转成 URL / id 安全的短名。工具形态，无网络。 */\nasync (args) => {\n  const raw = String(args.title || '').trim();\n  if (!raw) throw new Error('title 是空的。');\n  // 非 ASCII（中文等）没法直接转写，**不猜拼音** —— 那样结果是编出来的。\n  const slug = raw.toLowerCase()\n    .replace(/['\"]/g, '')\n    .replace(/[^a-z0-9]+/g, '-')\n    .replace(/^-+|-+$/g, '');\n  if (!slug) {\n    return { slug: '', note: '这段标题里没有可用的 ASCII 字符（中文标题转不出短名）。请自己起一个英文短名，不要让我猜拼音。' };\n  }\n  return { slug, length: slug.length };\n}\n",
+    "tools/text-stats.js": "/**\n * 文本统计。**这是一个\"工具\"形态的插件能力**（exposeAs: \"tool\"）：\n * Agent 在 ## Available tools 里看到它，用 call_tool 调 —— 与内置的 calc / now 完全同列。\n *\n * 它不需要网络，所以 cap 是 null（任何 Agent 都能用，不管开没开 net）。\n */\nasync (args, ctx) => {\n  const text = String(args.text || '');\n  if (!text.trim()) throw new Error('text 是空的 —— 给我一段要统计的文字。');\n  const top = Math.max(1, Math.min(20, Number(args.top) || 5));\n\n  const chars = text.length;\n  const lines = text.split(/\\r?\\n/).filter((l) => l.trim() !== '').length;\n  // 英文按空白切；中文没有空格，所以同时统计 CJK 字符数，否则中文会被算成\"1 个词\"。\n  const cjk = (text.match(/[\\u3000-\\u9fff]/g) || []).length;\n  const words = text.split(/\\s+/).filter((w) => w !== '');\n  const freq = new Map();\n  for (const w of words) {\n    const key = w.toLowerCase().replace(/^[^\\p{L}\\p{N}]+|[^\\p{L}\\p{N}]+$/gu, '');\n    if (!key) continue;\n    freq.set(key, (freq.get(key) || 0) + 1);\n  }\n  const frequent = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, top).map(([word, count]) => ({ word, count }));\n  ctx.log('统计 ' + chars + ' 字符 / ' + words.length + ' 词');\n  return { chars, lines, cjkChars: cjk, words: words.length, uniqueWords: freq.size, frequentWords: frequent };\n}\n"
+  }
+}

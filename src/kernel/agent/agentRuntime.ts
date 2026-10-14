@@ -1158,11 +1158,19 @@ function currentLedger(originId: NodeId): string[] | undefined {
 function agentTools(origin: YggNode | undefined) {
   const all = toolCatalog();
   if (!origin || origin.kind !== 'component' || !origin.agent) return all;
+  /*
+   * **按能力裁剪插件工具**：一个没开 net 的 Agent 不该在工具目录里看到插件带来的联网工具。
+   *
+   * 提示词裁剪只是第一道（让它别去试），真正的拒绝在 call_tool 里 ——
+   * 模型可能从别处见过工具名，光裁目录挡不住。
+   */
+  const caps = origin.agent.caps;
+  const visible = caps ? all.filter((t) => !t.cap || caps.includes(t.cap)) : all;
   const ids = origin.agent.toolIds;
-  if (!ids || ids.length === 0) return all;
+  if (!ids || ids.length === 0) return visible;
   const wanted = new Set(ids);
-  const subset = all.filter((t) => wanted.has(t.id));
-  return subset.length > 0 ? subset : all;
+  const subset = visible.filter((t) => wanted.has(t.id));
+  return subset.length > 0 ? subset : visible;
 }
 
 /**

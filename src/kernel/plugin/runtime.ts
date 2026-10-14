@@ -3,6 +3,7 @@ import { fail, ok, str, strOr, type OpContext, type OpResult } from '../bus/opCo
 import { listInterfaces, registerInterface, unregisterInterface } from '../registry/interfaceRegistry';
 import { hostAllowed, versionAtLeast } from './package';
 import { runTool, toolSandboxKind } from './sandbox';
+import { registerTool, unregisterPluginTools } from '../registry/toolRegistry';
 import { policyFor, type SecurityPolicy } from '../security';
 import { useDesktopStore } from '../../store/desktopStore';
 import type { InstalledPlugin, PluginEndpoint, PluginTool } from './types';
@@ -46,14 +47,28 @@ export function pluginKind(pluginId: string, name: string): string {
   return pluginId + '.' + name;
 }
 
-/** 把可用插件换成这一份（先全部撤掉再登记，幂等）。 */
+/**
+ * 把可用插件换成这一份（先全部撤掉再登记，幂等）。
+ *
+ * 每个插件贡献**两个可能**的入口，互不影响：
+ * - 端点与 `exposeAs: 'op'` 的工具 → 注册成 **op**（`<插件id>.<名字>`），模型直接调用；
+ * - `exposeAs: 'tool'` 的工具 → 注册进**工具表**，出现在 `## Available tools`，用 `call_tool` 调。
+ *
+ * 撤销时两边都要按 pluginId 扫干净 —— 只撤一边就会出现"卸载了但还能调"。
+ */
 export function syncPluginRuntime(plugins: InstalledPlugin[]): void {
   const ids = new Set([...current, ...plugins].map((p) => p.id));
-  for (const id of ids) unregisterPluginInterfaces(id);
+  for (const id of ids) {
+    unregisterPluginInterfaces(id);
+    unregisterPluginTools(id);
+  }
   current = plugins.filter((p) => p.enabled);
   for (const p of current) {
     for (const e of p.endpoints) registerEndpoint(p, e);
-    for (const t of p.tools ?? []) registerToolInterface(p, t);
+    for (const t of p.tools ?? []) {
+      if (t.exposeAs === 'tool') registerPluginTool(p, t);
+      else registerToolInterface(p, t);
+    }
   }
 }
 
@@ -371,48 +386,108 @@ function registerToolInterface(plugin: InstalledPlugin, tool: PluginTool): void 
     mutates: tool.mutates === true,
     cap: tool.cap === null ? undefined : tool.cap ?? 'net',
     pluginId: plugin.id,
-    handler: async (op: DerivationOp): Promise<OpResult> => {
-      const source = plugin.files[tool.file];
-      if (!source) return fail('插件包里找不到 ' + tool.file + '（装的时候没带进来？）。');
-      const policy = securityPolicy();
-      /*
-       * 高安全档直接不执行 —— 连"限制着跑"都不做。
-       * 理由：js 工具的价值是"声明式表达不了的那点逻辑"，在最高安全档下，
-       * "代码来自别人"这件事本身就不该被接受；声明式端点不受影响（那是数据不是代码）。
-       */
-      if (!policy.allowPluginTools) {
-        return fail(
-          '当前安全等级是「' + policy.label + '」，**禁止执行插件自带的 js 工具**。' +
-            '要用它请在设置里把安全等级降到「标准」或更低；声明式端点不受影响。',
-        );
-      }
-      const collected = collectParams({ params: tool.params ?? [] } as PluginEndpoint, op);
-      if (!collected.ok) return fail(collected.error);
-      const res = await runTool({
-        source,
-        args: collected.params,
-        // **密钥遮蔽**：不给工具看 secret 字段（等级决定），它拿到的就是允许看到的那份。
-        fields: visibleFields(plugin, policy),
-        plugin: { id: plugin.id, name: plugin.name, version: plugin.version },
-        timeoutMs: tool.timeoutMs ?? 8000,
-        allowHosts: effectiveHosts(plugin),
-        maxFetches: policy.fetchPerCall,
-        maxResponseBytes: policy.responseBytes,
-        logChars: policy.logChars,
-      });
-      const head = plugin.name + ' · ' + tool.label;
-      if (!res.ok) {
-        return fail(head + ' 执行失败：' + (res.error ?? '未知错误') + (res.logs.length ? '\n日志：' + res.logs.join(' / ') : ''));
-      }
-      const text = typeof res.value === 'string' ? res.value : JSON.stringify(res.value, null, 1);
-      const clipped = clip(text ?? 'null', 12000);
-      return ok(head + ' · ok', {
-        observation:
-          clipped.text + clipped.note +
-          (res.logs.length ? '\n(log: ' + res.logs.join(' / ') + ')' : ''),
-      });
+    // op 形态与 tool 形态共用同一段执行（配额 / 白名单 / 密钥遮蔽 / 截断都必须一致）。
+    handler: (op: DerivationOp): Promise<OpResult> => executePluginTool(plugin, tool, op),
+  });
+}
+
+/**
+ * 跑一个插件的 js 工具。**op 形态与 tool 形态共用这段** —— 两条路只是"模型怎么发现它"不同，
+ * 执行、配额、密钥遮蔽、白名单、截断必须完全一致，否则同一份代码会因为注册方式不同而松紧不同。
+ */
+async function executePluginTool(plugin: InstalledPlugin, tool: PluginTool, args: unknown): Promise<OpResult> {
+  const source = plugin.files[tool.file];
+  if (!source) return fail('插件包里找不到 ' + tool.file + '（装的时候没带进来？）。');
+  const policy = securityPolicy();
+  /*
+   * 高安全档直接不执行 —— 连"限制着跑"都不做。
+   * 理由：js 工具的价值是"声明式表达不了的那点逻辑"，在最高安全档下，
+   * "代码来自别人"这件事本身就不该被接受；声明式端点不受影响（那是数据不是代码）。
+   */
+  if (!policy.allowPluginTools) {
+    return fail(
+      '当前安全等级是「' + policy.label + '」，**禁止执行插件自带的 js 工具**。' +
+        '要用它请在设置里把安全等级降到「标准」或更低；声明式端点不受影响。',
+    );
+  }
+  const asOp = (args ?? {}) as Record<string, unknown>;
+  const collected = collectParams({ params: tool.params ?? [] } as PluginEndpoint, asOp as DerivationOp);
+  if (!collected.ok) return fail(collected.error);
+  const res = await runTool({
+    source,
+    args: collected.params,
+    // **密钥遮蔽**：不给工具看 secret 字段（等级决定），它拿到的就是允许看到的那份。
+    fields: visibleFields(plugin, policy),
+    plugin: { id: plugin.id, name: plugin.name, version: plugin.version },
+    timeoutMs: tool.timeoutMs ?? 8000,
+    allowHosts: effectiveHosts(plugin),
+    maxFetches: policy.fetchPerCall,
+    maxResponseBytes: policy.responseBytes,
+    logChars: policy.logChars,
+  });
+  const head = plugin.name + ' · ' + tool.label;
+  if (!res.ok) {
+    return fail(head + ' 执行失败：' + (res.error ?? '未知错误') + (res.logs.length ? '\n日志：' + res.logs.join(' / ') : ''));
+  }
+  const text = typeof res.value === 'string' ? res.value : JSON.stringify(res.value, null, 1);
+  const clipped = clip(text ?? 'null', 12000);
+  return ok(head + ' · ok', {
+    observation:
+      clipped.text + clipped.note + (res.logs.length ? '\n(log: ' + res.logs.join(' / ') + ')' : ''),
+  });
+}
+
+/**
+ * 把一个插件工具注册成**真工具**（进工具表，走 call_tool）。
+ *
+ * 与 `registerToolInterface`（op 形态）的区别只有入口：
+ * - 这里进 `## Available tools`，模型看得见参数 schema，用 call_tool 调；
+ * - 那里注册成一个 op，模型在本轮指令里直接写 kind。
+ *
+ * 两条路最终都落到 `executePluginTool`，所以配额、白名单、密钥遮蔽、截断完全一致。
+ *
+ * ⚠ `cap` 必须带上（见 toolRegistry 的说明）：插件工具默认是 net —— 一个拿不到联网能力
+ * 的 Agent 不该因为插件装了就能发请求。call_tool 会在执行前按它拒绝。
+ */
+function registerPluginTool(plugin: InstalledPlugin, tool: PluginTool): void {
+  const id = pluginKind(plugin.id, tool.name);
+  registerTool({
+    id,
+    name: tool.name,
+    // 工具目录里展示的说明：带上插件名前缀，模型才知道这是谁的、从哪来的。
+    description: '[' + plugin.name + '] ' + tool.description,
+    paramsSchema: pluginToolSchema(tool),
+    source: plugin.files[tool.file] ?? '',
+    builtin: false,
+    pluginId: plugin.id,
+    cap: tool.cap === null ? undefined : tool.cap ?? 'net',
+    run: async (args) => {
+      const res = await executePluginTool(plugin, tool, args);
+      if (!res.ok) throw new Error(res.message || 'plugin tool failed');
+      return res.observation ?? '';
     },
   });
+}
+
+/**
+ * 工具的参数 schema：插件给了就用它，没给就按 `params` 生成一个。
+ *
+ * 自动生成的那份只保证**字段名与必填**正确 —— 类型信息不在 `PluginParam` 里
+ * （声明式端点的参数本来就是字符串模板）。够模型把参数名写对，这正是最容易错的地方。
+ */
+export function pluginToolSchema(tool: PluginTool): Record<string, unknown> {
+  if (tool.paramsSchema) return tool.paramsSchema;
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+  for (const p of tool.params ?? []) {
+    properties[p.name] = { type: 'string', description: p.description };
+    if (p.required) required.push(p.name);
+  }
+  return {
+    type: 'object',
+    properties,
+    ...(required.length ? { required } : {}),
+  };
 }
 
 function defaultToolExample(kind: string, tool: PluginTool): Record<string, unknown> {
@@ -438,7 +513,7 @@ export function registerPluginDocsInterface(): void {
     kind: 'plugin_docs',
     label: '读插件指南',
     description:
-      'Read the usage guide of an installed plugin (its guide.md) plus the exact parameters of its operations. Call this before using a plugin you have not used yet — the prompt only lists plugin names and their operations. Pass id, or omit it to list the installed plugins.',
+      'Read the usage guide of an installed plugin (its guide.md) plus the exact parameters of its operations and tools. Call this before using a plugin you have not used yet — the prompt only lists plugin names, their operations and their tool names. Note the two ways a plugin gives you something to call: **operations** (use them directly, kind = <plugin id>.<name>) and **tools** (already listed under "Available tools"; call them with call_tool). Pass id, or omit it to list the installed plugins.',
     example: { kind: 'plugin_docs', id: 'music-search' },
     cap: null as never,
     handler: (op: DerivationOp): OpResult => {
@@ -612,11 +687,19 @@ export function pluginsText(): string {
   return current
     .map((p) => {
       const kinds = p.endpoints.map((e) => pluginKind(p.id, e.name)).join(', ');
-      const tools = (p.tools ?? []).map((t) => pluginKind(p.id, t.name)).join(', ');
+      /*
+       * 工具分两种形态，必须**分开列** —— 因为调用方式完全不同：
+       * - op 形态：直接写进 ops，kind 就是插件前缀那个名字；
+       * - tool 形态：用 call_tool，而且它已经出现在 ## Available tools 里。
+       * 混在一行里会让模型拿 op 的调用方式去调 tool 形态（或反过来）。
+       */
+      const all = p.tools ?? [];
+      const asOps = all.filter((t) => t.exposeAs !== 'tool').map((t) => pluginKind(p.id, t.name)).join(', ');
+      const asTools = all.filter((t) => t.exposeAs === 'tool').map((t) => pluginKind(p.id, t.name)).join(', ');
       const uis = (p.ui ?? []).map((u) => u.name).join(', ');
       return '- ' + p.name + ' (id "' + p.id + '" v' + p.version + '): ' + p.description +
-        '\n  operations: ' + kinds +
-        (tools ? '\n  js tools: ' + tools : '') +
+        '\n  operations: ' + (kinds + (asOps ? (kinds ? ', ' : '') + asOps : '') || '(none)') +
+        (asTools ? '\n  **tools** (they are already listed under "Available tools"; call them with call_tool): ' + asTools : '') +
         (uis ? '\n  screens it can put up (use plugin_ui with this id): ' + uis : '') +
         '\n  read its guide with plugin_docs("' + p.id + '") before using it.';
     })

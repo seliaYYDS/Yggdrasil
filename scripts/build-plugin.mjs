@@ -117,11 +117,23 @@ for (const dir of dirs) {
   const at = join(root, dir);
   const manifestRaw = readFileSync(join(at, 'manifest.json'), 'utf8');
   const manifest = JSON.parse(manifestRaw);
-  for (const key of ['id', 'name', 'version', 'description', 'hosts', 'endpoints']) {
+  for (const key of ['id', 'name', 'version', 'description', 'hosts']) {
     if (manifest[key] === undefined) { console.error('[' + dir + '] manifest 缺少 ' + key); failed++; }
   }
-  if (!Array.isArray(manifest.endpoints) || manifest.endpoints.length === 0) {
-    console.error('[' + dir + '] 至少要有一个 endpoint'); failed++; continue;
+  /*
+   * 与 src/kernel/plugin/package.ts 的校验保持一致：**至少要有一个 endpoint 或 tools**。
+   *
+   * 这里原来写死"必须至少一个 endpoint"，于是"只提供工具、不提供端点"的插件
+   * （exposeAs: "tool" 那种，比如 toolbox）**打不出包来** —— 而真正的校验器是接受它的。
+   * 打包脚本比校验器更严，就成了一个凭空的功能封锁，所以必须对齐。
+   */
+  const epCount = Array.isArray(manifest.endpoints) ? manifest.endpoints.length : 0;
+  const toolCount = Array.isArray(manifest.tools) ? manifest.tools.length : 0;
+  if (epCount === 0 && toolCount === 0) {
+    console.error('[' + dir + '] 至少要有一个 endpoint 或 tools'); failed++; continue;
+  }
+  if (manifest.endpoints !== undefined && !Array.isArray(manifest.endpoints)) {
+    console.error('[' + dir + '] endpoints 必须是数组'); failed++; continue;
   }
   const guidePath = join(at, 'guide.md');
   let guide = '';

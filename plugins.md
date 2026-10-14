@@ -8,8 +8,9 @@
 - 提示词里只出现**一行**（插件名 + 它提供哪些操作），用法由 Agent 调 `plugin_docs` 按需读；
 - 端点只能访问清单里声明过的主机（`hosts`），**执行时会再查一次**。
 
-> 这一版**只支持声明式 HTTP 端点**，插件不能带自己的 js 代码。
-> 原因见下面「安全与权限」一节 —— 那不是偷懒，是隔离还没做。
+> 一个插件可以贡献四样东西：**声明式 HTTP 端点**、**js 工具**（Worker 隔离）、
+> **自带界面**（TSX）、以及**给 Agent 的新工具**（js 工具的一种用法，见「js 工具」一节）。
+> 三者的信任级别不同，安全模型见「安全与权限」一节。
 
 ---
 
@@ -66,7 +67,7 @@
 | `hosts` | ✔ | 允许访问的主机白名单，至少一个 |
 | `fields` | | 用户可以填的字段（密钥或配置） |
 | `endpoints` | | 声明式端点，最多 60 个（与 tools 至少要有其一） |
-| `tools` | | js 工具（~~tools/*.js~~，在 Worker 里隔离执行） |
+| `tools` | | js 工具（`tools/*.js`，在 Worker 里隔离执行）。每个工具用 `exposeAs` 选身份：`"op"`（默认，注册成 op）或 `"tool"`（进工具表，用 `call_tool` 调） |
 | `ui` | | 自带界面（~~ui/*.tsx~~，Agent 用 plugin_ui 摆出来） |
 | `signature` | | Ed25519 签名；验不过是**拒绝安装** |
 | `update` | | 版本更新地址（主机必须在 hosts 里） |
@@ -467,13 +468,44 @@ URL 会进日志、进 Trace、进你贴给别人的截图；请求头不会。
       return { sum: nums.reduce((a, b) => a + b, 0) };
     }
 
-清单里声明它：
+清单里声明它 —— 这时要选**它以哪种身份给 Agent 用**（`exposeAs`）：
 
     "tools": [
+      // ① 作为"操作"：模型直接把它当一条 op 调用，kind = <插件id>.<名字>
+      { "name": "probe", "label": "探活", "description": "…", "file": "tools/probe.js",
+        "params": [], "cap": "net", "timeoutMs": 8000 },
+
+      // ② 作为"工具"：进 ## Available tools，用 call_tool 调 —— 与内置 calc / now 同列
       { "name": "summarise", "label": "统计", "description": "…", "file": "tools/summarise.js",
+        "exposeAs": "tool",
         "params": [ { "name": "numbers", "description": "逗号分隔", "required": true } ],
+        "paramsSchema": { "type": "object", "properties": { "numbers": { "type": "string" } }, "required": ["numbers"] },
         "cap": null, "timeoutMs": 3000 }
     ]
+
+`exposeAs` 不写就是 `"op"`（老行为）。两种身份的差别**只在"模型怎么发现它、拿什么调它"**，
+执行、配额、白名单、密钥遮蔽完全一致（同一段代码）：
+
+| | `exposeAs: "op"`（默认） | `exposeAs: "tool"` |
+| --- | --- | --- |
+| 出现在哪 | 提示词的**接口目录**（`## Available operations`） | 提示词的**工具目录**（`## Available tools`，标成 `[plugin]`） |
+| 怎么调 | 直接写进 ops：`{"kind":"my-plugin.probe"}` | `{"kind":"call_tool","name":"summarise","args":{…}}` |
+| 适用 | "一步做完一件事" | 可复用的原子能力：模型看得见参数 schema、一轮里能调多次 |
+| 参数 schema | 用 `params` 渲染成 URL/body | `paramsSchema`（不写就按 `params` 自动生成字段名+必填） |
+
+**⛔ 不要两种都开**：那会在提示词里出现两份说明、模型两条路都能走，反而容易写错格式。选一个。
+
+`cap` 在两种身份下都生效，而且 `exposeAs: "tool"` 时**执行前由 call_tool 再查一次**：
+一个没开 `net` 的 Agent 既看不到联网的插件工具，也调不动它（能力开关跟着工具走，不只是跟着 op 走）。
+
+**纯计算插件可以不写 `hosts`。** 名单为空的判定按"这个插件到底会不会发请求"来：
+有端点、或有 `cap` 不是 `null` 的工具 → 必须写清主机；
+全是 `cap: null` 的纯计算工具 → 允许 `"hosts": []`。
+（否则你得凭空编一个用不到的主机名，而安装确认会据此告诉用户"这个插件能访问 api.example.com" ——
+那是假话，比留空更糟。安全上也不需要它：名单为空时任何 `ctx.fetch` 都会被拦下。）
+
+仓库里的 **`plugins/toolbox`** 就是一个只提供工具、不提供端点的例子（`text_stats` / `slugify` / `chunk`），
+可以直接照着改。
 
 **ctx 能拿到什么**：
 
@@ -646,14 +678,15 @@ Worker 隔离是**基础能力**，不随等级开关；等级决定的是**在�
 
 ## 现状与还没做的
 
-**已有**：包格式与校验、两个入口（zip / 单文件）、主机白名单（两道）、字段与密钥、
-响应 `pick`、`emptyHint`、提示词按能力裁剪 + 指南按需读、安装确认、开关 / 升级 / 卸载。
-
-**已经有了**：声明式端点、**js 工具（Worker 隔离）**、**自带界面**、
-**签名（Ed25519）与版本更新（含权限差异）**、密钥、pick、emptyHint、按能力裁剪、安装确认、开关 / 升级 / 卸载。
+**已经有了**：包格式与校验、两个入口（zip / 单文件）、主机白名单（两道）、字段与密钥、
+响应 `pick`、`emptyHint`、提示词按能力裁剪 + 指南按需读、安装确认、开关 / 升级 / 卸载、
+声明式端点、**js 工具（Worker 隔离）**、**自带界面**、**以"工具"身份提供给 Agent**（`exposeAs: "tool"`）、
+**签名（Ed25519）与版本更新（含权限差异）**。
 
 **还没有**：
 
-2. **按 Agent 启用** —— 现在只有全局开关，不能让"只给某个 Agent 用"；
-3. **插件自带界面** —— 随插件附一个组件/插槽（播放器、仪表盘这类）；
-5. **场景依赖声明** —— `.seed` 里记下"这个场景用了哪些插件"，导入时提示缺哪一个。
+1. **按 Agent 启用** —— 现在只有全局开关，不能让"只给某个 Agent 用"（插件装了对所有 Agent 可见；
+   不过**单个 Agent 可以自己在 `toolIds` 里挑工具子集**，那是另一条路）。
+2. **场景依赖声明** —— `.seed` 里记下"这个场景用了哪些插件"，导入时提示缺哪一个。
+3. **插件的调用之间保持状态** —— 每次调用都是一个新 Worker，没有 storage API（`localStorage` /
+   `indexedDB` / `caches` 都在沙箱里被抹掉了），用户填的字段插件只能读不能写。
