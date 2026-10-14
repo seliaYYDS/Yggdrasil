@@ -434,26 +434,38 @@ function recordUsage(
   const store = useDesktopStore.getState();
   const outEst = estimateTokens(outputText);
   if (call.usage) {
+    /*
+     * 服务商给的 promptTokens **含着命中数**，所以这里要减出来 ——
+     * 三个桶必须互斥（计费输入 = 三者之和），否则命中率的分母会偏大。
+     * 这正是 deepseek-harness 在适配器里做的事（TokenUsage 的注释写得很清楚：
+     * "Adapters whose providers fold cache hits into a total prompt count
+     * (DeepSeek's prompt_tokens) subtract them out."）。
+     */
+    const u = call.usage;
+    const cacheRead = Math.max(0, u.cachedTokens);
+    const cacheWrite = Math.max(0, u.cacheWriteTokens ?? 0);
+    const uncached = Math.max(0, u.promptTokens - cacheRead);
     store.addMetrics(sessionId, {
-      tokensIn: call.usage.promptTokens,
-      tokensOut: call.usage.completionTokens,
-      cachedIn: call.usage.cachedTokens,
+      uncached,
+      cacheRead,
+      cacheWrite,
+      tokensOut: u.completionTokens,
       msTotal: Math.max(1, call.ms),
       exact: true,
-      // "最近一次"是给界面看的直接读数：累计值会被冷启动拖住。
-      lastTokensIn: call.usage.promptTokens,
-      lastCachedIn: call.usage.cachedTokens,
+      // "最近一次"是**覆盖**：悬浮说明里显示它，主显示用累计值。
+      last: { uncached, cacheRead, cacheWrite },
     });
     return;
   }
+  const est = estimateTokens('x'.repeat(promptChars));
   store.addMetrics(sessionId, {
-    tokensIn: estimateTokens('x'.repeat(promptChars)),
+    uncached: est,
+    cacheRead: 0,
+    cacheWrite: 0,
     tokensOut: outEst,
-    cachedIn: 0,
     msTotal: Math.max(1, call.ms),
     exact: false,
-    lastTokensIn: estimateTokens('x'.repeat(promptChars)),
-    lastCachedIn: 0,
+    last: { uncached: est, cacheRead: 0, cacheWrite: 0 },
   });
 }
 

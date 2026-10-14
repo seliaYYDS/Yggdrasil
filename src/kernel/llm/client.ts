@@ -20,10 +20,19 @@ function modelsEndpoint(baseUrl: string): string {
  * 没给就由上层按字符估算（`exact: false`，界面上会标 ~）。
  */
 export interface LlmUsage {
+  /** 服务商报的**输入总量**（含命中缓存的那部分）。 */
   promptTokens: number;
   completionTokens: number;
   /** 命中缓存的输入 token。OpenAI 放 prompt_tokens_details.cached_tokens，DeepSeek 放 prompt_cache_hit_tokens。 */
   cachedTokens: number;
+  /**
+   * **写进缓存**的输入 token。
+   *
+   * Anthropic 系会单独报这个（cache_creation_input_tokens），它同样算计费输入；
+   * OpenAI / DeepSeek 不报，所以是 undefined —— 上层按 0 处理。
+   * 有它才谈得上"三个互斥桶"，命中率的分母才不会漏掉这一块。
+   */
+  cacheWriteTokens?: number;
 }
 
 /** 一次流式调用的结果。 */
@@ -61,6 +70,9 @@ interface UsageChunk {
   completion_tokens?: number;
   prompt_cache_hit_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number };
+  /** Anthropic 系的写缓存量（经兼容网关时偶尔也会出现）。 */
+  cache_creation_input_tokens?: number;
+  cache_write_tokens?: number;
 }
 
 /**
@@ -155,6 +167,10 @@ export async function chatStream(
       }
       if (chunk.error?.message) throw new LlmError(chunk.error.message);
       if (chunk.usage) {
+        const cacheWrite =
+          chunk.usage.cache_creation_input_tokens ??
+          chunk.usage.cache_write_tokens ??
+          0;
         usage = {
           promptTokens: chunk.usage.prompt_tokens ?? 0,
           completionTokens: chunk.usage.completion_tokens ?? 0,
@@ -162,6 +178,8 @@ export async function chatStream(
             chunk.usage.prompt_tokens_details?.cached_tokens ??
             chunk.usage.prompt_cache_hit_tokens ??
             0,
+          // 不报就是 0（OpenAI / DeepSeek 都不报），上层按互斥桶相减。
+          cacheWriteTokens: Math.max(0, cacheWrite),
         };
       }
       const d = chunk.choices?.[0]?.delta;

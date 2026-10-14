@@ -2,12 +2,14 @@ import { useLayoutEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import {
   avgTps,
-  hitRate,
-  stepHitRate,
+  billedInput,
+  hitRateText,
+  stepHitRateText,
   useDesktopStore,
   type InputSession,
   type SessionMetrics,
 } from '../store/desktopStore';
+import { formatExactTokens } from '../kernel/agent/usage';
 import { stopRun, submitInput } from '../kernel/agent/scheduler';
 import { QueueIcon, SendIcon, StopIcon } from './icons';
 import { captureScreen } from '../host/screen';
@@ -66,18 +68,21 @@ export function compactCount(n: number): string {
  */
 function metricsText(m?: SessionMetrics): string {
   if (!m || m.runs === 0) return '';
-  const total = compactCount(m.tokensIn + m.tokensOut);
+  const total = compactCount(billedInput(m) + m.tokensOut);
   /*
-   * 主显示是**最近一次请求**的命中率，不是累计值。
+   * 主显示是**整个会话的累计命中率**（与 deepseek-harness 的 UsagePill 同口径）。
    *
-   * 累计值被冷启动拖着：每个会话的第一次请求必然 0%，压缩改写历史之后那一次也一样 ——
-   * 短会话里它根本反映不出缓存有没有起作用（用户看到的"命中率太低"有一半是这个口径造成的）。
+   * 以前这里放的是"最近一次请求"，理由是累计值被冷启动拖着。但那个选择换来了更糟的问题：
+   * 单次请求的命中率天然会抖 —— 每一步的请求前缀与上一步的重合度本来就不齐
+   * （agent 每轮长出的观察/快照不是逐步对齐的），n=1 时噪声就是全部。
+   * 实测 6 轮 × 2 步：最近一次在 80–94% 之间来回横跳（平均跳变 20.5 个点），
+   * 而累计值只有 7.4 个点、且单调爬向真实水平。
+   * 口径越大越稳；单次值放进悬浮说明，那里本来就不需要平滑。
    */
-  const rate = stepHitRate(m);
-  const rateText = rate === null ? '—' : Math.round(rate * 100) + '%';
+  const rateText = hitRateText(m) ?? '—';
   const speed = avgTps(m).toFixed(1);
   // 有一位是估算的就在整串前面加 ~：三个数里最可能被当成精确值的就是它们。
-  return (m.exact ? '' : '~') + '命中 ' + rateText + ' · ' + speed + ' tok/s · ' + total;
+  return (m.exact ? '' : '~') + '命中 ' + rateText + '% · ' + speed + ' tok/s · ' + total;
 }
 
 export function inputMinHeight(
@@ -313,15 +318,21 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           <span
             ref={metricsRef}
             className="ygg-metrics"
+            /*
+             * 悬浮说明：与 DSH 的用量面板同一套字段 —— 未命中 / 命中读 / 命中写三个互斥桶，
+             * 外加输出。主显示的那个百分比就是"命中读 ÷ 三者之和"。
+             */
             title={
               (metrics.exact ? '' : '（含本地估算，数字前带 ~）') +
-              '最近一次请求：命中 ' + metrics.lastCachedIn.toLocaleString() + ' / 输入 ' +
-              metrics.lastTokensIn.toLocaleString() + ' = ' +
-              Math.round((stepHitRate(metrics) ?? 0) * 100) + '%；' +
-              '本会话累计：命中 ' + metrics.cachedIn.toLocaleString() + ' / 输入 ' +
-              metrics.tokensIn.toLocaleString() + ' = ' +
-              Math.round((hitRate(metrics) ?? 0) * 100) + '%（含会话第一次与每次压缩后的冷启动）；输出 ' +
-              metrics.tokensOut.toLocaleString() + '；累计生成 ' +
+              '本会话累计：未命中 ' + formatExactTokens(metrics.uncached) +
+              ' · 命中读 ' + formatExactTokens(metrics.cacheRead) +
+              ' · 命中写 ' + formatExactTokens(metrics.cacheWrite) +
+              ' = ' + (hitRateText(metrics) ?? '—') + '%（含会话第一次与每次压缩后的冷启动）；' +
+              '最近一次请求：未命中 ' + formatExactTokens(metrics.last.uncached) +
+              ' · 命中读 ' + formatExactTokens(metrics.last.cacheRead) +
+              ' · 命中写 ' + formatExactTokens(metrics.last.cacheWrite) +
+              ' = ' + (stepHitRateText(metrics) ?? '—') + '%；输出 ' +
+              formatExactTokens(metrics.tokensOut) + '；累计生成 ' +
               (metrics.msTotal / 1000).toFixed(1) + ' 秒'
             }
           >

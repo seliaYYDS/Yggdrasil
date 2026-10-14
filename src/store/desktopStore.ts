@@ -12,6 +12,7 @@ import type {
   YggNode,
 } from '../kernel/types';
 import { MAX_STORED_MESSAGES } from '../kernel/agent/prompts';
+import { formatCacheHitPercent } from '../kernel/agent/usage';
 import { newNodeId } from '../kernel/ids';
 import type { StorageAdapter, StorageKind } from '../storage/adapter';
 import { initStorage } from '../storage/detect';
@@ -33,13 +34,28 @@ import type { InstalledPlugin, PluginPackage } from '../kernel/plugin/types';
 /**
  * 一个会话的用量统计。**不进持久化** —— 刷新后重新开始计，避免把历史数字当成这次的开销。
  */
-export interface SessionMetrics {
-  /** 累计输入 token（含每轮重发的历史，所以它天然比"内容量"大）。 */
-  tokensIn: number;
+/**
+ * 输入侧的**三个互斥桶**。与 deepseek-harness 的 TokenUsageProjection 同构
+ * （见 deepseek-harness 的 packages/llm/token-meter/src/projection.ts）：
+ *
+ * - `uncached` = 真正花钱、没命中缓存的输入；
+ * - `cacheRead` = 命中缓存读回来的输入；
+ * - `cacheWrite` = 写进缓存的输入（Anthropic 系才有；OpenAI/DeepSeek 报 0）。
+ *
+ * **互斥**是关键：计费输入 = 三者之和，命中率 = cacheRead / 三者之和。
+ * 以前我们只有一个 promptTokens（其中含着命中数），做分母就等于"命中/含命中"，
+ * 与 DSH 的口径在报 cacheWrite 的服务商上会对不上。
+ */
+export interface TokenBuckets {
+  uncached: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/** 一次会话的用量统计。**不进持久化** —— 刷新后重新开始计，避免把历史数字当成这次的开销。 */
+export interface SessionMetrics extends TokenBuckets {
   /** 累计输出 token。 */
   tokensOut: number;
-  /** 累计命中缓存的输入 token。 */
-  cachedIn: number;
   /**
    * 累计的**生成耗时**（毫秒，只算模型出字的那段时间）。
    * 整体 tok/s = tokensOut / (msTotal / 1000)，所以必须攒这个数，不能只留"最近一次"。
@@ -50,18 +66,29 @@ export interface SessionMetrics {
   /** true = 数字全部来自服务端 usage；false = 含本地估算（界面会标 ~）。 */
   exact: boolean;
   /**
-   * **最近一次请求**的输入 token 与其中的命中数。
+   * **最近一次请求**的同三个桶。
    *
-   * 为什么单独记：累计命中率会被"每个会话的第一次请求必然 0%"拖住（压缩之后那一次也一样），
-   * 短会话里那个数字根本不能反映真实的缓存表现。界面主显示的是最近一次，
-   * 累计值放在悬浮说明里，并注明它含冷启动。
+   * 主显示（状态栏那行）用**累计**值 —— 与 DSH 一致：那个数字要回答的是
+   * "这个会话的缓存到底省了多少"，分母越大越稳；单次请求的命中率天然会抖
+   * （每步的请求前缀与上一步的重合度本来就不齐），n=1 时噪声就是全部。
+   * 单轮值放悬浮说明，那里本来就不需要平滑。
    */
-  lastTokensIn: number;
-  lastCachedIn: number;
+  last: TokenBuckets;
+}
+
+export function emptyBuckets(): TokenBuckets {
+  return { uncached: 0, cacheRead: 0, cacheWrite: 0 };
 }
 
 export function emptyMetrics(): SessionMetrics {
-  return { tokensIn: 0, tokensOut: 0, cachedIn: 0, msTotal: 0, runs: 0, exact: true, lastTokensIn: 0, lastCachedIn: 0 };
+  return {
+    ...emptyBuckets(),
+    tokensOut: 0,
+    msTotal: 0,
+    runs: 0,
+    exact: true,
+    last: emptyBuckets(),
+  };
 }
 
 /**
@@ -74,24 +101,23 @@ export function avgTps(m: Pick<SessionMetrics, 'tokensOut' | 'msTotal'>): number
   return m.tokensOut / (m.msTotal / 1000);
 }
 
-/**
- * 累计命中率 = 累计命中 / 累计输入。0..1；没有输入时返回 null（"还没有数据"，不是 0）。
- *
- * 注意它**包含冷启动**：每个会话的第一次请求必然全部不命中，压缩改写历史之后那一次也一样 ——
- * 所以它天然低于"最近一次"。界面主显示用 stepHitRate，这个放悬浮说明。
- */
-export function hitRate(m: Pick<SessionMetrics, 'tokensIn' | 'cachedIn'>): number | null {
-  if (m.tokensIn <= 0) return null;
-  return m.cachedIn / m.tokensIn;
+/** 计费输入 = 三个互斥桶之和（与 DSH 的 billedInputTokens 同一个定义）。 */
+export function billedInput(b: TokenBuckets): number {
+  return b.uncached + b.cacheRead + b.cacheWrite;
 }
 
 /**
- * **最近一次请求**的命中率。这才是"缓存有没有起作用"的直接读数
- * （deepseek-harness 的 TurnUsagePanel 也是按一轮显示，而不是拿整段日志的平均值）。
+ * 主显示的命中率文本：**整个会话的累计值**（与 DSH 的 UsagePill 一致）。
+ *
+ * 分母是三个互斥桶之和，不是"含命中数的 prompt 总量"—— 这是口径的关键。
  */
-export function stepHitRate(m: Pick<SessionMetrics, 'lastTokensIn' | 'lastCachedIn'>): number | null {
-  if (!m.lastTokensIn || m.lastTokensIn <= 0) return null;
-  return m.lastCachedIn / m.lastTokensIn;
+export function hitRateText(m: SessionMetrics): string | null {
+  return formatCacheHitPercent(m.cacheRead, billedInput(m));
+}
+
+/** 悬浮说明里那个"最近一次请求"的命中率文本。 */
+export function stepHitRateText(m: SessionMetrics): string | null {
+  return formatCacheHitPercent(m.last.cacheRead, billedInput(m.last));
 }
 
 /**
@@ -2214,17 +2240,18 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         return {
           ...ses,
           metrics: {
-            tokensIn: m.tokensIn + (delta.tokensIn ?? 0),
+            // 三个互斥桶分别累加（计费输入与命中率都从它们算）。
+            uncached: m.uncached + (delta.uncached ?? 0),
+            cacheRead: m.cacheRead + (delta.cacheRead ?? 0),
+            cacheWrite: m.cacheWrite + (delta.cacheWrite ?? 0),
             tokensOut: m.tokensOut + (delta.tokensOut ?? 0),
-            cachedIn: m.cachedIn + (delta.cachedIn ?? 0),
             // 生成耗时累加：整体速度要从总量算，不能用"最近一次"。
             msTotal: m.msTotal + (delta.msTotal ?? 0),
             runs: m.runs + 1,
             // 只要有一次是估算的，整体就标成非精确（界面上带 ~）。
             exact: m.exact && delta.exact !== false,
-            // "最近一次"是**覆盖**而不是累加：累计值会被冷启动拖住，界面主显示用它。
-            lastTokensIn: delta.lastTokensIn ?? 0,
-            lastCachedIn: delta.lastCachedIn ?? 0,
+            // "最近一次"是**覆盖**而不是累加。
+            last: delta.last ?? emptyBuckets(),
           },
         };
       }),
