@@ -89,12 +89,32 @@ const EXAMPLE_KINDS = new Set([
   'ws_run',
 ]);
 
-/** 生成提示词里的接口清单与示例（按能力裁剪）。 */
-export function interfaceCatalog(caps?: ActCap[]): { lines: string[]; examples: string } {
+/**
+ * 一行摘要：取 describe 的第一句（够长才算一句），过长再截。
+ *
+ * 精简模式用它代替整段说明 —— 完整说明仍留在 `description` 里，
+ * 要细节时模型可以 inspect（提示词里明确告诉它这一点）。
+ */
+export function briefOf(description: string): string {
+  const plain = description.replace(/\s+/g, ' ').replace(/\*\*/g, '').trim();
+  const first = /^([^.]{20,}?\.)(?:\s|$)/.exec(plain);
+  let out = first ? first[1] : plain;
+  if (out.length > 120) out = out.slice(0, 119).replace(/[,;:\s]+$/, '') + '…';
+  return out;
+}
+
+/**
+ * 生成提示词里的接口清单与示例（按能力裁剪）。
+ *
+ * `terse` = 精简模式：每条只留一句摘要、**不给任何示例**（示例块是目录之外最大的一块，
+ * 而形状可以从 description 或一次 inspect 里恢复）。
+ */
+export function interfaceCatalog(caps?: ActCap[], terse = false): { lines: string[]; examples: string } {
   const lines: string[] = [];
   const examples: string[] = [];
   interfacesFor(caps).forEach((def, i) => {
-    lines.push(`${i + 1}. ${def.kind} —— ${def.description}`);
+    lines.push(`${i + 1}. ${def.kind} —— ${terse ? briefOf(def.description) : def.description}`);
+    if (terse) return;
     /*
      * 插件端点的示例一律带上：模型从没见过这个 kind，光有文字描述不如给它一个能照抄的形状。
      * 上限由插件清单控制（每个插件最多几十个端点），不会失控。

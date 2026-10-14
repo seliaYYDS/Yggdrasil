@@ -30,6 +30,7 @@ export function SettingsPanel() {
   if (!open) return null;
 
   const adultOn = settings.adultMode === true;
+  const terseOn = settings.terse === true;
   const visionOn = settings.vision !== false;
   const level: SecurityLevel = (settings.securityLevel ?? 'normal') as SecurityLevel;
   const policy = policyFor(level);
@@ -111,6 +112,14 @@ export function SettingsPanel() {
               </div>
             </div>
             {/* 开关一律用滑块：状态由滑块位置表达，不用读文字 */}
+            <div className="ygg-field">
+              <Switch
+                on={terseOn}
+                onChange={(v) => setSettings({ terse: v })}
+                label="精简模式"
+                title="提示词按最简可用发送：接口只留一句话、去掉示例，细节让 Agent 自己 inspect 取；省固定开销"
+              />
+            </div>
             <div className="ygg-field">
               <Switch
                 on={adultOn}

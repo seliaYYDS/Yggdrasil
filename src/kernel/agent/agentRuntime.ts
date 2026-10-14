@@ -732,6 +732,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           // 能力开关：没开的接口不会出现在接口目录里，提示词也少一大截。
           caps: isAgentic(origin) ? origin.agent.caps : undefined,
           adultMode: store.settings.adultMode === true,
+          // 精简模式：固定提示词压到最简（内容与能力开关无关，只影响"讲多少"）。
+          terse: store.settings.terse === true,
           defaultWindows: defaultWindowsText(defaultWindows(desktop())),
         };
         const systemPrompt = buildSystemPrompt(promptInput);

@@ -60,6 +60,14 @@ export interface LlmSettings {
    * 见 src/kernel/agent/compact.ts。
    */
   compactAt?: number;
+  /**
+   * 精简模式。**默认关闭。**
+   *
+   * 打开后提示词按"最简可用"打包：接口目录只留一句话、去掉示例，各条纪律压到最短，
+   * 快照只留当前窗口与账本。目标是在 Agent 仍然能干活的前提下把固定开销降到最低。
+   * 代价是它需要自己 inspect 去补细节（提示词里会这么告诉它）。
+   */
+  terse?: boolean;
 }
 
 export const DEFAULT_SETTINGS: LlmSettings = {
@@ -76,6 +84,7 @@ export const DEFAULT_SETTINGS: LlmSettings = {
   maxTokens: 16384,
   vision: true,
   compactAt: 85,
+  terse: false,
 };
 
 /** 多模态消息的内容块（OpenAI 兼容格式）。 */
