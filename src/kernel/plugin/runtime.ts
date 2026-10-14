@@ -596,8 +596,28 @@ export function pluginDiff(prev: InstalledPlugin | undefined, next: InstalledPlu
   gone(prev.hosts, '可访问的主机', (h) => !next.hosts.includes(h));
   add(next.endpoints.map((e) => e.name), '操作', (n) => !prev.endpoints.some((e) => e.name === n));
   gone(prev.endpoints.map((e) => e.name), '操作', (n) => !next.endpoints.some((e) => e.name === n));
-  add((next.tools ?? []).map((t) => t.name), 'js 工具', (n) => !(prev.tools ?? []).some((t) => t.name === n));
-  gone((prev.tools ?? []).map((t) => t.name), 'js 工具', (n) => !(next.tools ?? []).some((t) => t.name === n));
+  /*
+   * 工具按**形态**分开报：op 形态与 tool 形态对用户的含义不同 ——
+   * 前者是"又多了一个能调的操作"，后者是"又给 Agent 加了一个工具"（会进它的工具目录）。
+   * 尤其重要的是**形态可以变**（同一个名字从 op 改成 tool），那也是一次权限变化。
+   */
+  const toolLabel = (t: { name: string; exposeAs?: 'op' | 'tool' }) =>
+    t.name + (t.exposeAs === 'tool' ? '（工具）' : '（操作）');
+  const byName = (p: InstalledPlugin) => new Map((p.tools ?? []).map((t) => [t.name, t]));
+  const prevTools = byName(prev);
+  const nextTools = byName(next);
+  add((next.tools ?? []).map(toolLabel), 'js 工具', (label) => {
+    // 名字或形态任一变了就算"新增"（形态变了会在下面再报一次"移除"旧形态）。
+    const t = nextTools.get(label.replace(/（.*）$/, ''));
+    const old = t ? prevTools.get(t.name) : undefined;
+    return !old || (old.exposeAs === 'tool') !== (t?.exposeAs === 'tool');
+  });
+  gone((prev.tools ?? []).map(toolLabel), 'js 工具', (label) => {
+    const name = label.replace(/（.*）$/, '');
+    const t = nextTools.get(name);
+    const old = prevTools.get(name);
+    return !t || (old?.exposeAs === 'tool') !== (t.exposeAs === 'tool');
+  });
   add((next.ui ?? []).map((u) => u.name), '自带界面', (n) => !(prev.ui ?? []).some((u) => u.name === n));
   add((next.fields ?? []).filter((f) => f.secret).map((f) => f.label), '要填的密钥', (l) => !(prev.fields ?? []).some((f) => f.secret && f.label === l));
   // 能力开关变了也要说：从 net 变成 global 是完全不同的事。

@@ -47,8 +47,64 @@
 
     node scripts/build-plugin.mjs my-plugin
 
-产出 `public/plugins/my-plugin.graft`（zip）与 `.json`（单文件）。打开应用 → 拼图图标 →
-「安装插件…」→ 选那个 `.graft` → 确认安装。
+产出 `public/plugins/my-plugin.graft`（zip）与 `.json`（单文件）。
+
+---
+
+## 怎么测试一个插件
+
+有三条路，从快到慢。**改一行 `tools/*.js` 就重复走一遍浏览器那套是最劝退的**，所以先说第一条。
+
+### ① 命令行试跑（改插件时用这条）
+
+    node scripts/try-plugin.mjs toolbox                      # 列出它提供什么，并各调一次
+    node scripts/try-plugin.mjs --dir plugins/toolbox        # 还没打包？直接跑目录
+    node scripts/try-plugin.mjs toolbox tool:text_stats --text "hello world" --top 3
+
+它**走应用里同一份代码**（`parsePluginPackage` / `installPlugin` / `executeOps` / `bridgeFetch`），
+所以报的错和真机上看到的是同一个。输出长这样：
+
+    已安装: 工具箱 v1.0（未签名）
+
+    这个插件提供：
+      工具  text_stats（toolbox.text_stats）—— 用 call_tool 调用
+      工具  slugify（toolbox.slugify）—— 用 call_tool 调用
+
+    自动试跑（只填了有默认值的参数；缺必填的会被明确拒绝 —— 那本身也是有用的信息）：
+    ✗ call_tool text_stats — Tool "text_stats" failed while running: 缺少参数 text（…）
+
+参数用 `--名字=值` 或 `--名字 值` 给，**不必写 JSON** —— 在 PowerShell 里传带引号的 JSON
+会被 shell 自己吃掉引号，失败还发生在 shell 层，那种报错最让人摸不着头脑。写 JSON 也支持
+（整串以 `{` 开头就按 JSON 解析）。
+
+**它验不了什么**：Node 里没有 `Worker`，所以隔离本身不在这里验。要确认"工具真的碰不到网络、
+主线程真的按白名单挡了 `ctx.fetch`"，只能在浏览器里跑（见 ③）。
+
+### ② 装到浏览器里试
+
+    node scripts/build-plugin.mjs my-plugin
+
+打开应用 → 拼图图标 → 「安装插件…」→ 选 `public/plugins/my-plugin.graft` → **先看确认页**
+（那里会列出：可访问的主机、提供的操作、提供的新工具、自带界面、要填的密钥）→ 安装。
+
+然后直接在输入框里说人话，比如"用 toolbox 的 text_stats 数一下这段话"。
+**这是唯一能验证提示词效果的路** —— 模型看没看见这个工具、会不会用 call_tool 调它，
+只有真跑一轮 LLM 才知道。
+
+### ③ 跑自动化测试
+
+插件的断言都在仓库的验证套件里（`.tmp/verify/run.mjs` 的 §82–§84 等）。
+改完插件内核（`src/kernel/plugin/`）之后要跑全套；只改某个插件的 `manifest.json` / `tools/*.js`
+用 ① 就够了。
+
+### 改了已签名的插件
+
+**签完名再改任何一个文件，验签就会失败**（这是故意的，见下面「签名」一节）。所以改完要重签：
+
+    node scripts/sign-plugin.mjs sign plugins/my-plugin <私钥文件>
+
+把打印出来的 `signature` 块贴回 `manifest.json`，再 `build-plugin`。忘了重签的话，
+安装会被直接拒绝：*"这个包的内容与签名不符"*。
 
 ---
 

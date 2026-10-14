@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "plugin:build": "node scripts/build-plugin.mjs",
+    "plugin:try": "node scripts/try-plugin.mjs",
+    "plugin:sign": "node scripts/sign-plugin.mjs"
   },
   "dependencies": {
     "@babel/standalone": "^8.0.7",

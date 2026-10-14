@@ -594,21 +594,45 @@ export function packPlugin(manifest: PluginManifest, guide: string): Uint8Array 
 }
 
 /** 给安装确认框用：把权限摊开成人能读的几行。 */
+/**
+ * 安装确认页要显示的那几行。
+ *
+ * 这里的原则是**把"装上去会发生什么"说全**，因为这是用户唯一一次"看完再决定"的机会。
+ * 之前的实现有两个漏报（都实测过）：
+ * 1. **从不列 tools** —— 一个只提供工具的插件（比如 toolbox）显示成"提供的操作："后面空的，
+ *    用户完全看不出它会带来什么；而"它给 Agent 加了三个新工具"恰恰是最该说的。
+ * 2. 空 hosts 显示成"可访问的主机："后面空白 —— 那看起来像漏填，其实现在
+ *    对纯计算插件是合法且正确的（见下面 hosts 的校验规则），所以要明说"不联网"。
+ */
 export function describeManifest(m: PluginManifest): string[] {
   const lines = [m.name + ' v' + m.version + (m.author ? ' · ' + m.author : '')];
   lines.push(m.description);
-  lines.push(
-    '可访问的主机：' +
-      m.hosts
-        .map((h) => {
-          const ref = h.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}$/);
-          if (!ref) return h;
-          const f = (m.fields ?? []).find((x) => x.key === ref[1]);
-          return '插件面板里的「' + (f?.label ?? ref[1]) + '」';
-        })
-        .join('、'),
-  );
-  lines.push('提供的操作：' + m.endpoints.map((e) => e.name).join('、'));
+
+  const hostText = m.hosts
+    .map((h) => {
+      const ref = h.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}$/);
+      if (!ref) return h;
+      const f = (m.fields ?? []).find((x) => x.key === ref[1]);
+      return '插件面板里的「' + (f?.label ?? ref[1]) + '」';
+    })
+    .join('、');
+  // 空名单不是漏填 —— 说明白，否则用户会以为这个包坏了。
+  lines.push('可访问的主机：' + (hostText || '（无 —— 这个插件不发网络请求）'));
+
+  const tools = m.tools ?? [];
+  const asOps = tools.filter((t) => t.exposeAs !== 'tool');
+  const asTools = tools.filter((t) => t.exposeAs === 'tool');
+  // 端点与 op 形态的工具，对模型来说都是"一条 op"，合并成一行。
+  const ops = [...m.endpoints.map((e) => e.name), ...asOps.map((t) => t.name)];
+  if (ops.length) lines.push('提供的操作：' + ops.join('、'));
+  if (asTools.length) {
+    lines.push(
+      '**提供的新工具**（与内置工具同列，Agent 用 call_tool 调用）：' + asTools.map((t) => t.name).join('、'),
+    );
+  }
+  const uis = m.ui ?? [];
+  if (uis.length) lines.push('自带界面（Agent 可用 plugin_ui 摆出来）：' + uis.map((u) => u.name).join('、'));
+
   const secrets = (m.fields ?? []).filter((f) => f.secret);
   if (secrets.length) lines.push('需要你填的密钥：' + secrets.map((f) => f.label).join('、'));
   return lines;
