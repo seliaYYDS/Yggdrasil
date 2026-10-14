@@ -127,6 +127,16 @@ export interface AgentFacet {
  */
 export type NodeFrame = 'window' | 'widget';
 
+/**
+ * 重置对话框里可以勾选的区块。
+ *
+ * 与 `.seed` 的区块**刻意保持同一套划分**（界面 / 组件 / 历史），这样"重置"与
+ * "导出"对同一件事的叫法与边界一致 —— 用户不必学两套心智。
+ * 另外多了 `logs`：运行日志不进场景文件，但它显然是可单独清掉的一类东西。
+ * 设置不在这里：**重置始终保留连接与模型设置**（见 ResetDialog 的说明）。
+ */
+export type ResetPart = 'interface' | 'components' | 'history' | 'logs';
+
 export interface ComponentNode extends BaseNode {
   kind: 'component';
   source: string;

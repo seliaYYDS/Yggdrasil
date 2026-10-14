@@ -16,6 +16,7 @@ import {
   LockIcon,
   MinimizedIcon,
   PinIcon,
+  StarIcon,
   UnlockIcon,
 } from './icons';
 
@@ -36,6 +37,12 @@ export function InspectorPanel() {
   const trash = useDesktopStore((s) => s.trash);
   const restoreFromTrash = useDesktopStore((s) => s.restoreFromTrash);
   const purgeTrash = useDesktopStore((s) => s.purgeTrash);
+
+  const favorites = useDesktopStore((s) => s.favorites);
+  const favoriteNode = useDesktopStore((s) => s.favoriteNode);
+  const unfavorite = useDesktopStore((s) => s.unfavorite);
+  const restoreFavorite = useDesktopStore((s) => s.restoreFavorite);
+  const [favOpen, setFavOpen] = useState(false);
 
   const nodes = useDesktopStore((s) => s.nodes);
   const rootId = useDesktopStore((s) => s.rootId);
@@ -108,6 +115,8 @@ export function InspectorPanel() {
         <div className="ygg-section">
           {tree.map(({ node, depth }) => {
             const isAgent = node.kind === 'component' && !!node.agent;
+            const favorited =
+              node.kind === 'component' && favorites.some((f) => f.source === (node as ComponentNode).source);
             return (
               <div key={node.id}>
                 <div
@@ -123,6 +132,31 @@ export function InspectorPanel() {
                   ) : null}
                   {node.kind === 'component' && node.locked ? (
                     <span className="kind" title="已锁定：不可删除">已锁</span>
+                  ) : null}
+                  {/*
+                    收藏：组件与挂件都能收（挂件也是组件，只是 frame 不同）。
+                    实心星 = 已经收藏过这份源码（**按 source 判**，不是按 id —— 重建后 id 会变）。
+                  */}
+                  {node.kind === 'component' ? (
+                    <button
+                      className={'ygg-winbtn' + (favorited ? ' is-active' : '')}
+                      title={
+                        favorited
+                          ? '已收藏（点击更新这份收藏的源码与配置）'
+                          : '收藏：长期保留，删掉这个组件也不会丢，之后可以重建一个一样的'
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (favorited) {
+                          const hit = favorites.find((f) => f.source === (node as ComponentNode).source);
+                          if (hit) unfavorite(hit.id);
+                        } else {
+                          favoriteNode(node.id);
+                        }
+                      }}
+                    >
+                      <StarIcon width={13} height={13} filled={favorited} />
+                    </button>
                   ) : null}
                   {node.kind === 'component' || node.kind === 'tool' ? (
                     <button
@@ -227,6 +261,47 @@ export function InspectorPanel() {
           删除的组件在这里暂存，可还原或彻底清除；只存当前会话，刷新即清空。
           平时收起成一个图标，有内容时带一个数量，点开才列出来。
         */}
+        {/*
+          收藏：与回收站同一套交互（钉在底部、朝上展开、收起只留一个图标 + 数量）。
+          放在回收站**左边**，两个底部入口挨着，但它代表的是"长期保留"、
+          回收站代表"临时兜底"，语义相反所以都不合并。
+        */}
+        <div className={'ygg-favs' + (favOpen ? ' is-open' : '')}>
+          {favOpen ? (
+            <div className="ygg-fav-list">
+              <div className="ygg-fav-head">
+                <span>收藏 {favorites.length}</span>
+                <span className="ygg-fav-note">删组件不会丢</span>
+              </div>
+              {favorites.length === 0 ? (
+                <div className="ygg-fav-empty">
+                  在节点行上点星号收藏。收藏存在另一个库里，删组件、重置都不会碰它；
+                  之后随时可以在这儿重建一个一样的。
+                </div>
+              ) : null}
+              {favorites.slice().reverse().map((f) => (
+                <div className="ygg-fav-row" key={f.id}>
+                  <StarIcon width={11} height={11} filled className="ygg-fav-mark" />
+                  <span className="name" title={f.name + '（收藏于 ' + new Date(f.savedAt).toLocaleString('zh-CN', { hour12: false }) + '）'}>
+                    {f.name}
+                  </span>
+                  {f.frame === 'widget' ? <span className="kind">挂件</span> : null}
+                  {f.agent ? <span className="kind">agent</span> : null}
+                  <button className="ygg-btn ghost tiny" title="重建一个相同的组件" onClick={() => restoreFavorite(f.id)}>重建</button>
+                  <button className="ygg-btn tiny danger" title="取消收藏（这是收藏消失的唯一方式）" onClick={() => unfavorite(f.id)}>取消</button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <button
+            className="ygg-fav-btn"
+            title={favorites.length > 0 ? '收藏：' + favorites.length + ' 个' : '收藏（空）'}
+            onClick={() => setFavOpen(!favOpen)}
+          >
+            <StarIcon width={14} height={14} filled={favorites.length > 0} />
+            {favorites.length > 0 ? <span className="badge">{favorites.length}</span> : null}
+          </button>
+        </div>
         <div className={'ygg-trash' + (trashOpen ? ' is-open' : '')}>
           {trashOpen ? (
             <div className="ygg-trash-list">

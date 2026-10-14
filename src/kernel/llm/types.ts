@@ -1,3 +1,4 @@
+import type { ResetPart } from '../types';
 import type { SecurityLevel } from '../security';
 
 export interface LlmSettings {
@@ -31,6 +32,13 @@ export interface LlmSettings {
    * 具体每一档的差别集中在 src/kernel/security.ts 的表里（界面说明与执行检查读同一份）。
    */
   securityLevel?: SecurityLevel;
+  /**
+   * 重置对话框里上次勾选的区块。**缺省 = 全选。**
+   *
+   * 记住它是为了"我只想清日志"这类反复操作不必每次重勾；它不是安全项，
+   * 所以和别的偏好一起放在设置里（重置本身始终保留设置，因此这个选择也留得住）。
+   */
+  resetParts?: ResetPart[];
   /**
    * 模型的上下文窗口（token）。**0 / 未填 = 未知**。
    *

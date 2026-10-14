@@ -6,6 +6,7 @@ import type {
   LogLevel,
   Message,
   NodeId,
+  ResetPart,
   RunFeedback,
   ThemeTokens,
   TraceStep,
@@ -26,6 +27,8 @@ import {
   sanitizeTokens,
 } from '../theme/engine';
 import { clearSurfaceSource, exportSurfaceStates, importSurfaceStates } from '../kernel/registry/surfaceRegistry';
+import { favoriteFromNode, loadFavorites, nodeFromFavorite, saveFavorites, type FavoriteEntry } from './favorites';
+import { ALL_RESET_PARTS } from './reset';
 import { buildSeed, seedStorageEntries, type SeedFile, type SeedPart } from './seed';
 import { syncPluginRuntime } from '../kernel/plugin/runtime';
 import { policyFor } from '../kernel/security';
@@ -852,6 +855,23 @@ interface DesktopState {
   clearQueue: (id: string) => void;
   /** 累加一次运行的用量（token / 速度 / 缓存命中）。 */
   addMetrics: (id: string, delta: Partial<SessionMetrics>) => void;
+
+  /* ---------------- 组件收藏 ---------------- */
+  /**
+   * 收藏的组件（长期保留，存 IndexedDB 的**另一个库**里）。
+   *
+   * 与 nodes 完全解耦：删组件、重置、清回收站都不会碰到它 ——
+   * 只有用户自己点"取消收藏"才会消失。
+   */
+  favorites: FavoriteEntry[];
+  /** 收藏一个组件/挂件（同一个 source 已收藏过就只更新名称与截图信息）。 */
+  favoriteNode: (nodeId: NodeId) => void;
+  /** 取消收藏。 */
+  unfavorite: (favoriteId: string) => void;
+  /** 用收藏重建一个组件（新 id、自动找一个空位、并聚焦）。返回新节点 id。 */
+  restoreFavorite: (favoriteId: string) => NodeId | null;
+  /** 某个组件是不是已经被收藏了（按 source 比 —— 重建后 id 会变）。 */
+  isFavorited: (nodeId: NodeId) => boolean;
   /** 追加一条消息到这个会话的记忆（基底 agent 的对话按会话分开）。 */
   appendSessionMessage: (id: string, message: Message) => void;
   /**
@@ -987,6 +1007,13 @@ interface DesktopState {
   requestRestore: (windowId: string) => void;
 
   resetAll: () => Promise<void>;
+  /**
+   * 按区块重置（`resetAll()` 等价于"全部区块"，行为完全一致）。
+   *
+   * 区块的划分与说明见 store/reset.ts —— 那里是唯一一份定义，
+   * 界面上的勾选框与这里的实现读同一份。
+   */
+  resetParts: (parts: ResetPart[]) => Promise<void>;
 }
 
 /** 同一个错误在这个时间内不再追问（毫秒）。 */
@@ -1331,6 +1358,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   logs: [],
   sessions: [makeSession(1, resolveInputRect(window.innerWidth, window.innerHeight), window.innerWidth, window.innerHeight)],
   agentRuns: {},
+  favorites: [],
   feedback: null,
   traceOpen: false,
   traceSeen: 0,
@@ -1375,6 +1403,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     let settings: LlmSettings | undefined;
     let logs: LogEntry[] | undefined;
     let plugins: InstalledPlugin[] | undefined;
+    let favorites: FavoriteEntry[] | undefined;
     let panels: Partial<PanelRects> & { input?: PanelRect } | undefined;
     let sessions: PersistedSession[] | undefined;
     let z: number | undefined;
@@ -1389,6 +1418,11 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       logs = await adapter.get<LogEntry[]>(K_LOGS);
       panels = await adapter.get<Partial<PanelRects> & { input?: PanelRect }>(K_PANELS);
       plugins = await adapter.get<InstalledPlugin[]>(K_PLUGINS);
+      /*
+       * 收藏存在**另一个数据库**里（见 store/favorites.ts）：重置与删组件都碰不到它，
+       * 所以这里单独读一次，而且读失败不该影响其它数据 —— loadFavorites 自己会兜住。
+       */
+      favorites = await loadFavorites();
       sessions = await adapter.get<PersistedSession[]>(K_SESSIONS);
       z = await adapter.get<number>('z');
       panelZ = await adapter.get<Record<string, number>>('panelZ');
@@ -1509,6 +1543,9 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       pluginsRect: panels?.plugins ?? fallback.plugins,
       workspaceRect: panels?.workspace ?? fallback.workspace,
       plugins: safePluginList,
+      // 收藏：**存储里没有就保留内存里那份**（与插件同一个理由 —— 它不是主库的键，
+      // 读失败时不该把已经加载/刚收藏的那份清掉）。
+      favorites: favorites ?? get().favorites,
       zCounter: z ?? 10 + Object.keys(safeNodes).length,
       panelZ: {
         ...DEFAULT_PANEL_Z,
@@ -2339,7 +2376,72 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     }, RESTORE_MS);
   },
 
+  favoriteNode: (nodeId) => {
+    const node = get().nodes[nodeId];
+    if (!node || node.kind !== 'component') return;
+    /*
+     * 按 **source** 判重，而不是按节点 id：
+     * 收藏被用来重建组件，重建出来的是**新 id** —— 拿 id 当锚点的话，
+     * 用户对同一个组件点两次就会得到两份一模一样的收藏，而星号也没法反映"已收藏"。
+     *
+     * 代价说清楚：**同一份源码的不同实例共享一条收藏**（点第二次是更新名字/配置）。
+     * 这是有意的取舍 —— 两个源码逐字节相同的组件本来就是同一个东西的两个副本，
+     * 分别收藏两份只会让人分不清该用哪个。
+     */
+    const already = get().favorites.find((f) => f.source === node.source);
+    const entry = favoriteFromNode(node, already?.id);
+    const next = already
+      ? get().favorites.map((f) => (f.id === already.id ? entry : f))
+      : [...get().favorites, entry];
+    set({ favorites: next });
+    void saveFavorites(next);
+    get().log('info', (already ? '\u2605 已更新收藏 ' : '\u2605 收藏 ') + node.name, nodeId);
+  },
+
+  unfavorite: (favoriteId) => {
+    const next = get().favorites.filter((f) => f.id !== favoriteId);
+    if (next.length === get().favorites.length) return;
+    set({ favorites: next });
+    void saveFavorites(next);
+    get().log('info', '\u2606 取消收藏 ' + favoriteId);
+  },
+
+  restoreFavorite: (favoriteId) => {
+    const fav = get().favorites.find((f) => f.id === favoriteId);
+    if (!fav) return null;
+    const id = newNodeId();
+    const pos = get().nextLayout();
+    const node = nodeFromFavorite(fav, id, pos, get().zCounter + 1);
+    set((cur) => ({ nodes: { ...cur.nodes, [id]: node }, zCounter: cur.zCounter + 1 }));
+    get().focus(id);
+    /*
+     * 重建**不画派生连线**：那条线表示"从某个来源长出来"，而这里是用户从收藏里取的，
+     * 没有来源。画一条不知道从哪到哪的线只会让人以为它被谁派生过。
+     */
+    get().log('op', '+ comp ' + fav.name + '（来自收藏）', id);
+    return id;
+  },
+
+  isFavorited: (nodeId) => {
+    const node = get().nodes[nodeId];
+    if (!node || node.kind !== 'component') return false;
+    return get().favorites.some((f) => f.source === node.source);
+  },
+
   resetAll: async () => {
+    await get().resetParts(ALL_RESET_PARTS);
+  },
+
+  /**
+   * 按区块重置。
+   *
+   * 与 resetAll 的关系：resetAll 只是"全部区块"的一次调用，**行为完全等价**
+   * （老调用点不用改）。真正的实现在这里。
+   *
+   * 每个区块清什么，见 RESET_PART_INFO 的 hint —— 那些文案与这里的代码是同一份划分，
+   * 改一处要改另一处。
+   */
+  resetParts: async (parts) => {
     const adapter = adapterRef;
     if (persistTimer !== null) {
       window.clearTimeout(persistTimer);
@@ -2360,44 +2462,121 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       }
     }
     const panels = resolvePanels(window.innerWidth, window.innerHeight);
-    resetConsoleAskMemory();
-    applyTheme(DEFAULT_TOKENS);
-    importSurfaceStates(null);
-    set({
-      viewW: window.innerWidth,
-      viewH: window.innerHeight,
-      nodes: { root: createRootAgent() },
-      rootId: 'root',
-      tokens: { ...DEFAULT_TOKENS },
-      focusedId: null,
-      zCounter: 10,
-      logs: [],
-      feedback: null,
-      sessions: [
-        makeSession(1, resolveInputRect(window.innerWidth, window.innerHeight), window.innerWidth, window.innerHeight),
-      ],
-      agentRuns: {},
-      resetOpen: false,
-      minimizedPanels: {},
-      panelZ: { ...DEFAULT_PANEL_Z },
-      pendingOpen: [],
-      leaving: {},
-      restoring: {},
-      structChanges: [],
-      trash: [],
-      snapDrag: false,
-      resizing: false,
-      curves: [],
-      dying: {},
-      traceSeen: 0,
-      consolePrompt: null,
-      pendingShot: null,
-      seedDialog: null,
-      inspectorRect: panels.inspector,
-      settingsRect: panels.settings,
-      traceRect: panels.trace,
-    });
-    get().log('info', 'reset');
+    const viewW = window.innerWidth;
+    const viewH = window.innerHeight;
+    const want = new Set(parts);
+    const s0 = get();
+    const patch: Record<string, unknown> = {};
+
+    /* 无论清哪些区块，这些都是"正在进行中的动作"，重置后不该留着。 */
+    patch.resetOpen = false;
+    patch.feedback = null;
+    patch.seedDialog = null;
+    patch.snapDrag = false;
+    patch.resizing = false;
+    patch.pendingShot = null;
+
+    if (want.has('interface')) {
+      resetConsoleAskMemory();
+      applyTheme(DEFAULT_TOKENS);
+      importSurfaceStates(null);
+      patch.viewW = viewW;
+      patch.viewH = viewH;
+      patch.tokens = { ...DEFAULT_TOKENS };
+      patch.minimizedPanels = {};
+      patch.panelZ = { ...DEFAULT_PANEL_Z };
+      patch.zCounter = 10;
+      patch.inspectorRect = panels.inspector;
+      patch.settingsRect = panels.settings;
+      patch.traceRect = panels.trace;
+      patch.pluginsRect = panels.plugins;
+      patch.workspaceRect = panels.workspace;
+      /*
+       * 输入框怎么处理，看历史有没有一起清 —— 这是两件事的边界：
+       *
+       * - **界面 + 历史一起清** → 收敛成**一个干净的新会话**。
+       *   这正好等于旧的"重置"行为（全选是默认值，所以默认路径没有变化）。
+       * - **只清界面** → 输入框与里面的对话都留着，只把矩形复位。
+       *   对话是历史，不该被"复位界面"连累；多开的框同理（那是用户开的会话）。
+       *
+       * 两种情况下都**保证至少有一个输入框**：一个都没有的话界面就没法输入了，
+       * 那是坏掉的状态，不是"已重置"。
+       */
+      const base = resolveInputRect(viewW, viewH);
+      patch.sessions = want.has('history')
+        ? [makeSession(1, base, viewW, viewH)]
+        : (s0.sessions.length ? s0.sessions : [makeSession(1, base, viewW, viewH)]).map((ses, i) => ({
+            ...ses,
+            rect: makeSession(i + 1, base, viewW, viewH).rect,
+            minimized: false,
+          }));
+    }
+
+    if (want.has('components')) {
+      patch.nodes = { root: createRootAgent() };
+      patch.rootId = 'root';
+      patch.focusedId = null;
+      patch.trash = [];
+      // 这些映射里的 key 都是节点 id，节点没了它们就是悬空的。
+      patch.dying = {};
+      patch.leaving = {};
+      patch.restoring = {};
+      patch.curves = [];
+      patch.pendingOpen = [];
+      patch.structChanges = [];
+      // 组件 agent 的运行状态跟着组件走；**会话的运行状态留着**（那是输入框的）。
+      patch.agentRuns = Object.fromEntries(
+        Object.entries(s0.agentRuns).filter(([key]) => !key.startsWith(AGENT_SESSION_PREFIX)),
+      );
+    }
+
+    if (want.has('history')) {
+      /*
+       * 历史分散在两处：组件 agent 的 messages/ledger 在 nodes 里，输入框的对话在 sessions 里。
+       * 注意 nodes 可能已经被上面的 components 重置过了 —— 所以取 patch 里的那份，
+       * 否则会把刚清空的节点树又写回旧的。
+       */
+      const nodes = (patch.nodes as Record<string, YggNode> | undefined) ?? { ...s0.nodes };
+      const stripped: Record<string, YggNode> = {};
+      for (const [id, n] of Object.entries(nodes)) {
+        stripped[id] =
+          n.kind === 'component' && n.agent
+            ? { ...n, agent: { ...n.agent, messages: [], ledger: [] } }
+            : n;
+      }
+      patch.nodes = stripped;
+      patch.sessions = ((patch.sessions as InputSession[] | undefined) ?? s0.sessions).map((ses) => ({
+        ...ses,
+        messages: [],
+      }));
+    }
+
+    if (want.has('logs')) {
+      patch.logs = [];
+      patch.traceSeen = 0;
+      patch.sessions = ((patch.sessions as InputSession[] | undefined) ?? s0.sessions).map((ses) => ({
+        ...ses,
+        trace: [],
+      }));
+      const runs = (patch.agentRuns as typeof s0.agentRuns | undefined) ?? s0.agentRuns;
+      patch.agentRuns = Object.fromEntries(
+        Object.entries(runs).map(([key, slice]) => [key, { ...slice, trace: [] }]),
+      );
+    }
+
+    // 控制台里"要不要让 Agent 修"的待确认也属于运行痕迹，一律收掉。
+    patch.consolePrompt = null;
+    // 只打需要改的字段 —— 没勾的区块原样保留。
+    set(patch as never);
+    /*
+     * 落盘一次。
+     *
+     * **必要**：saveNow 会把全部键按当前状态重写一遍，于是被清掉的区块
+     * （主题、插槽、节点…）在存储里也真的没了。只改内存不落盘的话，
+     * 刷新一次旧数据就从存储里回来了 —— 那是最难查的一类"重置没生效"。
+     */
+    await saveNow();
+    get().log('info', 'reset done [' + (parts.join(', ') || '无') + ']');
   },
 }));
 

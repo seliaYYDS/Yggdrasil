@@ -1041,6 +1041,47 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-trash-row .name { flex: 1; min-width: 0; font-size: 11px; color: var(--ygg-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ygg-trash-row .when { font-size: 9px; color: var(--ygg-fg-muted); font-family: var(--ygg-font-mono); flex: none; }
 
+/*
+ * 收藏：与回收站同一套形态（钉底、朝上展开、收起只留图标 + 数量），
+ * 但钉在它**左边** —— 两个都是底部的"东西放哪儿"入口，挨着才好找。
+ *
+ * 只改右侧定位，其余尺寸/圆角/描边与回收站完全一致：它们是同一类控件，
+ * 长得不一样反而会让人以为是两种东西。
+ */
+.ygg-favs { position: absolute; right: 44px; bottom: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.ygg-fav-btn {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  color: var(--ygg-fg-muted);
+  background: var(--ygg-surface);
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  cursor: pointer;
+}
+.ygg-fav-btn:hover { color: var(--ygg-fg); border-color: var(--ygg-accent); }
+.ygg-fav-btn .badge {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 14px; height: 14px; padding: 0 3px;
+  font-size: 9px; line-height: 14px; text-align: center;
+  color: var(--ygg-bg); background: var(--ygg-accent);
+  border-radius: 7px;
+}
+.ygg-fav-list {
+  width: 230px; max-height: 190px; overflow: auto;
+  padding: 7px 8px;
+  background: var(--ygg-surface-2);
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+}
+.ygg-fav-head { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--ygg-fg-muted); margin-bottom: 5px; }
+.ygg-fav-note { color: var(--ygg-accent-dim); }
+.ygg-fav-empty { font-size: 10px; color: var(--ygg-fg-muted); line-height: 1.6; }
+.ygg-fav-row { display: flex; align-items: center; gap: 5px; padding: 3px 0; }
+.ygg-fav-row .ygg-fav-mark { color: var(--ygg-accent-hi); flex: none; }
+.ygg-fav-row .name { flex: 1; min-width: 0; font-size: 11px; color: var(--ygg-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ygg-fav-row .kind { font-size: 9px; color: var(--ygg-fg-muted); flex: none; }
+
 .ygg-task-sep { margin: 16px 0 6px; }
 .ygg-task-sep:first-child { margin-top: 0; }
 .ygg-task-req {
@@ -1236,6 +1277,8 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-seed-parts { margin: 0 0 11px; padding-left: 18px; color: var(--ygg-fg-muted); font-size: 11px; line-height: 1.6; }
 .ygg-seed-parts strong { color: var(--ygg-fg); }
 .ygg-seed-warn { margin: 0 0 11px; font-size: 11px; line-height: 1.6; color: var(--ygg-danger); }
+/* 重置对话框：每行右侧那串"当前有多少东西可清"，单独一列，不跟说明混在一起。 */
+.ygg-reset-count { margin-left: auto; padding-left: 10px; font-size: 10px; color: var(--ygg-fg-muted); font-family: var(--ygg-font-mono); white-space: nowrap; }
 
 .ygg-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
