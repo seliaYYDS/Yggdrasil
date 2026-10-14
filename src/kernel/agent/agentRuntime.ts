@@ -1151,10 +1151,18 @@ function recordLedger(
     }
   });
   if (entries.length === 0) return;
+  /*
+   * 请求引文**只挂在该轮第一条**账本行上。
+   *
+   * 以前每条都挂：一轮做了 4 件事，快照里就有 4 行重复同一句用户原话 ——
+   * 账本本来就排在每轮的最后一条消息里（离回答最近），重复引用等于每轮把
+   * "用户要什么"往模型眼前推好几次，它就会把目标当成每轮都要交代的事。
+   * 一条足够归属，多的只是占上下文。
+   */
   const from = request.replace(/\s+/g, ' ').trim().slice(0, 40);
   store.appendLedger(
     originId,
-    entries.map((e) => e + (from ? '  <- request "' + from + '"' : '')),
+    entries.map((e, i) => e + (from && i === 0 ? '  <- request "' + from + '"' : '')),
   );
 }
 
