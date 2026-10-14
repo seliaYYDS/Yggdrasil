@@ -431,7 +431,8 @@ function longTaskRules(terse = false): string[] {
       '- A good round is not necessarily a finished task: silently re-check the last [CURRENT REQUEST] (and, each,',
       '  numbers, language); anything missing → continue true. Keep the desktop usable between rounds.',
       '- reasoning = what this round does + what is still missing, one short sentence. **Do not restate the request.**',
-      '- No round limit, but every round must progress; two identical rounds = spinning and stop the run.',
+      '- No round limit, but every round must progress: repeating the previous round exactly gets you a reminder,\n' +
+      '  not a stop — change the approach instead of repeating.',
       '- ' + COMPRESS_TAG + ' = your own compressed memory: facts, not a request; do not rebuild its DONE items.',
     ];
   }
@@ -442,8 +443,9 @@ function longTaskRules(terse = false): string[] {
     '- Slice the work so the desktop stays usable; never end on a half-built component the next round must finish.',
     '- reasoning = what this round does + what is still missing, one short sentence. **Do not restate the request**',
     '  (it is already in the conversation; a compressed memory keeps the goal).',
-    '- **No round limit**, but every round must progress: two rounds with the same ops and results read as spinning',
-    '  and stop the run — then say so in reasoning and change the approach.',
+    '- **There is no round limit.** A round may be small; it must make real progress. Repeating a round exactly',
+    '  (same ops, same results) does not end the task — you will be told to change the approach, so do that instead of',
+    '  repeating it.',
     '- **' + COMPRESS_TAG + '** is *your own* compressed memory: established facts, never a new request; do not',
     '  rebuild what it lists as DONE.',
   ];

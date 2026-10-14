@@ -596,7 +596,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
       '。需要什么先用 ws_read 读（或者用 ws_run 加工），不要凭空猜内容。'
     : '';
   const runId = newId();
-  store.beginSessionTrace(sessionId, runId);
+  // 轨迹里插一条"任务分隔"，带上用户这次说的那句话（待见 §5.113 的待办 5）。
+  store.beginSessionTrace(sessionId, runId, input);
   store.setSessionStatus(sessionId, { running: true, phase: '准备上下文', detail: '', round: 0, runId });
   /*
    * 档位分流。
@@ -683,12 +684,18 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
     let continueLoop = true;
     let round = 0;
     /**
-     * 上一轮的"指令 + 结果"指纹。
-     * 没有轮次上限，所以需要一个**空转判定**兜底：连续两轮给出完全相同的指令、
-     * 又得到完全相同的结果，说明再跑下去不会有新东西。这不是步数上限 ——
-     * 只要每轮真的在推进，轮次就不封顶。
+     * 上一轮的"指令 + 结果"指纹，以及它连续重复了几轮。
+     *
+     * **这里不再"两轮相同就终止任务"**（待办 4）。那种判法把"看起来没进展"直接当成失败：
+     * 轮询、等一个异步结果、或者两轮里同样的 inspect 拿到同样的快照，都会被它误杀 ——
+     * 用户看到的就是"任务莫名其妙停了"。
+     * 现在相同轮次只做两件事：**提醒模型换个做法**（回灌一条观察），
+     * 以及记一条日志；只有在**连续很多轮**之后才兜底停下，防的是真的失控烧钱。
      */
     let lastSignature = '';
+    let sameRounds = 0;
+    /** 连续多少轮完全相同才兜底停（给足模型自我纠正的机会；正常任务走不到这里）。 */
+    const SAME_ROUND_LIMIT = 12;
 
     while (continueLoop) {
     /** 本轮的执行结果。catch 里用它回滚，避免异常留下半成品。 */
@@ -1026,15 +1033,32 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         // 历史里留下"已创建 X"会让后续轮次误以为 X 还存在（见 §5.19）。
         pushObservations(observations);
 
-        // 无轮次上限下的空转保护：指令与结果都与上一轮完全一致时停下来。
-        // 只判"完全一致"，因此真实的推进（哪怕只是新建了一个同名字的组件）不会被误伤。
+        /*
+         * 与上一轮完全一致时**不终止任务**，只提醒（待办 4）。
+         *
+         * 以前这里是"两次相同就判空转、直接结束本轮任务"。那个阈值太紧：
+         * 轮询、等异步结果、同一份 inspect 拿到同一份快照，都会被误判成失败。
+         * 现在把判断结果变成**回灌给模型的观察**（它自己决定要不要换做法），
+         * 只有连续重复 SAME_ROUND_LIMIT 轮才兜底停 —— 那是防失控，不是常规出口。
+         */
         const signature = JSON.stringify(plan.ops) + '\u0000' + observations.join('\u0001');
         if (plan.continue === true && signature === lastSignature) {
-          store.log('warn', 'loop ✕ 连续两轮指令与结果完全一致，判定空转');
-          useDesktopStore.getState().setFeedback(
-            mkFeedback('fail', '检测到空转，已停止', '连续两轮的指令与结果完全一致，继续下去不会有新结果。'),
-          );
-          return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: '空转' });
+          sameRounds += 1;
+          store.log('warn', 'loop · 连续 ' + (sameRounds + 1) + ' 轮指令与结果相同');
+          if (sameRounds >= SAME_ROUND_LIMIT) {
+            useDesktopStore.getState().setFeedback(
+              mkFeedback('fail', '连续多轮没有进展，已停止', '连续 ' + (sameRounds + 1) + ' 轮的指令与结果完全一致，继续下去不会有新结果。'),
+            );
+            return finish({ ok: false, added: totalAdded, rounds: rounds.length, okCount, failCount, error: '无进展' });
+          }
+          // 提醒它换做法：把"你在重复"这件事明确说出来，并给出常见的下一步。
+          pushObservations([
+            'Your last round repeated the previous round exactly: same ops, same results. Repeating it again will',
+            'not change anything. Change the approach — inspect the current state first, fix the failing source, or',
+            'finish with {"reasoning":"done","continue":false,"ops":[]} if the task is actually complete.',
+          ]);
+        } else {
+          sameRounds = 0;
         }
         lastSignature = signature;
         continueLoop = plan.continue === true;

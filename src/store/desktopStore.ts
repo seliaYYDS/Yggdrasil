@@ -94,6 +94,25 @@ export function stepHitRate(m: Pick<SessionMetrics, 'lastTokensIn' | 'lastCached
   return m.lastCachedIn / m.lastTokensIn;
 }
 
+/**
+ * 回收站里的一条：被删掉的组件 + 它被删时的那棵子树。
+ *
+ * 整棵子树一起存（而不是只存被点的那个节点）：删除本来就是级联的，
+ * 只还原父节点会留下"子节点不见了"的半截结果。
+ */
+export interface TrashEntry {
+  /** 被删的那个节点的 id（还原时用它做提示与去重）。 */
+  rootId: NodeId;
+  /** 名字，供界面显示（取被删节点的名字）。 */
+  name: string;
+  /** 被删时刻（显示"什么时候删的"）。 */
+  at: number;
+  /** 整棵子树的节点（含被删节点自己）。 */
+  nodes: YggNode[];
+  /** 每个组件各自的运行状态（还原后进度还在）。 */
+  agentRuns: Record<string, RunSlice>;
+}
+
 export interface RunStatus {
   running: boolean;
   phase: string;
@@ -177,6 +196,11 @@ export const MAIN_SESSION = 'input';
 
 /** 同时最多开几个输入框。再多屏幕放不下，投入产出也不划算。 */
 export const MAX_SESSIONS = 6;
+/**
+ * 回收站容量（待办 6）。用户明确要求 5 个 —— 它兜的是"手滑删错了"，
+ * 不是归档：满了丢最老的，界面上也只列最近这几条。
+ */
+export const MAX_TRASH = 5;
 
 export function emptyStatus(): RunStatus {
   return { running: false, phase: '', detail: '', round: 0, runId: null };
@@ -791,7 +815,8 @@ interface DesktopState {
   setSessionMinimized: (id: string, minimized: boolean) => void;
   /** 会话级状态：会话之间互不相通。 */
   setSessionStatus: (id: string, patch: Partial<RunStatus>) => void;
-  beginSessionTrace: (id: string, runId: string) => void;
+  /** 开一次运行：往轨迹里插一条带用户请求的"任务分隔"，**不清空**已有步骤（待办 5）。 */
+  beginSessionTrace: (id: string, runId: string, request: string) => void;
   upsertSessionStep: (id: string, step: TraceStep) => void;
   /** 入队 / 出队 / 删除排队项，都在指定会话里。 */
   enqueue: (id: string, item: QueuedInput) => void;
@@ -838,10 +863,24 @@ interface DesktopState {
    * 这里只记插槽 id —— 还原时逐个 clearSurfaceSource，**只动结构，不碰样式变量**。
    */
   structChanges: string[];
+  /**
+   * **回收站**：被删掉的组件在这里暂存，可以还原或彻底清除。
+   *
+   * 三条约定：
+   * - **只存组件**（含它整棵子树与 agent 配置）—— 工具节点是派生出来的，还原意义不大；
+   * - **上限 5 个**，先进先出：满了就丢最老的那个（用户要的是"手滑删错了能捡回来"，不是归档）；
+   * - **只在当前会话有效**：不进持久化，刷新页面即清空（用户明确要求如此）。
+   */
+  trash: TrashEntry[];
   /** 记一笔"默认界面结构被改了"。 */
   noteStructChange: (slot: string) => void;
   /** 处理确认弹窗：restore=true 把记录里的插槽结构还原成内置实现，false = 保留。两种都会清空记录。 */
   resolveStructChanges: (restore: boolean) => void;
+
+  /** 从回收站还原一个组件（连同它被删时的整棵子树）。 */
+  restoreFromTrash: (id: string) => void;
+  /** 彻底清除回收站里的一个 / 全部条目。 */
+  purgeTrash: (id?: string) => void;
   setTreeOpen: (open: boolean) => void;
   setTraceOpen: (open: boolean) => void;
   /** 把当前这批轨迹标记为"已看过"（打开面板时自动调用）。 */
@@ -1011,6 +1050,61 @@ let adapterRef: StorageAdapter | null = null;
  * 于是调度器 / agentRuntime 完全不用知道自己在驱动的是输入框还是子 agent。
  * 只有这里知道两种存储形状的差别。
  */
+/**
+ * 把一棵被删的子树放进回收站，并把它们从桌面上摘掉。
+ *
+ * 抽成一个纯函数（返回 state 补丁）而不是写在 removeNode 里：删除有两条路径
+ * （带淡出动画的与即时的），两条必须做出**完全一样**的回收站行为 ——
+ * 分散写迟早会漏掉一条，表现为"有时候能捡回来有时候不能"。
+ *
+ * 只收**组件**：工具节点是派生的，还原它没有意义（它跟着创建它的组件走）。
+ * 返回补丁时不动 dying —— 那是调用方的事。
+ */
+function dropIntoTrash(
+  s: DesktopState,
+  rootId: NodeId,
+  ids: NodeId[],
+): Partial<DesktopState> {
+  const nodes = { ...s.nodes };
+  const agentRuns = { ...s.agentRuns };
+  // 先把要收的抄下来（之后 nodes 就被改了）。
+  const taken: YggNode[] = [];
+  const runs: Record<string, RunSlice> = {};
+  const root = s.nodes[rootId];
+  for (const nid of ids) {
+    const n = s.nodes[nid];
+    if (!n) continue;
+    if (n.kind === 'component') {
+      taken.push(n);
+      if (s.agentRuns[nid]) runs[nid] = s.agentRuns[nid];
+    }
+  }
+  for (const nid of ids) {
+    delete nodes[nid];
+    // 被删掉的 agent 的运行状态一并清掉，别留下没有窗口的进度。
+    delete agentRuns[nid];
+  }
+  const patch: Partial<DesktopState> = {
+    nodes,
+    agentRuns,
+    focusedId: s.focusedId && ids.includes(s.focusedId) ? null : s.focusedId,
+  };
+  // 只有组件才进回收站；工具节点的删除只影响桌面。
+  if (taken.length === 0) return patch;
+  const entry: TrashEntry = {
+    rootId,
+    name: root && root.kind === 'component' ? root.name : String(rootId),
+    at: Date.now(),
+    nodes: taken,
+    agentRuns: runs,
+  };
+  // 同一个 id 再删一次时只留最新那条（否则还原时会撞 id）。
+  const rest = s.trash.filter((t) => t.rootId !== rootId);
+  // 先进先出：超出上限丢最老的。
+  const trash = [...rest, entry].slice(-MAX_TRASH);
+  return { ...patch, trash };
+}
+
 function mapRun(
   s: DesktopState,
   id: string,
@@ -1215,6 +1309,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   traceOpen: false,
   traceSeen: 0,
   structChanges: [],
+  trash: [],
   pluginsOpen: false,
   workspaceOpen: false,
   plugins: [],
@@ -1475,19 +1570,9 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       window.setTimeout(() => {
         const st = useDesktopStore.getState();
         set((s) => {
-          const nodes = { ...s.nodes };
-          for (const nid of ids) delete nodes[nid];
-          // 被删掉的 agent 的运行状态一并清掉，别留下没有窗口的进度。
-          const agentRuns = { ...s.agentRuns };
-          for (const nid of ids) delete agentRuns[nid];
           const dying = { ...s.dying };
           for (const nid of ids) delete dying[nid];
-          return {
-            nodes,
-            agentRuns,
-            dying,
-            focusedId: s.focusedId && ids.includes(s.focusedId) ? null : s.focusedId,
-          };
+          return { ...dropIntoTrash(s, id, ids), dying };
         });
         st.log('op', '- ' + id);
         schedulePersist();
@@ -1495,17 +1580,9 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       return;
     }
 
-    set((s) => {
-      const nodes = { ...s.nodes };
-      for (const nid of ids) delete nodes[nid];
-      const agentRuns = { ...s.agentRuns };
-      for (const nid of ids) delete agentRuns[nid];
-      return {
-        nodes,
-        agentRuns,
-        focusedId: s.focusedId && ids.includes(s.focusedId) ? null : s.focusedId,
-      };
-    });
+    set((s) => ({
+      ...dropIntoTrash(s, id, ids),
+    }));
     schedulePersist();
   },
 
@@ -1651,9 +1728,36 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     }
   },
 
-  beginSessionTrace: (id, runId) => {
-    // 清空 trace 只清**这个会话自己**的 —— 子 agent 起跑不会再顶掉基底的轨迹。
-    set((s) => ({ feedback: null, ...mapRun(s, id, (run) => ({ ...run, trace: [], status: { ...run.status, runId } })) }));
+  beginSessionTrace: (id, runId, request) => {
+    /*
+     * **不再清空轨迹**（待办 5）：新任务只在轨迹里插一条"任务分隔"——它带着用户这次说的那句话。
+     *
+     * 以前每开一轮就把 trace 清空，于是"上一次做了什么"在界面上直接消失，
+     * 用户只能看到最后一次运行的步骤。现在历次任务的步骤都留着，用分隔行隔开，
+     * 分隔行本身就是"这次的请求是什么"。
+     * 只动**这个会话自己**的轨迹 —— 子 agent 起跑不会顶掉基底的。
+     */
+    const step: TraceStep = {
+      id: newNodeId(),
+      runId,
+      round: 0,
+      index: -5,
+      kind: 'task',
+      label: '任务',
+      summary: request,
+      status: 'running',
+      message: '',
+      startedAt: Date.now(),
+      endedAt: Date.now(),
+    };
+    set((s) => ({
+      feedback: null,
+      ...mapRun(s, id, (run) => ({
+        ...run,
+        trace: [...run.trace, step],
+        status: { ...run.status, runId },
+      })),
+    }));
   },
 
   upsertSessionStep: (id, step) => {
@@ -1703,6 +1807,35 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   noteStructChange: (slot) => {
     if (!slot) return;
     set((s) => (s.structChanges.includes(slot) ? s : { structChanges: [...s.structChanges, slot] }));
+  },
+
+  restoreFromTrash: (id) => {
+    const entry = get().trash.find((t) => t.rootId === id);
+    if (!entry) return;
+    set((s) => {
+      const nodes = { ...s.nodes };
+      for (const n of entry.nodes) {
+        /*
+         * id 撞车时**跳过**：还原是"把原来的东西放回去"，不是"覆盖现在的东西"。
+         * 撞车发生在"删了之后又建了同 id 的组件"（正常流程不会，id 是新生成的），
+         * 真撞上时保现在的、丢回收站里的那一个更安全。
+         */
+        if (nodes[n.id]) continue;
+        nodes[n.id] = n;
+      }
+      return {
+        nodes,
+        agentRuns: { ...s.agentRuns, ...entry.agentRuns },
+        trash: s.trash.filter((t) => t.rootId !== id),
+        focusedId: entry.rootId in nodes ? entry.rootId : s.focusedId,
+      };
+    });
+    get().log('op', '↺ ' + entry.name);
+    schedulePersist();
+  },
+
+  purgeTrash: (id) => {
+    set((s) => ({ trash: id === undefined ? [] : s.trash.filter((t) => t.rootId !== id) }));
   },
 
   resolveStructChanges: (restore) => {
@@ -2224,6 +2357,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       leaving: {},
       restoring: {},
       structChanges: [],
+      trash: [],
       snapDrag: false,
       resizing: false,
       curves: [],

@@ -84,8 +84,13 @@ export function TracePanel() {
     sessions.some((ses) => ses.status.running) ||
     Object.values(agentRuns).some((r) => r.status.running);
 
-  const okCount = merged.filter((m) => m.step.status === 'ok').length;
-  const failCount = merged.filter((m) => m.step.status === 'fail').length;
+  /*
+   * 成功 / 失败计数只数**真的步骤**：任务分隔行不是一步。
+   * 「步骤 N」那个数字也用同一个口径，免得用户把分隔行也当成一步。
+   */
+  const stepsOnly = merged.filter((m) => m.step.kind !== 'task');
+  const okCount = stepsOnly.filter((m) => m.step.status === 'ok').length;
+  const failCount = stepsOnly.filter((m) => m.step.status === 'fail').length;
   const shown = filter === 'all' ? merged : merged.filter((m) => m.step.status === filter);
 
   /** 点当前筛选项就退回"全部"，和以前一致的开关手感。 */
@@ -113,7 +118,7 @@ export function TracePanel() {
               title="全部步骤"
               onClick={() => pickFilter('all')}
             >
-              步骤 {merged.length}
+              步骤 {stepsOnly.length}
             </button>
             <button
               className={view === 'steps' && filter === 'ok' ? 'on' : ''}
@@ -173,6 +178,17 @@ export function TracePanel() {
             <div className="ygg-trace">
               {shown.map(({ step, whose }) => {
                 const isOpen = expanded === step.id;
+                /*
+                 * 任务分隔：一次运行的开头，显示用户这次说了什么。
+                 * 它不是"一步"，所以不折叠、不算进成功/失败计数，只做视觉与语义上的分界。
+                 */
+                if (step.kind === 'task') {
+                  return (
+                    <div key={step.id} className="ygg-task-sep">
+                      <div className="ygg-task-req">{whose ? whose + '：' : ''}{step.summary}</div>
+                    </div>
+                  );
+                }
                 return (
                   <div
                     key={step.id}

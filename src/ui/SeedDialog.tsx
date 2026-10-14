@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
 import {
   describeSeed,
@@ -30,19 +30,35 @@ export function SeedDialog() {
 function ExportSeed() {
   const setMode = useDesktopStore((s) => s.setSeedDialog);
   const exportSeed = useDesktopStore((s) => s.exportSeed);
-  const [parts, setParts] = useState<SeedPart[]>(['interface', 'components', 'history', 'settings']);
+  const sessions = useDesktopStore((s) => s.sessions);
+  const nodes = useDesktopStore((s) => s.nodes);
+  /*
+   * 导出侧也按**实际有没有内容**来给勾选框（与导入侧同一个规矩）：
+   * 桌面上一个组件都没有时不显示"组件"的勾，没有对话时不显示"Agent 历史"的勾。
+   */
+  const available = useMemo(() => {
+    const hasComp = Object.values(nodes).some((n) => n.kind === 'component' && !n.root);
+    const hasHistory =
+      Object.values(nodes).some((n) => n.kind === 'component' && !!n.agent && (n.agent.messages.length > 0 || n.agent.ledger.length > 0)) ||
+      sessions.some((ses) => ses.messages.length > 0);
+    return { interface: true, components: hasComp, history: hasHistory, settings: true } as Record<SeedPart, boolean>;
+  }, [nodes, sessions]);
+  /*
+   * 默认只勾**界面 + 组件**（待办 2）。
+   *
+   * 场景文件最常见的用途是"把这套界面和组件发给别人/存一份"，而对话记忆与设置
+   * （连接、模型、可能含密钥）既敏感、又是私人的 —— 默认不勾，要用就自己勾上。
+   */
+  const [parts, setParts] = useState<SeedPart[]>(['interface', 'components']);
   const [withKey, setWithKey] = useState(false);
   const [done, setDone] = useState('');
 
+  /*
+   * 历史与组件**互不绑定**（待办 1）：记忆只是消息与账本，组件带着自己的 agent 配置。
+   * 勾历史不再顺手把组件一起勾上 —— 用户想只导出记忆就只导出记忆。
+   */
   const toggle = (id: SeedPart) => {
-    setParts((cur) => {
-      const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
-      // 历史依附于组件与输入框：只勾历史等于没有载体，顺手把组件带上。
-      if (next.includes('history') && !next.includes('components') && !next.includes('interface')) {
-        return [...next, 'components'];
-      }
-      return next;
-    });
+    setParts((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
   };
 
   const run = () => {
@@ -66,7 +82,7 @@ function ExportSeed() {
     <div className="ygg-overlay" onClick={() => setMode(null)}>
       <div className="ygg-modal" onClick={(e) => e.stopPropagation()}>
         <div className="ygg-confirm-text">导出场景（{SEED_EXT}）</div>
-        {SEED_PART_INFO.map((p) => (
+        {SEED_PART_INFO.filter((p) => available[p.id]).map((p) => (
           <label className="ygg-seed-row" key={p.id}>
             <input type="checkbox" checked={parts.includes(p.id)} onChange={() => toggle(p.id)} />
             <span>
@@ -113,8 +129,16 @@ function ImportSeed() {
     const parsed = parseSeed(text);
     if (!parsed.ok) { setError(parsed.error); return; }
     setSeed(parsed.seed);
-    // 换文件就重置勾选：默认全选这个文件里真实存在的区块。
-    setParts(seedPartOptions(parsed.seed).filter((o) => o.available).map((o) => o.id));
+    /*
+     * 换文件就重置勾选：默认勾**界面 + 组件**（与导出侧同一个默认），
+     * 历史与设置要用户自己勾 —— 导入别人的记忆 / 设置是更重的事，不该默认发生。
+     * 文件里没有的区块当然也不勾（上面 available 已经过滤过）。
+     */
+    setParts(
+      seedPartOptions(parsed.seed)
+        .filter((o) => o.available && (o.id === 'interface' || o.id === 'components'))
+        .map((o) => o.id),
+    );
   };
 
   const run = async () => {

@@ -81,7 +81,7 @@ function coerceValue(value: string): unknown {
  * - 名字是派生工具（提示词里 "## Available tools" 那些）→ 包成
  *   `{ kind: 'call_tool', name, args }`；
  * - `continue: true`：一次调用天然是"先调用、再看结果"。取 false 会让这一轮跑完就结束，
- *   模型永远看不到返回值；防跑飞另有"连续两轮指令与结果完全一致即判空转"那道闸。
+ *   模型永远看不到返回值；防跑飞另有"连续多轮完全相同才兜底停"那道闸（见 agentRuntime 的 SAME_ROUND_LIMIT）。
  */
 export function planFromNativeCalls(calls: NativeCall[], rawText = ''): ParseResult {
   const kinds = knownKinds();

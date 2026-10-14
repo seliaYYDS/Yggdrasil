@@ -968,6 +968,57 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-step.is-ok::after { background: var(--ygg-ok); }
 .ygg-step.is-fail::after { background: var(--ygg-danger); }
 
+/*
+ * 任务分隔：一次运行的开头，显示用户这次说了什么（待办 5）。
+ * 只用"描边 + 间距"表达层级，不加背景块 —— 与面板里其他行保持同一套扁平语言。
+ */
+/*
+ * 回收站（Nodes 面板右下角，待办 6）：绝对定位，不参与节点树的流。
+ * 收起时只有一个图标（有内容时带数量），点开才向上展开列表。
+ * 展开方向朝上 —— 它钉在面板底部，朝下会超出窗口。
+ */
+.ygg-trash { position: absolute; right: 10px; bottom: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.ygg-trash-btn {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  color: var(--ygg-fg-muted);
+  background: var(--ygg-surface);
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  cursor: pointer;
+}
+.ygg-trash-btn:hover { color: var(--ygg-fg); border-color: var(--ygg-accent); }
+.ygg-trash-btn .badge {
+  position: absolute; top: -5px; right: -5px;
+  min-width: 14px; height: 14px; padding: 0 3px;
+  font-size: 9px; line-height: 14px; text-align: center;
+  color: var(--ygg-bg); background: var(--ygg-accent);
+  border-radius: 7px;
+}
+.ygg-trash-list {
+  width: 210px; max-height: 190px; overflow: auto;
+  padding: 7px 8px;
+  background: var(--ygg-surface-2);
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+}
+.ygg-trash-head { display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: var(--ygg-fg-muted); margin-bottom: 5px; }
+.ygg-trash-empty { font-size: 10px; color: var(--ygg-fg-muted); line-height: 1.6; }
+.ygg-trash-row { display: flex; align-items: center; gap: 5px; padding: 3px 0; }
+.ygg-trash-row .name { flex: 1; min-width: 0; font-size: 11px; color: var(--ygg-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ygg-trash-row .when { font-size: 9px; color: var(--ygg-fg-muted); font-family: var(--ygg-font-mono); flex: none; }
+
+.ygg-task-sep { margin: 16px 0 6px; }
+.ygg-task-sep:first-child { margin-top: 0; }
+.ygg-task-req {
+  font-family: var(--ygg-font-display);
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: var(--ygg-accent-hi);
+  word-break: break-word;
+}
+
 .ygg-step-head { display: flex; align-items: center; gap: 7px; font-size: 11px; }
 .ygg-step-head .mark { width: 9px; text-align: center; flex: none; }
 .ygg-step.is-running .mark { color: var(--ygg-accent); }

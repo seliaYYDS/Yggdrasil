@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useDesktopStore } from '../store/desktopStore';
+import { useDesktopStore, MAX_TRASH } from '../store/desktopStore';
 import type { ComponentNode, ToolNode } from '../kernel/types';
 import { buildComponentPatchPrompt, stripFence } from '../kernel/agent/agentRuntime';
 import { chatStream } from '../kernel/llm/client';
@@ -8,6 +8,7 @@ import { Surface } from '../host/Surface';
 import { PanelWindow } from './PanelWindow';
 import {
   ActiveIcon,
+  ClearIcon,
   CloseIcon,
   ClosedIcon,
   CodeIcon,
@@ -30,6 +31,11 @@ export function InspectorPanel() {
   const setOpen = useDesktopStore((s) => s.setTreeOpen);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 回收站展开 / 收起。默认收起：它是个兜底入口，不该占着面板（待办 6）。 */
+  const [trashOpen, setTrashOpen] = useState(false);
+  const trash = useDesktopStore((s) => s.trash);
+  const restoreFromTrash = useDesktopStore((s) => s.restoreFromTrash);
+  const purgeTrash = useDesktopStore((s) => s.purgeTrash);
 
   const nodes = useDesktopStore((s) => s.nodes);
   const rootId = useDesktopStore((s) => s.rootId);
@@ -215,6 +221,42 @@ export function InspectorPanel() {
               </div>
             );
           })}
+        </div>
+        {/*
+          回收站：**固定在面板右下角**（绝对定位，不参与节点树的流）。
+          删除的组件在这里暂存，可还原或彻底清除；只存当前会话，刷新即清空。
+          平时收起成一个图标，有内容时带一个数量，点开才列出来。
+        */}
+        <div className={'ygg-trash' + (trashOpen ? ' is-open' : '')}>
+          {trashOpen ? (
+            <div className="ygg-trash-list">
+              <div className="ygg-trash-head">
+                <span>回收站 {trash.length}/{MAX_TRASH}</span>
+                {trash.length > 0 ? (
+                  <button className="ygg-btn ghost tiny" title="彻底清除全部" onClick={() => purgeTrash()}>清空</button>
+                ) : null}
+              </div>
+              {trash.length === 0 ? (
+                <div className="ygg-trash-empty">被删除的组件会暂存在这里，刷新页面即清空。</div>
+              ) : null}
+              {trash.slice().reverse().map((t) => (
+                <div className="ygg-trash-row" key={t.rootId}>
+                  <span className="name" title={t.name}>{t.name}</span>
+                  <span className="when">{new Date(t.at).toLocaleTimeString('zh-CN', { hour12: false })}</span>
+                  <button className="ygg-btn ghost tiny" title="还原到桌面" onClick={() => restoreFromTrash(t.rootId)}>还原</button>
+                  <button className="ygg-btn tiny danger" title="彻底清除，不可恢复" onClick={() => purgeTrash(t.rootId)}>清除</button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <button
+            className="ygg-trash-btn"
+            title={trash.length > 0 ? '回收站：' + trash.length + ' 个已删除的组件' : '回收站（空）'}
+            onClick={() => setTrashOpen(!trashOpen)}
+          >
+            <ClearIcon width={14} height={14} />
+            {trash.length > 0 ? <span className="badge">{trash.length}</span> : null}
+          </button>
         </div>
       </div>
     </>

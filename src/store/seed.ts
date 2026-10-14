@@ -23,7 +23,7 @@ export const SEED_EXT = '.seed';
 export const SEED_PART_INFO: { id: SeedPart; label: string; hint: string }[] = [
   { id: 'interface', label: '界面', hint: '主题样式、界面插槽（背景/标题栏/效果层）、面板与输入框的位置与层级' },
   { id: 'components', label: '组件', hint: '所有组件的源码、位置尺寸、挂件/锁定状态、局部样式，以及 agent 的职责与能力开关' },
-  { id: 'history', label: 'Agent 历史', hint: '对话记忆与"已经做过的事"账本（依附于组件与输入框，需同时勾选其一）' },
+  { id: 'history', label: 'Agent 历史', hint: '对话记忆与"已经做过的事"账本；不勾就不带上任何记忆（组件本身仍会带着 agent 的职责与能力）' },
   { id: 'settings', label: '设置', hint: '连接、模型与各项参数（API Key 默认不含）' },
 ];
 
@@ -98,7 +98,15 @@ export function buildSeed(
   const withHistory = picked.has('history');
   const data: SeedFile['data'] = {};
 
-  if (picked.has('components') || withHistory) {
+  /*
+   * 组件区块**只由 `components` 决定**，不再被"Agent 历史"拖着走。
+   *
+   * 以前两个区块绑在一起（勾历史就必然带组件），理由是"历史依附于组件"。
+   * 但组件**本身就带着它自己的 agent 配置**（职责 / 能力 / 模式）—— 那是组件的一部分，
+   * 不是"历史"。真正属于历史的只有对话记忆与账本，而那两个可以独立地不导出。
+   * 现在：带组件就带组件（含 agent 配置），带历史才额外带上记忆与账本。
+   */
+  if (picked.has('components')) {
     const nodes: Record<string, YggNode> = {};
     for (const [id, node] of Object.entries(snap.nodes)) {
       nodes[id] = withHistory ? clone(node) : stripHistory(clone(node));
@@ -115,6 +123,10 @@ export function buildSeed(
     data.z = snap.zCounter;
   }
 
+  /*
+   * 输入框（会话）属于界面；它们的**对话记忆**属于历史 —— 与组件同样的解绑方式：
+   * 带界面就带输入框本身，勾历史才带它们各自的 messages。
+   */
   if (picked.has('interface') || withHistory) {
     data.sessions = snap.sessions.map((ses) => ({
       id: ses.id,
@@ -232,8 +244,12 @@ export function seedStorageEntries(seed: SeedFile, parts?: SeedPart[]): [string,
   const d = seed.data;
   const want = parts ? new Set(parts) : null;
   const has = (p: SeedPart) => (want ? want.has(p) : true);
-  // "历史"依附于载体：单独勾它等于什么都没导入，所以连带组件一起要。
-  const withNodes = has('components') || has('history');
+  /*
+   * 组件与历史**互不绑定**（待办 1）：组件区块只由 `components` 决定；
+   * 历史（记忆 / 账本）由 `history` 决定。只导入历史而不导入组件时，
+   * 记忆没有载体可以挂 —— 那就照实不写，而不是擅自把组件也覆盖掉。
+   */
+  const withNodes = has('components');
   const out: [string, unknown][] = [];
 
   if (d.nodes && withNodes) {
@@ -259,18 +275,46 @@ export function seedStorageEntries(seed: SeedFile, parts?: SeedPart[]): [string,
   return out;
 }
 
+/** 文件里到底有没有"组件"：光有 nodes 键不算，还得真的有一个非 root 的组件。 */
+function hasComponents(seed: SeedFile): boolean {
+  const nodes = seed.data.nodes;
+  if (!nodes) return false;
+  return Object.values(nodes).some((n) => n.kind === 'component' && !n.root);
+}
+
+/** 文件里到底有没有"历史"：组件 agent 的记忆 / 账本，或输入框的对话。 */
+function hasHistory(seed: SeedFile): boolean {
+  const d = seed.data;
+  const inNodes = Object.values(d.nodes ?? {}).some(
+    (n) => isAgent(n) && (n.agent.messages.length > 0 || n.agent.ledger.length > 0),
+  );
+  const inSessions = (d.sessions ?? []).some((ses) => (ses.messages?.length ?? 0) > 0);
+  return inNodes || inSessions;
+}
+
+/** 文件里到底有没有"界面"：主题 / 插槽 / 面板位置 / 输入框，任一有内容才算。 */
+function hasInterface(seed: SeedFile): boolean {
+  const d = seed.data;
+  if (d.theme && Object.keys(d.theme.tokens ?? {}).length > 0) return true;
+  if (d.surfaces && Object.keys(d.surfaces).length > 0) return true;
+  if (d.panels) return true;
+  return (d.sessions?.length ?? 0) > 0;
+}
+
 /**
  * 文件里可选的区块 —— 给导入对话框渲染勾选框用。
  *
- * 只列出**文件里真的有**的部分：不列那些点了也没用的项（比如文件里没有设置区块）。
+ * **按内容判断，而不是按"键在不在"**（待办 3）：一个只带了 root 的 nodes、
+ * 或者一份记忆全空的文件，不该显示"组件"/"历史"的勾选框 —— 勾了也没用，
+ * 反而让人以为这个文件里有东西。
  */
 export function seedPartOptions(seed: SeedFile): { id: SeedPart; label: string; available: boolean }[] {
   const d = seed.data;
   const meta = (p: SeedPart) => SEED_PART_INFO.find((x) => x.id === p)?.label ?? p;
   return [
-    { id: 'interface', label: meta('interface'), available: !!d.theme || !!d.surfaces || !!d.panels || !!d.sessions },
-    { id: 'components', label: meta('components'), available: !!d.nodes },
-    { id: 'history', label: meta('history'), available: !!d.nodes || !!d.sessions },
+    { id: 'interface', label: meta('interface'), available: hasInterface(seed) },
+    { id: 'components', label: meta('components'), available: hasComponents(seed) },
+    { id: 'history', label: meta('history'), available: hasHistory(seed) },
     { id: 'settings', label: meta('settings'), available: !!d.settings },
   ];
 }
