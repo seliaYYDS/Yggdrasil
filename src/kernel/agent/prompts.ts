@@ -318,84 +318,103 @@ function terseRules(caps: ActCap[] | undefined, on: (cap: ActCap) => boolean): s
  */
 export function buildSnapshotPrompt(input: SystemPromptInput): string {
   const terse = input.terse === true;
-  const unrestricted = !input.scope || input.scope === '*';
-  const caps = input.caps && !unrestricted ? input.caps.filter((c) => c !== 'global') : input.caps;
+  const unrestricted = !input.scope || input.scope === "*";
+  const caps = input.caps && !unrestricted ? input.caps.filter((c) => c !== "global") : input.caps;
   const on = (cap: ActCap): boolean => capsAllow(caps, cap);
   const scoped = scopeNodes(input.nodes, input.scope);
-  return [
-    ...ledgerRules(input.ledger, input.nodes),
-    '',
-    '## Desktop viewport',
-    (input.viewW ?? 1280) + ' x ' + (input.viewH ?? 800) +
-      ' pixels (a window pos is its top-left corner and size is w x h; the origin is the top-left)',
-    '',
+  /*
+   * ⚠ **段序是缓存的一部分，别随手调。**
+   *
+   * 提供方按"请求开头的 token 序列"命中缓存，所以**每轮都会变的段必须排在后面**。
+   * 这一节里逐轮会变的是三样：窗口 / agent / 账本（账本每轮都会追加，变得最勤）。
+   * 以前账本排在最前面，它一变，后面 4,900 字符的稳定内容全部作废 ——
+   * 实测（8 轮真实请求体）：账本从 0 条到 1 条时，快照共同前缀只剩 3 字符；
+   * 把稳定段提到前面、账本压到最后，同一对快照的共同前缀变成 89%。
+   *
+   * 现在的顺序：**稳定段（视口 / 上传物 / 样式 / 插槽 / 工具 / 工作区 / 插件）→ 窗口 → agent → 账本**。
+   */
+  const stable: string[] = [
+    "## Desktop viewport",
+    (input.viewW ?? 1280) + " x " + (input.viewH ?? 800) +
+      " pixels (a window pos is its top-left corner and size is w x h; the origin is the top-left)",
+    "",
     /*
      * 上传物。**内容不进提示词**，所以这节只讲"它们在哪、你要主动读"。
      * 常驻而不是只在上传那一轮出现：Agent 可能过几轮才回头去看。
      */
-    on('net') ? '## Uploaded files' : '',
-    on('net')
-      ? 'Attachments (images, documents, archives…) go into your **workspace**, never into this prompt — read them' + '\n' +
-        'with ws_list() / ws_read(name) (images come back into your eyes, text as text) or transform with ws_run.' + '\n' +
-        '**Never guess what a file contains**; if nothing is there, say so instead of inventing content.'
-      : '',
-    '',
-    unrestricted
-      ? '## Current windows (live snapshot — the only source of truth)'
-      : '## Your scope (this is all you can see)',
-    windowsText(scoped),
-    '',
-    // 默认窗口（Nodes / 设置 / Trace / 每个输入框）不是组件，但也是窗口 —— 得让 Agent 看得到。
-    // 受限作用域的 Agent 看不到它们：它本来也改不动宿主界面。
-    unrestricted && input.defaultWindows
-      ? '## Default windows (not components; they can still be moved, resized, shown or hidden)'
-      : '',
-    unrestricted && input.defaultWindows ? input.defaultWindows : '',
-    unrestricted && input.defaultWindows
-      ? 'Move / resize with the "panel" field of update_component; show / hide with it in set_window_state.'
-      : '',
-    '',
-    '## Current agents (live snapshot)',
-    agentsText(scoped),
-    '',
+    on("net") ? "## Uploaded files" : "",
+    on("net")
+      ? "Attachments (images, documents, archives…) go into your **workspace**, never into this prompt — read them" + "\n" +
+        "with ws_list() / ws_read(name) (images come back into your eyes, text as text) or transform with ws_run." + "\n" +
+        "**Never guess what a file contains**; if nothing is there, say so instead of inventing content."
+      : "",
+    "",
     // 快照也按能力给：没开样式开关就不必把它整份样式表塞进上下文。
     // 精简模式：样式 / 插槽 / 工具目录不进快照 —— 它们都能用 inspect 现取，
     // 而每轮都发是白花钱（这一段占首轮快照的一半以上）。
-    !terse && (on('style') || on('global')) ? '## Current style tokens' : '',
-    !terse && (on('style') || on('global')) ? themeText(input.tokens, true) : '',
-    !terse ? '' : '',
-    !terse && on('global') ? '## Current surface slots' : '',
-    !terse && on('global') ? surfacesText(true) : '',
-    !terse && on('tools') ? '## Available tools' : '',
-    !terse && on('tools') ? toolCatalogText(input.tools) : '',
-    '',
+    !terse && (on("style") || on("global")) ? "## Current style tokens" : "",
+    !terse && (on("style") || on("global")) ? themeText(input.tokens, true) : "",
+    !terse && on("global") ? "## Current surface slots" : "",
+    !terse && on("global") ? surfacesText(true) : "",
+    !terse && on("tools") ? "## Available tools" : "",
+    !terse && on("tools") ? toolCatalogText(input.tools) : "",
+    "",
     /*
      * 工作区：只在开了 net 能力时才有意义（工作区的 op 全挂在 net 下）。
      * 这里**只点出它存在与最重要的那条规则**（嵌入是复制、工作区是临时的），
      * 具体用法在接口目录与各自 description 里 —— 提示词不是手册。
      */
-    !terse && on('net') ? '## Scratch workspace (temporary)' : '',
-    !terse && on('net')
-      ? 'A temporary bench for files: ws_write / ws_read, and **ws_run** to transform them (a small script whose' + '\n' +
-        'input and output are both the workspace). ⚠ **Do not build a component just to compute** (parse, convert,' + '\n' +
-        'rewrite, combine) — that is ws_run, and it leaves nothing on the desktop; a component is for *showing* a' + '\n' +
-        'result. ws_run returns nothing usable: write the result back and deliver it by embedding.' + '\n' +
-        'It is **not** storage (not saved with the scene, the user can clear it). To deliver, put the marker' + '\n' +
-        '"@ws/<name>" in a component source — the content is **copied in** then, and afterwards the two are' + '\n' +
-        'unrelated. A big payload appears as [#N ... hidden on purpose]; read it with ws_hidden(ref: N).'
-      : '',
-    '',
+    !terse && on("net") ? "## Scratch workspace (temporary)" : "",
+    !terse && on("net")
+      ? "A temporary bench for files: ws_write / ws_read, and **ws_run** to transform them (a small script whose" + "\n" +
+        "input and output are both the workspace). ⚠ **Do not build a component just to compute** (parse, convert," + "\n" +
+        "rewrite, combine) — that is ws_run, and it leaves nothing on the desktop; a component is for *showing* a" + "\n" +
+        "result. ws_run returns nothing usable: write the result back and deliver it by embedding." + "\n" +
+        "It is **not** storage (not saved with the scene, the user can clear it). To deliver, put the marker" + "\n" +
+        '"@ws/<name>" in a component source — the content is **copied in** then, and afterwards the two are' + "\n" +
+        "unrelated. A big payload appears as [#N ... hidden on purpose]; read it with ws_hidden(ref: N)."
+      : "",
+    "",
     /*
      * 已启用的插件：**每个只占一行**（名字 + 它提供的操作）。
      * 用法在插件的 guide.md 里，靠 plugin_docs 按需取 —— 把指南全铺在这里，
      * 装三个插件就等于每轮多几千字，而且这些字会进缓存前缀，一动全失效。
      */
-    pluginsText() ? '## Plugins (installed and enabled)' : '',
+    pluginsText() ? "## Plugins (installed and enabled)" : "",
     pluginsText(),
-    pluginsText() ? 'Read a plugin guide with plugin_docs("<id>") before using its operations.' : '',
-  ]
-    .filter((l) => l !== '')
-    .join('\n');
+    pluginsText() ? 'Read a plugin guide with plugin_docs("<id>") before using its operations.' : "",
+  ];
+  /*
+   * 逐轮会变的三段，按"变得有多勤"从低到高排：窗口 / agent 通常只在建删窗口时变，
+   * 账本每轮都会追加 —— 所以账本必须最后（它一变，前面全都能复用）。
+   */
+  const live: string[] = [
+    unrestricted
+      ? "## Current windows (live snapshot — the only source of truth)"
+      : "## Your scope (this is all you can see)",
+    windowsText(scoped),
+    "",
+    // 默认窗口（Nodes / 设置 / Trace / 每个输入框）不是组件，但也是窗口 —— 得让 Agent 看得到。
+    // 受限作用域的 Agent 看不到它们：它本来也改不动宿主界面。
+    unrestricted && input.defaultWindows
+      ? "## Default windows (not components; they can still be moved, resized, shown or hidden)"
+      : "",
+    unrestricted && input.defaultWindows ? input.defaultWindows : "",
+    unrestricted && input.defaultWindows
+      ? 'Move / resize with the "panel" field of update_component; show / hide with it in set_window_state.'
+      : "",
+    "",
+    "## Current agents (live snapshot)",
+    agentsText(scoped),
+  ];
+  /*
+   * 账本**压在最后**：它每轮都会追加一条，是这一节里唯一"几乎每轮必变"的段。
+   * 放最后 = 它一变，前面所有内容（含窗口与 agent）仍然命中缓存。
+   */
+  const ledger = ledgerRules(input.ledger, input.nodes);
+  return [...stable, ...live, ...(ledger.length > 0 ? ["", ...ledger] : [])]
+    .filter((l) => l !== "")
+    .join("\n");
 }
 
 /**

@@ -743,22 +743,32 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         // 显式标出"这一条才是本次任务"：历史里那一串旧请求不加标记时，
         // 模型会把它们当成还没做完的事，于是把上一个任务又做一遍。
         const requestMessage: ChatMessage = { role: 'user', content: userContent(requestText) };
-        const tailMessage: ChatMessage = {
-          role: 'user',
-          content:
-            (observationLog.length > 0 ? buildObservationPrompt(observationLog) + '\n\n' : '') + snapshotPrompt,
-        };
-        /** 历史能占多少 token：阈值减去系统提示 / 请求 / 观察快照这几块的估算。 */
+        /*
+         * 尾部拆成**两条消息**，顺序是「快照在前、观察在后」。
+         *
+         * 以前两者拼成一条（观察在前），那是最坏的排法：观察段每轮都重排
+         * （预算一满就丢最老的、新一轮又插进来），它的第一个字节就变，于是**整份快照**
+         * 也跟着作废 —— 哪怕桌面状态一个字节都没动。实测 8 轮真实请求体：
+         * 拼成一条（观察在前）命中 75.2%；拆成两条且快照在前，命中 91.6%。
+         *
+         * 放在**最后**是因为它是这一轮唯一"注定要变"的东西：放最后 = 它变只影响自己。
+         */
+        const snapshotMessage: ChatMessage = { role: 'user', content: snapshotPrompt };
+        const observationMessage: ChatMessage | null =
+          observationLog.length > 0 ? { role: 'user', content: buildObservationPrompt(observationLog) } : null;
+        /** 历史能占多少 token：阈值减去系统提示 / 请求 / 快照 / 观察这几块的估算。 */
+        const fixedTail = (): ChatMessage[] =>
+          observationMessage ? [snapshotMessage, observationMessage] : [snapshotMessage];
         const historyBudget = (): number => {
           const threshold = compactThresholdTokens(store.settings.contextWindow, store.settings.compactAt);
           if (threshold <= 0) return 0;
-          return Math.max(0, threshold - estimateTokensOf([systemMessage, requestMessage, tailMessage]));
+          return Math.max(0, threshold - estimateTokensOf([systemMessage, requestMessage, ...fixedTail()]));
         };
         const buildMessages = (budgetTokens: number | undefined): ChatMessage[] => [
           systemMessage,
           ...historyMessages(originId, sessionId, requestText, budgetTokens),
           requestMessage,
-          tailMessage,
+          ...fixedTail(),
         ];
         /*
          * 先**完整**拼一份（不削历史）再看有没有到阈值：
