@@ -1,29 +1,77 @@
 {
   "id": "toolbox",
   "name": "工具箱",
-  "version": "1.0",
+  "version": "2.0",
   "author": "Yggdrasil",
   "minAppVersion": "0.1",
-  "description": "示例插件：向 Agent 提供**新工具**（与内置 calc / now 同列，用 call_tool 调），而不是新操作。",
+  "description": "示例插件：向 Agent 提供**新工具**（与内置 calc / now 同列，用 call_tool 调），而不是新操作。这八个都是它自己做不到、或做起来容易出错的。",
   "hosts": [],
   "fields": [],
   "endpoints": [],
   "tools": [
     {
-      "name": "text_stats",
-      "label": "文本统计",
-      "description": "Count characters / words / lines of a block of text and return the most frequent words. A **tool** (not an operation): it is listed under \"Available tools\" and you call it with call_tool. Use it when you would otherwise estimate counts by eye. No network.",
-      "file": "tools/text-stats.js",
+      "name": "stats",
+      "label": "数值统计",
+      "description": "Median / mean / stddev (population and sample) / percentiles (p25..p99) / IQR for a list of numbers. Use it instead of doing statistics in your head — the built-in calc only evaluates one arithmetic expression and cannot do these. Pass numbers separated by commas, spaces or newlines.",
+      "file": "tools/stats.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "values",
+          "description": "the numbers, separated by comma / space / newline",
+          "required": true
+        }
+      ],
+      "paramsSchema": {
+        "type": "object",
+        "properties": {
+          "values": {
+            "type": "string",
+            "description": "the numbers, separated by comma / space / newline"
+          }
+        },
+        "required": [
+          "values"
+        ]
+      },
+      "cap": null,
+      "timeoutMs": 5000,
+      "example": {
+        "kind": "call_tool",
+        "name": "stats",
+        "args": {
+          "values": "3, 8, 12, 7, 15, 21"
+        }
+      }
+    },
+    {
+      "name": "regex_extract",
+      "label": "正则提取",
+      "description": "Run a regular expression over text and return **every** match with its capture groups (plus a flattened list when you ask for one group). Use it whenever you must extract identifiers / prices / URLs from a longer body: you cannot reliably enumerate exact matches by reading, and a wrong answer looks plausible. The global flag is forced on.",
+      "file": "tools/regex_extract.js",
       "exposeAs": "tool",
       "params": [
         {
           "name": "text",
-          "description": "the text to analyse",
+          "description": "the text to search",
           "required": true
         },
         {
-          "name": "top",
-          "description": "how many frequent words to return (default 5)"
+          "name": "pattern",
+          "description": "the regex source, WITHOUT the surrounding slashes",
+          "required": true
+        },
+        {
+          "name": "flags",
+          "description": "extra flags: i m s u y (g is always on)"
+        },
+        {
+          "name": "group",
+          "description": "if given, also return a flat list of that group (1-based number, or a named group)"
+        },
+        {
+          "name": "limit",
+          "description": "max matches, default 100, max 500"
         }
       ],
       "paramsSchema": {
@@ -31,11 +79,339 @@
         "properties": {
           "text": {
             "type": "string",
-            "description": "the text to analyse"
+            "description": "the text to search"
           },
-          "top": {
+          "pattern": {
             "type": "string",
-            "description": "how many frequent words to return, default 5"
+            "description": "the regex source, WITHOUT the surrounding slashes"
+          },
+          "flags": {
+            "type": "string",
+            "description": "extra flags: i m s u y (g is always on)"
+          },
+          "group": {
+            "type": "string",
+            "description": "if given, also return a flat list of that group (1-based number, or a named group)"
+          },
+          "limit": {
+            "type": "string",
+            "description": "max matches, default 100, max 500"
+          }
+        },
+        "required": [
+          "text",
+          "pattern"
+        ]
+      },
+      "cap": null,
+      "timeoutMs": 5000,
+      "example": {
+        "kind": "call_tool",
+        "name": "regex_extract",
+        "args": {
+          "text": "id=ab12 id=cd34",
+          "pattern": "id=([a-z0-9]+)",
+          "group": "1"
+        }
+      }
+    },
+    {
+      "name": "json_query",
+      "label": "JSON 取值",
+      "description": "Pull just the fields you need out of a JSON payload: exact, and it keeps the payload out of your context. The path syntax is identical to a plugin endpoint's pick — dot separated, with [] on an array segment (data.items[].name). Pass the JSON as a string, or as an object/array directly.",
+      "file": "tools/json_query.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "json",
+          "description": "the JSON to query (a string, or the object/array itself)",
+          "required": true
+        },
+        {
+          "name": "path",
+          "description": "field path(s), one per line, e.g. data.items[].name",
+          "required": true
+        },
+        {
+          "name": "maxItems",
+          "description": "cap per array, default 10, max 50"
+        }
+      ],
+      "paramsSchema": {
+        "type": "object",
+        "properties": {
+          "json": {
+            "type": "string",
+            "description": "the JSON to query (a string, or the object/array itself)"
+          },
+          "path": {
+            "type": "string",
+            "description": "field path(s), one per line, e.g. data.items[].name"
+          },
+          "maxItems": {
+            "type": "string",
+            "description": "cap per array, default 10, max 50"
+          }
+        },
+        "required": [
+          "json",
+          "path"
+        ]
+      },
+      "cap": null,
+      "timeoutMs": 5000,
+      "example": {
+        "kind": "call_tool",
+        "name": "json_query",
+        "args": {
+          "json": "{\"items\":[{\"n\":\"a\"},{\"n\":\"b\"}],\"total\":2}",
+          "path": "total\nitems[].n"
+        }
+      }
+    },
+    {
+      "name": "diff_text",
+      "label": "逐行 diff",
+      "description": "Line-by-line diff of two texts: added / removed counts plus a unified-diff style body with context. Use it before writing a patch so you state exactly which lines change — counting changed lines by eye is where patches most often go wrong. Answers \"too large for an exact diff\" honestly rather than guessing.",
+      "file": "tools/diff_text.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "before",
+          "description": "the original text",
+          "required": true
+        },
+        {
+          "name": "after",
+          "description": "the changed text",
+          "required": true
+        },
+        {
+          "name": "context",
+          "description": "unchanged context lines around each change, default 2, max 20"
+        }
+      ],
+      "paramsSchema": {
+        "type": "object",
+        "properties": {
+          "before": {
+            "type": "string",
+            "description": "the original text"
+          },
+          "after": {
+            "type": "string",
+            "description": "the changed text"
+          },
+          "context": {
+            "type": "string",
+            "description": "unchanged context lines around each change, default 2, max 20"
+          }
+        },
+        "required": [
+          "before",
+          "after"
+        ]
+      },
+      "cap": null,
+      "timeoutMs": 5000,
+      "example": {
+        "kind": "call_tool",
+        "name": "diff_text",
+        "args": {
+          "before": "a\nb\nc",
+          "after": "a\nB\nc"
+        }
+      }
+    },
+    {
+      "name": "date_math",
+      "label": "日期运算",
+      "description": "Date arithmetic on a real calendar (month lengths, leap years) with an IANA timezone: add a span to a date, or measure the gap between two dates. Units are y / mo / w / d / h / mi / s (English words also work) — deliberately not a bare \"m\", the classic minute-vs-month bug. The built-in now only reports the current instant and does no arithmetic.",
+      "file": "tools/date_math.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "base",
+          "description": "starting instant, ISO format or \"now\" (default now)"
+        },
+        {
+          "name": "add",
+          "description": "how much to add, e.g. \"3d\", \"-2w\", \"1mo\", \"36h\""
+        },
+        {
+          "name": "until",
+          "description": "instead of add: another instant; returns the gap to it"
+        },
+        {
+          "name": "tz",
+          "description": "IANA timezone for the local rendering, default UTC"
+        }
+      ],
+      "paramsSchema": {
+        "type": "object",
+        "properties": {
+          "base": {
+            "type": "string",
+            "description": "starting instant, ISO format or \"now\" (default now)"
+          },
+          "add": {
+            "type": "string",
+            "description": "how much to add, e.g. \"3d\", \"-2w\", \"1mo\", \"36h\""
+          },
+          "until": {
+            "type": "string",
+            "description": "instead of add: another instant; returns the gap to it"
+          },
+          "tz": {
+            "type": "string",
+            "description": "IANA timezone for the local rendering, default UTC"
+          }
+        }
+      },
+      "cap": null,
+      "timeoutMs": 5000,
+      "example": {
+        "kind": "call_tool",
+        "name": "date_math",
+        "args": {
+          "base": "2024-02-28T00:00:00Z",
+          "add": "2d",
+          "tz": "Asia/Shanghai"
+        }
+      }
+    },
+    {
+      "name": "table_parse",
+      "label": "解析表格",
+      "description": "Parse CSV / TSV into JSON rows with named columns. Quoted fields are handled properly — a delimiter or newline inside quotes stays part of the field, and \"\" is one quote character — which is exactly where splitting on commas silently shifts every row. The delimiter is auto-detected unless you pass one.",
+      "file": "tools/table_parse.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "csv",
+          "description": "the table text",
+          "required": true
+        },
+        {
+          "name": "delimiter",
+          "description": "auto (default), or one of , ; | or tab"
+        },
+        {
+          "name": "header",
+          "description": "is the first row a header, default true"
+        },
+        {
+          "name": "limit",
+          "description": "max rows, default 100, max 500"
+        }
+      ],
+      "paramsSchema": {
+        "type": "object",
+        "properties": {
+          "csv": {
+            "type": "string",
+            "description": "the table text"
+          },
+          "delimiter": {
+            "type": "string",
+            "description": "auto (default), or one of , ; | or tab"
+          },
+          "header": {
+            "type": "string",
+            "description": "is the first row a header, default true"
+          },
+          "limit": {
+            "type": "string",
+            "description": "max rows, default 100, max 500"
+          }
+        },
+        "required": [
+          "csv"
+        ]
+      },
+      "cap": null,
+      "timeoutMs": 5000,
+      "example": {
+        "kind": "call_tool",
+        "name": "table_parse",
+        "args": {
+          "csv": "name,qty\n\"widget, large\",3\nbolt,10"
+        }
+      }
+    },
+    {
+      "name": "encode",
+      "label": "编码与摘要",
+      "description": "Encode / decode text: base64 both ways, URL, hex, plus sha256 and a char/byte length. Needed for things that are easy to get subtly wrong — a data: URI to embed a workspace file, a URL-encoded query value, a checksum. sha256 is implemented here instead of via crypto.subtle, because subtle exists only in a secure context and this app may be served over plain http on a LAN address.",
+      "file": "tools/encode.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "op",
+          "description": "base64_encode | base64_decode | url_encode | url_decode | hex_encode | hex_decode | sha256 | length",
+          "required": true
+        },
+        {
+          "name": "text",
+          "description": "the text to process",
+          "required": true
+        }
+      ],
+      "paramsSchema": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "description": "base64_encode | base64_decode | url_encode | url_decode | hex_encode | hex_decode | sha256 | length"
+          },
+          "text": {
+            "type": "string",
+            "description": "the text to process"
+          }
+        },
+        "required": [
+          "op",
+          "text"
+        ]
+      },
+      "cap": null,
+      "timeoutMs": 5000,
+      "example": {
+        "kind": "call_tool",
+        "name": "encode",
+        "args": {
+          "op": "sha256",
+          "text": "abc"
+        }
+      }
+    },
+    {
+      "name": "decode_layers",
+      "label": "层层解码",
+      "description": "Peel the escaping layers off a value and report what each layer was (JSON string, JS escapes, percent-encoding, HTML entities). Use it when an API hands back something like an escaped JSON string inside a string — guessing the nesting depth by eye is a common source of wrong conclusions. base64 is only suggested, never auto-decoded, since a string that merely happens to be valid base64 would decode into garbage.",
+      "file": "tools/decode_layers.js",
+      "exposeAs": "tool",
+      "params": [
+        {
+          "name": "text",
+          "description": "the escaped value",
+          "required": true
+        },
+        {
+          "name": "maxDepth",
+          "description": "how many layers to peel at most, default 5, max 10"
+        }
+      ],
+      "paramsSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "description": "the escaped value"
+          },
+          "maxDepth": {
+            "type": "string",
+            "description": "how many layers to peel at most, default 5, max 10"
           }
         },
         "required": [
@@ -43,76 +419,12 @@
         ]
       },
       "cap": null,
-      "timeoutMs": 3000,
+      "timeoutMs": 5000,
       "example": {
         "kind": "call_tool",
-        "name": "text_stats",
+        "name": "decode_layers",
         "args": {
-          "text": "the quick brown fox",
-          "top": "3"
-        }
-      }
-    },
-    {
-      "name": "slugify",
-      "label": "生成短名",
-      "description": "Turn a title into a url/id-safe slug (lowercase, ASCII, hyphen separated). A **tool**: call it with call_tool. Useful before naming a workspace file or a component id.",
-      "file": "tools/slugify.js",
-      "exposeAs": "tool",
-      "params": [
-        {
-          "name": "title",
-          "description": "the title to convert",
-          "required": true
-        }
-      ],
-      "paramsSchema": {
-        "type": "object",
-        "properties": {
-          "title": {
-            "type": "string",
-            "description": "the title to convert"
-          }
-        },
-        "required": [
-          "title"
-        ]
-      },
-      "cap": null,
-      "timeoutMs": 2000,
-      "example": {
-        "kind": "call_tool",
-        "name": "slugify",
-        "args": {
-          "title": "Hello World"
-        }
-      }
-    },
-    {
-      "name": "chunk",
-      "label": "切分数组",
-      "description": "A **tool** that splits an array into chunks of N. Call it with call_tool. Handy when you fetched a long list and want to lay it out in columns or paginate it.",
-      "file": "tools/chunk.js",
-      "exposeAs": "tool",
-      "params": [
-        {
-          "name": "items",
-          "description": "comma separated items",
-          "required": true
-        },
-        {
-          "name": "size",
-          "description": "chunk size, default 3"
-        }
-      ],
-      "cap": null,
-      "timeoutMs": 2000,
-      "example": {
-        "kind": "call_tool",
-        "name": "chunk",
-        "args": {
-          "items": "a,b,c,d,e",
-          "size": "2"
+          "text": "%7B%22a%22%3A1%7D"
         }
       }
     }

@@ -1,41 +1,61 @@
 # toolbox
 
-A demo plugin whose contribution is **new tools**, not new operations. Compare it with
+A demo plugin whose contribution is **new tools**, not new operations — compare it with
 `status-board`, which contributes operations.
 
-## The difference that matters
+## Why these tools exist
 
-| | this plugin | `status-board` |
+Every one of them covers something the Agent **cannot do itself, or gets wrong**:
+
+- its own tools (`create_tool`) can do pure computation, but it has to *write and compile* one
+  first — two extra rounds for arithmetic it should just be able to ask for;
+- the built-in tools are only `calc` (one arithmetic expression), `now` (the current instant)
+  and `random`. There is no statistics, no regex, no date arithmetic, no table parsing;
+- and for several of these, a wrong answer **looks plausible** — which is the real problem.
+  A model that miscounts the matches in a 5 KB log, or reads the wrong field out of a JSON blob,
+  produces something that reads fine and is wrong.
+
+## The eight
+
+| tool | what it is for | why it needs to be a tool |
 | --- | --- | --- |
-| what the Agent sees | three entries under **Available tools**, tagged `[plugin]` | operations in the operation catalog |
-| how the Agent calls it | `call_tool` with a name and named arguments | writes the op kind directly |
-| why | these are re-usable primitives the Agent should discover and re-apply | these are "do this one thing now" actions |
+| `stats` | median / mean / stddev (population **and** sample) / p25–p99 / IQR | `calc` cannot do statistics at all |
+| `regex_extract` | every match plus capture groups, with a flattened list if you name a group | enumerating exact matches by reading is exactly what models get wrong; `g` is forced on |
+| `json_query` | pull only the fields you need (`data.items[].name`) | reading a large JSON by eye is unreliable, and costs context |
+| `diff_text` | added / removed counts plus a unified-diff body | counting changed lines by eye is where patches go wrong |
+| `date_math` | add a span, or measure a gap, on a real calendar | `now` gives no arithmetic; month lengths and leap years are what models trip on |
+| `table_parse` | CSV / TSV → JSON rows | quoted fields with delimiters or newlines inside silently shift every row if you split naively |
+| `encode` | base64 both ways, URL, hex, sha256, byte length | easy to get subtly wrong; needed for data: URIs and checksums |
+| `decode_layers` | peel escaping layers and say what each one was | working out the nesting depth of an escaped payload by eye is guesswork |
 
-A plugin tool lands in the same list as the built-in `calc` / `now` / `random`, and as anything the
-Agent wrote itself with `create_tool`. Nothing about calling it is special — that is the point.
+## Three decisions worth knowing
 
-## What it gives you
-
-| tool | what it returns |
-| --- | --- |
-| `text_stats` | `chars`, `lines`, `cjkChars`, `words`, `uniqueWords`, `frequentWords[]` |
-| `slugify` | `slug` (lowercase ASCII, hyphen separated) |
-| `chunk` | `chunks[][]`, `chunkCount`, `total` |
-
-All three are pure computation: `cap` is `null`, so every Agent can use them, and the host allow-list
-is empty because none of them touches the network.
+1. **`date_math` clamps to the end of the month.** `2024-01-31 + 1mo` is **2024-02-29**, not
+   2024-03-02. The latter is what JavaScript's `setMonth` produces by overflowing "February 31st";
+   "one month later" to a human means the month's end, and that is what date libraries do.
+   This was the first real bug found while building it.
+2. **`date_math` does calendar arithmetic in UTC** and uses `tz` only for the rendered local time.
+   `setMonth`/`setDate` follow the *runner's* timezone, so the same input would give different
+   answers on different machines — a tool the Agent relies on should not have that kind of
+   uncertainty.
+3. **`decode_layers` never auto-decodes base64.** A string that merely happens to be valid base64
+   decodes into garbage, and garbage is worse than a hint. It is reported as a hint instead.
+   Likewise it does **not** treat "reformatting JSON" as a decode layer — that would add a step
+   that decoded nothing and hide how many layers were really there.
 
 ## Workflow
 
-    call_tool with name "text_stats" and args { "text": "<the text>", "top": "5" }
+    call_tool with name "stats" and args { "values": "3, 8, 12, 7, 15, 21" }
 
-Then use the numbers you got back. **Do not estimate counts by eye when a tool can count them** — the
-whole reason this is a tool rather than an operation is that the Agent can call it whenever it needs
-arithmetic on text, including twice in one round.
+Args may be passed as `--key=value` on the CLI. Note that all parameters arrive in the sandbox
+as **strings** (that is the plugin contract), so the tools parse numbers themselves — except
+`json_query`, which additionally accepts an object/array directly.
 
-## Two traps this plugin documents
+## Testing them without a browser
 
-1. `slugify` returns an empty slug for a Chinese title and says so, rather than inventing a pinyin
-   transliteration. Inventing one would look like a working feature while being a fabrication.
-2. `text_stats` reports `cjkChars` separately. Splitting on whitespace alone reports a whole paragraph
-   of Chinese as a single "word", which reads like a bug in the tool.
+    node scripts/try-plugin.mjs --dir plugins/toolbox
+    node scripts/try-plugin.mjs --dir plugins/toolbox tool:stats --values "3, 8, 12, 7, 15, 21"
+    node scripts/try-plugin.mjs --dir plugins/toolbox tool:encode --op sha256 --text abc
+
+All eight are pure computation (`cap: null`), so `hosts` is empty and nothing here touches
+the network — a network-backed plugin tool looks like `status-board.probe` instead.

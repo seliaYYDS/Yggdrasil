@@ -202,10 +202,18 @@ function clip(text: string, maxChars: number): { text: string; note: string } {
   };
 }
 
-/** 收集模型给的参数：只认声明过的名字，缺省的用 default，必填缺了就报错。 */
+/**
+ * 收集模型给的参数：只认声明过的名字，缺省的用 default，必填缺了就报错。
+ *
+ * `allowStructured`：允许对象/数组，并把它 **JSON.stringify 后**交给工具。
+ * 只有 **tool 形态**才开这个口子 —— 工具是在沙箱里跑 JS，收到一段 JSON 文本是很自然的输入
+ * （json_query 就是靠它才能让模型直接把对象传进来，而不用自己先手写转义）。
+ * 声明式端点不开：那里的参数要嵌进 URL 或请求体，把对象塞进去只会得到双重编码。
+ */
 function collectParams(
   e: PluginEndpoint,
   op: DerivationOp,
+  allowStructured = false,
 ): { ok: true; params: Record<string, string> } | { ok: false; error: string } {
   const params: Record<string, string> = {};
   for (const p of e.params ?? []) {
@@ -217,7 +225,15 @@ function collectParams(
       continue;
     }
     if (typeof raw !== 'string' && typeof raw !== 'number' && typeof raw !== 'boolean') {
-      return { ok: false, error: '参数 ' + p.name + ' 只能是字符串、数字或布尔值。' };
+      if (allowStructured && typeof raw === 'object' && raw !== null) {
+        // 对象/数组原样序列化成文本：工具那边 JSON.parse 就得到结构，模型不必自己转义。
+        params[p.name] = JSON.stringify(raw);
+        continue;
+      }
+      return {
+        ok: false,
+        error: '参数 ' + p.name + ' 只能是字符串、数字或布尔值' + (allowStructured ? '，或者对象/数组' : '') + '。',
+      };
     }
     params[p.name] = String(raw);
   }
@@ -411,7 +427,8 @@ async function executePluginTool(plugin: InstalledPlugin, tool: PluginTool, args
     );
   }
   const asOp = (args ?? {}) as Record<string, unknown>;
-  const collected = collectParams({ params: tool.params ?? [] } as PluginEndpoint, asOp as DerivationOp);
+  // 工具允许结构化参数（见 collectParams 的说明）。
+  const collected = collectParams({ params: tool.params ?? [] } as PluginEndpoint, asOp as DerivationOp, true);
   if (!collected.ok) return fail(collected.error);
   const res = await runTool({
     source,
