@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { WindowFrame } from '../host/WindowFrame';
-import { useDesktopStore, type PanelRect } from '../store/desktopStore';
+import { PAGE_DESIGN_SIZE, PAGE_MIN_SIZE, useDesktopStore, type PanelRect } from '../store/desktopStore';
 import { pluginPageKey, pluginPageWindowId, type PluginPageHost } from '../kernel/plugin/runtime';
 import { compileComponent } from '../host/compile';
 import { ErrorBoundary } from '../app/ErrorBoundary';
@@ -48,8 +48,8 @@ export function PluginPageWindow({ host, index }: { host: PluginPageHost; index:
   const fallback: PanelRect = {
     x: 96 + (index % 5) * 28,
     y: 130 + (index % 5) * 26,
-    w: 460,
-    h: 340,
+    w: PAGE_DESIGN_SIZE.w,
+    h: PAGE_DESIGN_SIZE.h,
   };
   const resolved = rect ?? host.page.rect ?? fallback;
 
@@ -83,8 +83,8 @@ export function PluginPageWindow({ host, index }: { host: PluginPageHost; index:
       onFocus={() => bringToFront(domId)}
       onMinimize={() => requestMinimize(domId)}
       onDelete={() => requestClose(domId)}
-      minW={220}
-      minH={140}
+      minW={PAGE_MIN_SIZE.w}
+      minH={PAGE_MIN_SIZE.h}
     >
       <ErrorBoundary onError={() => undefined}>{body}</ErrorBoundary>
     </WindowFrame>

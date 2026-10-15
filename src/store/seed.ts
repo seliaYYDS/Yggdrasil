@@ -222,7 +222,7 @@ export function describeSeed(seed: SeedFile): string[] {
   }
   if (d.settings) {
     const hasKey = typeof (d.settings as LlmSettings).apiKey === 'string';
-    lines.push('设置' + (hasKey ? '（**包含 API Key**）' : '（不含 API Key）'));
+    lines.push('设置' + (hasKey ? '（包含 API Key）' : '（不含 API Key）'));
   }
   if (lines.length === 0) lines.push('（文件里没有任何可导入的区块）');
   const when = seed.exportedAt ? new Date(seed.exportedAt).toLocaleString() : '未知时间';

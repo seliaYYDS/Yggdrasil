@@ -705,7 +705,7 @@ export function pluginDiff(prev: InstalledPlugin | undefined, next: InstalledPlu
   const nextPatches = new Set((next.prompts ?? []).map(patchKey));
   const newPatches = (next.prompts ?? []).filter((p) => !prevPatches.has(patchKey(p)));
   const gonePatches = (prev.prompts ?? []).filter((p) => !nextPatches.has(patchKey(p)));
-  if (newPatches.length) lines.push('**新增/改动了 Agent 提示词**：' + newPatches.length + ' 处');
+  if (newPatches.length) lines.push('新增/改动了 Agent 提示词：' + newPatches.length + ' 处');
   if (gonePatches.length) lines.push('移除了提示词改动：' + gonePatches.length + ' 处');
   add((next.pages ?? []).map((p) => p.label), '页面', (n) => !(prev.pages ?? []).some((p) => p.label === n));
   gone((prev.pages ?? []).map((p) => p.label), '页面', (n) => !(next.pages ?? []).some((p) => p.label === n));
@@ -720,9 +720,9 @@ export function pluginDiff(prev: InstalledPlugin | undefined, next: InstalledPlu
   const before = capOf(prev);
   const after = capOf(next);
   for (const c of after) if (!before.has(c)) lines.push('新增能力开关：' + c);
-  if (next.signature !== 'ok' && prev.signature === 'ok') lines.push('⚠ 这一版**没有有效签名**了（上一版有）');
+  if (next.signature !== 'ok' && prev.signature === 'ok') lines.push('⚠ 这一版没有有效签名了（上一版有）');
   if (prev.hash && next.hash && prev.hash !== next.hash && prev.version === next.version) {
-    lines.push('⚠ **版本号没变但内容变了**（' + prev.hash.slice(0, 8) + ' → ' + next.hash.slice(0, 8) + '）');
+    lines.push('⚠ 版本号没变但内容变了（' + prev.hash.slice(0, 8) + ' → ' + next.hash.slice(0, 8) + '）');
   }
   return lines;
 }

@@ -403,6 +403,16 @@ export const PANEL_MIN: Record<PanelKey, { w: number; h: number }> = {
 export const PANEL_MIN_SESSION = { w: 300, h: 70 };
 
 /**
+ * 插件页面的**设计尺寸**与尺寸下限。
+ *
+ * 与内置面板同理：视口变大时不该让窗口无限跟着长（否则"缩小再放大"会越放越大），
+ * 所以跟随视口时要按设计尺寸封顶。页面没有随包示例时这两个值就是唯一依据，
+ * 所以放在这里由**窗口**与**视口跟随**共用一份。
+ */
+export const PAGE_DESIGN_SIZE = { w: 460, h: 340 };
+export const PAGE_MIN_SIZE = { w: 220, h: 140 };
+
+/**
  * 把一个矩形夹进视口。
  *
  * 尺寸语义：正常情况下不低于 min，也不超过视口；
@@ -2307,13 +2317,52 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         }
       }
 
+      /*
+       * 插件页面也按同一套规则跟随。
+       *
+       * 它们与面板一样是"默认窗口"，只是几何存在自己的表里。漏掉它们的表现与漏掉面板完全一样：
+       * 缩小浏览器后页面留在原地，标题栏被挤到屏幕外，用户拖不回来。
+       * 封顶用声明的 rect（页面自己说的尺寸），没声明就用统一的设计尺寸 ——
+       * 与面板封顶在 DEFAULT_PANELS 是同一个理由：防棘轮。
+       */
+      const pageKeys = Object.keys(s.pluginPageRects);
+      const nextPageRects: Record<string, PanelRect> = {};
+      let pagesTouched = false;
+      for (const key of pageKeys) {
+        const r = s.pluginPageRects[key];
+        const dot = key.indexOf('.');
+        const page =
+          dot < 0
+            ? undefined
+            : s.plugins
+                .find((p) => p.id === key.slice(0, dot))
+                ?.pages?.find((g) => g.id === key.slice(dot + 1));
+        const capW = page?.rect?.w ?? PAGE_DESIGN_SIZE.w;
+        const capH = page?.rect?.h ?? PAGE_DESIGN_SIZE.h;
+        const fitted = fitRectToViewport(scaleOf(r), viewW, viewH, PAGE_MIN_SIZE.w, PAGE_MIN_SIZE.h);
+        const next = { ...fitted, w: Math.min(fitted.w, capW), h: Math.min(fitted.h, capH) };
+        nextPageRects[key] = next;
+        if (next.x !== r.x || next.y !== r.y || next.w !== r.w || next.h !== r.h) pagesTouched = true;
+      }
+
       return {
         viewW,
         viewH,
         sessions,
+        /*
+         * **五个面板一个都不能少。**
+         *
+         * 这里曾经只写了 inspector / settings / trace，plugins 与 workspace 漏在外面 ——
+         * 表现就是那两个窗口不跟随视口：缩小浏览器后它们留在原地，标题栏被挤到屏幕外。
+         * 三个"看起来正常"的面板掩盖了两个不正常的面板，所以断言要按 ALL_PANELS 逐个数，
+         * 而不是抽查一两个。
+         */
         inspectorRect: placePanel('inspector', s.inspectorRect),
         settingsRect: placePanel('settings', s.settingsRect),
         traceRect: placePanel('trace', s.traceRect),
+        pluginsRect: placePanel('plugins', s.pluginsRect),
+        workspaceRect: placePanel('workspace', s.workspaceRect),
+        ...(pagesTouched ? { pluginPageRects: nextPageRects } : {}),
         ...(touched ? { nodes } : {}),
       };
     });

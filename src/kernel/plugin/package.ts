@@ -13,6 +13,7 @@ import {
   type PluginUi,
 } from './types';
 import { readZip, safeEntryName, writeZip, ZipError } from './zip';
+import { plainLines } from '../text';
 
 /**
  * 插件包的解析与校验。
@@ -764,7 +765,7 @@ export function describeManifest(m: PluginManifest): string[] {
   if (ops.length) lines.push('提供的操作：' + ops.join('、'));
   if (asTools.length) {
     lines.push(
-      '**提供的新工具**（与内置工具同列，Agent 用 call_tool 调用）：' + asTools.map((t) => t.name).join('、'),
+      '提供的新工具（与内置工具同列，Agent 用 call_tool 调用）：' + asTools.map((t) => t.name).join('、'),
     );
   }
   const uis = m.ui ?? [];
@@ -779,7 +780,7 @@ export function describeManifest(m: PluginManifest): string[] {
    */
   const promptPatches = m.prompts ?? [];
   if (promptPatches.length) {
-    lines.push('**会改动 Agent 提示词**（' + promptPatches.length + ' 处）：');
+    lines.push('会改动 Agent 提示词（' + promptPatches.length + ' 处）：');
     for (const patch of promptPatches) {
       const label = patch.label ? patch.label + ' — ' : '';
       if (patch.op === 'substitute') {
@@ -790,7 +791,7 @@ export function describeManifest(m: PluginManifest): string[] {
          */
         lines.push(
           '    · ' + label + 'substitute：把整份提示词里的「' + (patch.find ?? '') + '」全部换成「' +
-            (patch.replace ?? '') + '」（**会改写全篇，包括输出契约**）',
+            (patch.replace ?? '') + '」（会改写全篇，包括输出契约）',
         );
         continue;
       }
@@ -803,10 +804,15 @@ export function describeManifest(m: PluginManifest): string[] {
   }
   const pages = m.pages ?? [];
   if (pages.length) {
-    lines.push('**会往界面加页面与按钮**：' + pages.map((p) => p.label + (p.open ? '（默认打开）' : '')).join('、'));
+    lines.push('会往界面加页面与按钮：' + pages.map((p) => p.label + (p.open ? '（默认打开）' : '')).join('、'));
   }
 
   const secrets = (m.fields ?? []).filter((f) => f.secret);
   if (secrets.length) lines.push('需要你填的密钥：' + secrets.map((f) => f.label).join('、'));
-  return lines;
+  /*
+   * 出口处统一纯文本化：这些行会**原样显示在安装确认里**，而其中不少内容来自
+   * 第三方清单（插件名、说明、页面名、补丁文字预览）。界面不认 markdown，
+   * 所以在这里兜住，而不是指望每个插件作者都不写 `**`。
+   */
+  return plainLines(lines);
 }

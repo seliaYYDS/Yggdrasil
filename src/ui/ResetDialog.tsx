@@ -77,7 +77,7 @@ export function ResetDialog() {
     <div className="ygg-overlay" onClick={() => !busy && setOpen(false)}>
       <div className="ygg-modal" onClick={(e) => e.stopPropagation()}>
         <div className="ygg-confirm-text">
-          重置：勾选要清除的内容。**连接与模型设置（含 API Key）始终保留**，此操作不可撤销。
+          重置：勾选要清除的内容。连接与模型设置（含 API Key）始终保留，此操作不可撤销。
         </div>
         {RESET_PART_INFO.map((p) => (
           <label className="ygg-seed-row" key={p.id}>
