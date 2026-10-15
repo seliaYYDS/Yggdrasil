@@ -500,57 +500,6 @@ button:focus:not(:focus-visible) { outline: none; }
   transition: left var(--ygg-t) var(--ygg-ease), top var(--ygg-t) var(--ygg-ease), width var(--ygg-t) var(--ygg-ease), height var(--ygg-t) var(--ygg-ease);
 }
 /*
- * 收尾：卡片渐隐 → 中间浮出「Yggdrasil」→ 文字与暗化**一起**淡出。
- *
- * 三段的时间轴都在这一个文件里，组件只负责"最后把这一层撤掉"（OUTRO_MS = 1600）：
- *     0–300ms      卡片渐隐（.ygg-intro-card.is-out）
- *   300–760ms      「Yggdrasil」浮现（.ygg-intro-outro-word）
- *  1100–1600ms     整层淡出（.ygg-intro-outro 自己）
- *
- * 最后一段放在**容器**上而不是分别放在文字与暗化上：这样"文字随背景暗化一起淡出"
- * 是同一个动画，不会出现两者节奏对不齐的缝。
- */
-.ygg-intro-outro {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  animation: ygg-intro-outro-out 500ms var(--ygg-ease) 1100ms both;
-}
-.ygg-intro-outro-dim {
-  position: absolute;
-  inset: 0;
-  background: color-mix(in srgb, var(--ygg-bg) 80%, transparent);
-  backdrop-filter: blur(7px);
-  -webkit-backdrop-filter: blur(7px);
-}
-.ygg-intro-outro-word {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--ygg-font-display);
-  font-size: 42px;
-  letter-spacing: .14em;
-  color: var(--ygg-accent-hi);
-  animation: ygg-intro-word-in 460ms var(--ygg-ease-out) 300ms both;
-}
-@keyframes ygg-intro-word-in {
-  from { opacity: 0; transform: scale(.96); }
-  to { opacity: 1; transform: scale(1); }
-}
-@keyframes ygg-intro-outro-out {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
-/* 收尾时那张卡片不再有按钮，只渐隐。 */
-.ygg-intro-card.is-out { animation: ygg-intro-card-out 300ms var(--ygg-ease) both; }
-@keyframes ygg-intro-card-out {
-  from { opacity: 1; }
-  to { opacity: 0; }
-}
-
-/*
  * 开场：金色的树展开。
  *
  * 每条枝用 `stroke-dashoffset` 从 1 走到 0 逐条"画出来"（`pathLength=1` 让各条路径的
