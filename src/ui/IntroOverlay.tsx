@@ -30,10 +30,23 @@ interface IntroStep {
 }
 
 /**
+ * 引导此刻处在哪一段。**导出是为了能被断言**：这三段的先后关系（树 → 卡片 → 都不显示）
+ * 是"说好的行为"，不该只存在于 JSX 的条件里靠人眼看。
+ */
+export function introPhase(step: number, tree: boolean): 'hidden' | 'tree' | 'card' {
+  if (step < 1 || step > INTRO_STEPS.length) return 'hidden';
+  return tree ? 'tree' : 'card';
+}
+
+/**
  * 步骤表。**导出是为了能被断言**：哪一步指向哪个控件、哪一步摆占位示例，
  * 都是"说好的行为"，不该只存在于源码里靠人眼看。
  */
 export const INTRO_STEPS: IntroStep[] = [
+  {
+    title: '欢迎来到 Yggdrasil',
+    body: ['用一句话生成界面。', '接下来按顺序说明配置与界面。'],
+  },
   {
     title: '配置模型',
     body: ['点右上角的 ⚙ 打开设置，在「入口」里填 Base / Key / Model。', '配置只存在本地。'],
@@ -72,14 +85,57 @@ export const INTRO_STEPS: IntroStep[] = [
   },
 ];
 
+/**
+ * 开场动画的时长。与 CSS 里 `ygg-intro-tree-in` 的时长**必须是同一个数** ——
+ * 动画结束时组件才把卡片放出来，对不上就会出现"树还没长完卡片就压上来"或"树走完了空等"。
+ */
+const TREE_MS = 1700;
+
+/**
+ * 开场：一棵金色的树展开。
+ *
+ * 用 SVG 的 `stroke-dashoffset` 逐条"画出来"（配合 `pathLength=1` 让每条路径的
+ * 归一化长度一致，不必为每根枝算 dash 长度），而不是放一张图做缩放 ——
+ * 缩放看起来是"图片变大"，画出来才是"树展开"。
+ * 只有描边、没有填充与阴影，与界面本身的画法一致。
+ */
+function IntroTree() {
+  return (
+    <div className="ygg-intro-tree" aria-hidden="true">
+      <svg viewBox="0 0 200 210" width="240" height="252">
+        <g fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+          <path pathLength={1} d="M100 200 L100 96" />
+          <path pathLength={1} d="M100 150 L62 116" />
+          <path pathLength={1} d="M100 132 L140 96" />
+          <path pathLength={1} d="M100 110 L70 76" />
+          <path pathLength={1} d="M100 96 L132 62" />
+          <path pathLength={1} d="M100 84 L100 40" />
+          <path pathLength={1} d="M74 80 L56 58" />
+          <path pathLength={1} d="M128 66 L146 42" />
+        </g>
+      </svg>
+    </div>
+  );
+}
+
 export function IntroOverlay() {
   const step = useDesktopStore((s) => s.introStep);
   const setIntroStep = useDesktopStore((s) => s.setIntroStep);
   const endIntro = useDesktopStore((s) => s.endIntro);
+  const tree = useDesktopStore((s) => s.introTree);
+  const setIntroTree = useDesktopStore((s) => s.setIntroTree);
   /** 目标控件的屏幕矩形；量不到就不挖洞（退化成整页压暗）。 */
   const [hole, setHole] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  const current = step >= 1 && step <= INTRO_STEPS.length ? INTRO_STEPS[step - 1] : null;
+  /* 开场动画：时间到了就交给卡片。定时器与 CSS 动画用同一个常量。 */
+  useEffect(() => {
+    if (!tree) return;
+    const timer = window.setTimeout(() => setIntroTree(false), TREE_MS);
+    return () => window.clearTimeout(timer);
+  }, [tree, setIntroTree]);
+
+  const phase = introPhase(step, tree);
+  const current = phase === 'hidden' ? null : INTRO_STEPS[step - 1];
   const target = current?.target;
 
   useEffect(() => {
@@ -107,7 +163,7 @@ export function IntroOverlay() {
     };
   }, [target, step]);
 
-  if (!current) return null;
+  if (!current || !phase || phase === 'hidden') return null;
   const last = step === INTRO_STEPS.length;
 
   /*
@@ -134,13 +190,14 @@ export function IntroOverlay() {
         占位示例：只在声明了 demo 的那两步出现，画在模糊层**之上**（所以它是清楚的），
         并且随引导一起卸载 —— 不进节点树、不落盘、不可交互。
       */}
+      {phase === 'tree' ? <IntroTree /> : null}
       {current.demo === 'window' ? (
         <div className="ygg-intro-demo-window" data-ygg-intro="demo-window">
           <div className="ygg-intro-demo-title">示例组件</div>
           <div className="ygg-intro-demo-body">窗口内容</div>
         </div>
       ) : null}
-      {current.demo === 'taskbar' ? (
+      {phase === 'card' && current.demo === 'taskbar' ? (
         <div className="ygg-intro-demo-task" data-ygg-intro="demo-taskbar">
           示例窗口
         </div>
@@ -161,6 +218,7 @@ export function IntroOverlay() {
       </button>
 
       {/* key 跟着步骤走：每翻一步都重播一次入场动画，节奏比"整块只播一次"更容易跟上。 */}
+      {phase === 'card' ? (
       <div className="ygg-intro-card" key={step} role="dialog" aria-label="初始引导">
         <div className="ygg-intro-count">
           {step} / {INTRO_STEPS.length}
@@ -183,6 +241,7 @@ export function IntroOverlay() {
           </button>
         </div>
       </div>
+      ) : null}
     </div>
   );
 }

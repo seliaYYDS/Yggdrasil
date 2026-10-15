@@ -1101,6 +1101,16 @@ interface DesktopState {
   introStep: number;
   /** 引导看过没有。首次打开自动播一遍，之后只在设置里手动重放。 */
   introSeen: boolean;
+  /**
+   * 是否停在**开场动画**那一段（金色树展开）。
+   *
+   * 它是"引导之前的一段"，不是一步卡片：所以单独一个开关，而不是把它塞进 introStep ——
+   * 那样就要给"第 0 步"和"没在引导"两个意思各找一个数，读代码的人必然搞混。
+   * 动画播完由组件把它关掉，卡片才开始出现。
+   */
+  introTree: boolean;
+  /** 开场动画播完（由引导组件在动画结束时调用）。 */
+  setIntroTree: (on: boolean) => void;
   /** 从头播一遍引导（首次打开与设置里的"重放引导"都走它）。 */
   startIntro: () => void;
   setIntroStep: (step: number) => void;
@@ -1538,6 +1548,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   seedDialog: null,
   introStep: 0,
   introSeen: false,
+  introTree: false,
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -1708,6 +1719,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
        * 但仍需要认识这个界面 —— 引导里也包含这部分。
        */
       introStep: introSeen ? 0 : 1,
+      // 首次打开先播开场动画（与设置里的"重放引导"同一条路）。
+      introTree: introSeen !== true,
       introSeen: introSeen === true,
       zCounter: z ?? 10 + Object.keys(safeNodes).length,
       panelZ: {
@@ -2130,10 +2143,12 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
 
   setSeedDialog: (mode) => set({ seedDialog: mode }),
 
-  startIntro: () => set({ introStep: 1 }),
+  // 从开场动画开始：树展开 → 欢迎 → 后面各步。
+  startIntro: () => set({ introStep: 1, introTree: true }),
   setIntroStep: (step) => set({ introStep: Math.max(1, Math.round(step)) }),
+  setIntroTree: (on) => set({ introTree: on }),
   endIntro: () => {
-    set({ introStep: 0, introSeen: true });
+    set({ introStep: 0, introTree: false, introSeen: true });
     // 看过就记下来，否则每次刷新都会再拦一次。
     schedulePersist();
   },

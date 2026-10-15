@@ -500,6 +500,52 @@ button:focus:not(:focus-visible) { outline: none; }
   transition: left var(--ygg-t) var(--ygg-ease), top var(--ygg-t) var(--ygg-ease), width var(--ygg-t) var(--ygg-ease), height var(--ygg-t) var(--ygg-ease);
 }
 /*
+ * 开场：金色的树展开。
+ *
+ * 每条枝用 `stroke-dashoffset` 从 1 走到 0 逐条"画出来"（`pathLength=1` 让各条路径的
+ * 归一化长度一致，不必为每根枝算 dash 长度）。只描边、不填充、不加阴影 ——
+ * 与界面本身的画法一致；渐变与发光在这个界面里本来就不该出现。
+ *
+ * 时序：外层的 `ygg-intro-tree-in` 负责整体"出现 → 停留 → 淡出"，
+ * 内层每条枝按 `animation-delay` 依次长出来。总时长 1700ms，
+ * 与组件里的 TREE_MS **必须一致**。
+ */
+.ygg-intro-tree {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ygg-accent-hi);
+  pointer-events: none;
+  animation: ygg-intro-tree-in 1700ms var(--ygg-ease-out) both;
+}
+.ygg-intro-tree path {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: ygg-intro-branch 640ms var(--ygg-ease-out) both;
+}
+/* 主干先长，然后左右交替 —— 顺序本身读起来就是"展开"。 */
+.ygg-intro-tree path:nth-child(1) { animation-delay: 0ms; }
+.ygg-intro-tree path:nth-child(2) { animation-delay: 170ms; }
+.ygg-intro-tree path:nth-child(3) { animation-delay: 260ms; }
+.ygg-intro-tree path:nth-child(4) { animation-delay: 370ms; }
+.ygg-intro-tree path:nth-child(5) { animation-delay: 470ms; }
+.ygg-intro-tree path:nth-child(6) { animation-delay: 570ms; }
+.ygg-intro-tree path:nth-child(7) { animation-delay: 670ms; }
+.ygg-intro-tree path:nth-child(8) { animation-delay: 770ms; }
+@keyframes ygg-intro-branch {
+  from { stroke-dashoffset: 1; }
+  to { stroke-dashoffset: 0; }
+}
+@keyframes ygg-intro-tree-in {
+  0% { opacity: 0; transform: scale(.88); }
+  16% { opacity: 1; }
+  76% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.03); }
+}
+
+/*
  * 「窗口与组件」与「任务栏」两步摆出来的**占位示例**。
  *
  * 界面上本来是空的（没有窗口、没有最小化过的东西），只靠文字讲"窗口能拖"是空口白话。
