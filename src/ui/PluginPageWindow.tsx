@@ -21,7 +21,12 @@ export function PluginPageWindow({ host, index }: { host: PluginPageHost; index:
   const domId = pluginPageWindowId(host.plugin.id, host.page.id);
   const rect = useDesktopStore((s) => s.pluginPageRects[key]);
   const minimized = useDesktopStore((s) => !!s.minimizedPanels['page:' + key]);
-  const z = useDesktopStore((s) => s.panelZ[domId] ?? 1);
+  /*
+   * 层级读**裸键**（`brief.audit`），不是带前缀的 DOM id —— 与内置面板同一套约定：
+   * DOM id 带 `page-`/`panel-` 前缀，层级表里存的是不带前缀的那个键。
+   * 读错了会一直是 undefined，于是永远用兜底值，也就永远在最底层。
+   */
+  const z = useDesktopStore((s) => s.panelZ[key] ?? 1);
   const focusedId = useDesktopStore((s) => s.focusedId);
   const bringToFront = useDesktopStore((s) => s.bringToFront);
   const setRect = useDesktopStore((s) => s.setPluginPageRect);

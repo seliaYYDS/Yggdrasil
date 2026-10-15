@@ -111,28 +111,12 @@ function TopRight() {
               else setPageOpen(key, true);
             }}
           >
+            {/*
+              按钮**只有图标**，页面名放在 title 里 —— 与这一排其它按钮（节点树 / 工作区 / 设置）
+              完全一致。加一行文字会把这一排的节奏打乱，而且它是"永久占位"的，
+              页面一多就把别的按钮挤走；名字本来就是 hover 才需要的信息。
+            */}
             <PluginIcon />
-            <span className="tag">{h.page.label}</span>
-          </button>
-        );
-      })}
-      {pages.map((h) => {
-        const key = pluginPageKey(h.plugin.id, h.page.id);
-        const domId = pluginPageWindowId(h.plugin.id, h.page.id);
-        const open = pageOpen[key] === true && !pageMinimized['page:' + key];
-        return (
-          <button
-            key={key}
-            className={'ygg-topbtn' + (open ? ' is-on' : '')}
-            title={h.page.description || h.plugin.name + ' · ' + h.page.label}
-            onClick={() => {
-              // 已开 → 抬到最上层（工具栏按钮的惯例是"打开/聚焦"）；要关就用窗口右上角的 ✕。
-              if (open) bringToFront(domId);
-              else setPageOpen(key, true);
-            }}
-          >
-            <PluginIcon />
-            <span className="tag">{h.page.label}</span>
           </button>
         );
       })}

@@ -1707,6 +1707,24 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         return { zCounter: z, panelZ: { ...s.panelZ, [key]: z }, focusedId: id };
       }
 
+      /*
+       * 插件页面也是常驻窗口，也要能被抬到最上层。
+       *
+       * 少了这一条：点它（或点工具栏按钮）层级一动不动，它一直停在 panelZ 的兜底值，
+       * 而组件从 10 起算 —— 表现就是"插件窗口永远在最底层"，怎么点都上不来。
+       * 键与内置面板同一套约定：**DOM id 带前缀、层级存裸键**。
+       */
+      if (id.startsWith('page-')) {
+        const key = id.slice('page-'.length);
+        // 用**这一份** plugins 判断页面还在不在（而不是去问运行时模块）：
+        // 同一个快照里做判断，插件刚被卸掉时也不会把层级写给一个已经不在的页面。
+        const known = s.plugins.some(
+          (p) => p.enabled && (p.pages ?? []).some((pg) => p.id + '.' + pg.id === key),
+        );
+        if (!known) return s;
+        return { zCounter: z, panelZ: { ...s.panelZ, [key]: z }, focusedId: id };
+      }
+
       // 输入会话也是窗口，和面板、组件共用一套层级。
       if (s.sessions.some((ses) => ses.id === id)) {
         return {
@@ -2437,7 +2455,20 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   },
 
   setPluginPageOpen: (key, open) => {
-    set((s) => ({ pluginPageOpen: { ...s.pluginPageOpen, [key]: open } }));
+    set((s) => {
+      const next: Partial<DesktopState> = { pluginPageOpen: { ...s.pluginPageOpen, [key]: open } };
+      /*
+       * **打开就等于抬到最上层**，与点一个面板同义。
+       * 不这么做的话新开的页面会落在组件下面（组件从 10 起算，页面还没有层级），
+       * 用户点完按钮看不到窗口，只会以为按钮坏了。
+       */
+      if (open) {
+        const z = s.zCounter + 1;
+        next.zCounter = z;
+        next.panelZ = { ...s.panelZ, [key]: z };
+      }
+      return next;
+    });
     schedulePersist();
   },
 
