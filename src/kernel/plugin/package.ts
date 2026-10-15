@@ -118,6 +118,16 @@ const CAPS: (ActCap | null)[] = ['desktop', 'style', 'global', 'net', 'browser',
 export const MAX_ENDPOINTS = 60;
 /** 一条提示词补丁的文字上限。够写一段要求，又不至于把系统提示挤爆。 */
 export const MAX_PATCH_TEXT = 4000;
+/** 插件图标：最多几条 path、单条多长。够画一个图标，又不至于塞进来一张画。 */
+export const MAX_ICON_PATHS = 12;
+export const MAX_ICON_PATH_CHARS = 2000;
+/**
+ * SVG path 的 `d` 允许出现的字符（白名单）。
+ *
+ * 只有路径命令、数字、正负号、小数点、指数与分隔符 —— 于是它**只能是路径**：
+ * `<`、`>`、引号、括号都进不来，注入这条路从根上没有了。
+ */
+export const SVG_PATH_RE = /^[MmLlHhVvCcSsQqTtAaZz0-9eE.,+\-\s]+$/;
 
 /** a >= b。 */
 export function versionAtLeast(a: string, b: string): boolean {
@@ -354,6 +364,34 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     if (!/^ui\/[a-z][a-z0-9_-]{0,30}\.tsx$/.test(pfile)) {
       return bad('page ' + pid + ' 的 file 要形如 ui/xxx.tsx（现在是 "' + pfile + '"）。');
     }
+    /*
+     * 图标：只收 SVG path 的 `d`。
+     *
+     * 这条校验是**白名单**而不是黑名单：只允许路径命令与数字/分隔符。
+     * 于是 `<`、引号、`javascript:` 这些根本写不进来，不需要再逐条去挡
+     * （黑名单漏一条就等于开了一个口子）。
+     */
+    let icon: string[] | undefined;
+    if (o.icon !== undefined) {
+      const rawIcon = Array.isArray(o.icon) ? o.icon : [o.icon];
+      if (rawIcon.length === 0 || rawIcon.length > MAX_ICON_PATHS) {
+        return bad('page ' + pid + ' 的 icon 最多 ' + MAX_ICON_PATHS + ' 条 path，也不能为空。');
+      }
+      const out: string[] = [];
+      for (const piece of rawIcon) {
+        if (typeof piece !== 'string') return bad('page ' + pid + ' 的 icon 只能是字符串或字符串数组（SVG path 的 d）。');
+        const d = piece.trim();
+        if (!d) return bad('page ' + pid + ' 的 icon 里有一条空的 path。');
+        if (d.length > MAX_ICON_PATH_CHARS) {
+          return bad('page ' + pid + ' 的 icon 有一条太长（' + d.length + ' 字符，上限 ' + MAX_ICON_PATH_CHARS + '）。');
+        }
+        if (!SVG_PATH_RE.test(d)) {
+          return bad('page ' + pid + ' 的 icon 里有不是 SVG path 的字符：' + d.slice(0, 40));
+        }
+        out.push(d);
+      }
+      icon = out;
+    }
     pages.push({
       id: pid,
       label: plabel,
@@ -362,6 +400,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
       open: o.open === true,
       rect: o.rect && typeof o.rect === 'object' ? (o.rect as PluginPage['rect']) : undefined,
       data: o.data,
+      icon,
     });
   }
 

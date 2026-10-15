@@ -481,6 +481,15 @@ button:focus:not(:focus-visible) { outline: none; }
 /* 图标统一跟随文字颜色、随 hover 一起变化 */
 .ygg-topbtn svg { display: block; }
 
+/*
+ * 插件页面的按钮组：**一个插件一组**，组间多留一点间距。
+ *
+ * 用留白而不是竖线：这一排（以及整个界面）本来就靠留白与底色分层，
+ * "内部不画分界线"是既定的做法 —— 插一条竖线只会让这一组看起来像另一种控件。
+ */
+.ygg-topgroup { display: inline-flex; gap: 5px; }
+.ygg-topgroup + .ygg-topgroup { margin-left: 7px; }
+
 .ygg-topbtn {
   position: relative;
   width: 30px;

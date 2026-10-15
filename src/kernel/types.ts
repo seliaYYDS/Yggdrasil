@@ -181,6 +181,16 @@ export interface PluginPage {
   rect?: { x: number; y: number; w: number; h: number };
   /** 渲染时注入成模块顶层常量 data（与 plugin_ui 同一套机制）。 */
   data?: unknown;
+  /**
+   * **工具栏按钮的图标**：SVG path 的 `d`（一条或多条），Lucide 那套 24×24 坐标。
+   *
+   * 为什么收 path 而不是收一段 SVG 标记或一个组件：
+   * - path 是**纯数据**，可以直接检查（只允许路径字符），不可能塞进脚本或事件属性；
+   * - 入库的图标与宿主图标共用同一套描边/圆角/currentColor，观感一致 ——
+   *   让插件交一段自己的 svg，写出来的粗细与颜色几乎必然和这一排对不上；
+   * - 不写就退回通用图标，老插件不受影响。
+   */
+  icon?: string[];
 }
 
 export interface ComponentNode extends BaseNode {

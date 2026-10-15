@@ -34,7 +34,12 @@
             "text": "## Keep it short\nKeep the \"reasoning\" field to **one short sentence (at most ~20 words)** and never restate the user request.\nThe user reads the ops, not your prose — a long reasoning pushes the thing they asked about out of view."
           }
         ]
-      }
+      },
+      "icon": [
+        "M21 6H3",
+        "M15 12H3",
+        "M17 18H3"
+      ]
     }
   ]
 }

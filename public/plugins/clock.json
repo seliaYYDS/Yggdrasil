@@ -1,0 +1,30 @@
+{
+  "format": "yggdrasil.plugin",
+  "manifest": {
+    "id": "clock",
+    "name": "时钟",
+    "version": "1.0",
+    "author": "Yggdrasil",
+    "minAppVersion": "0.1",
+    "description": "示例插件：只给界面加一个页面（工具栏一个按钮 + 一个常驻窗口），不碰网络也不碰提示词。",
+    "hosts": [],
+    "fields": [],
+    "endpoints": [],
+    "pages": [
+      {
+        "id": "clock",
+        "label": "时钟",
+        "description": "一个走着的时钟（用来演示插件页面是真的在跑的组件）",
+        "file": "ui/clock-page.tsx",
+        "icon": [
+          "M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20",
+          "M12 7v5l3 2"
+        ]
+      }
+    ]
+  },
+  "guide": "# clock\n\n最小的\"给界面加一个页面\"的例子：一个走着的时钟，外加一个\"记下此刻\"按钮。\n\n它只用 React 自己的状态（`useState` + `setInterval`），不碰网络、不碰提示词、不派生 Agent ——\n用来证明**插件页面是真的在跑的组件**（自己计时、自己重渲染、自己放按钮），而不是一段静态标记。\n\n## 清单里就一段\n\n    \"pages\": [\n      { \"id\": \"clock\", \"label\": \"时钟\", \"file\": \"ui/clock-page.tsx\",\n        \"icon\": [\"M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20\", \"M12 7v5l3 2\"] }\n    ]\n\n`icon` 是**工具栏按钮的图标**：SVG path 的 `d`，一条或多条，坐标是 Lucide 那套 24×24。\n\n只收 path 是有意的：它是纯数据，宿主可以直接检查（只允许路径命令与数字），\n并且描边粗细、颜色、圆角都由宿主统一决定 —— 所以插件的图标与内置图标**观感一致**。\n不写 `icon` 就退回通用图标。\n\n## 两个插件的按钮会分开\n\n装了 `clock` 与 `brief` 之后，工具栏上它们的按钮**各成一组**（组间多留一点间距），\n每个按钮用各自清单里声明的图标。分组只是视觉：点击与层级行为完全一样。\n",
+  "files": {
+    "ui/clock-page.tsx": "import * as React from \"react\";\n\n/**\n * 插件自带的**默认页面**：一个走着的时钟。\n *\n * 它刻意只用 React 自己的状态（setInterval + useState），不碰任何宿主能力 ——\n * 用来证明插件页面是**真的在跑的组件**，不是一段静态标记：\n * 页面能自己计时、自己重渲染、自己放按钮。\n */\nexport default function ClockPage() {\n  const [now, setNow] = React.useState(() => new Date());\n  const [lap, setLap] = React.useState(null);\n\n  React.useEffect(() => {\n    // 一秒一跳。清理函数必须返回 —— 页面关掉后定时器不能还留着。\n    const t = setInterval(() => setNow(new Date()), 1000);\n    return () => clearInterval(t);\n  }, []);\n\n  const pad = (n) => String(n).padStart(2, \"0\");\n  const hhmmss = pad(now.getHours()) + \":\" + pad(now.getMinutes()) + \":\" + pad(now.getSeconds());\n  const weekday = [\"周日\", \"周一\", \"周二\", \"周三\", \"周四\", \"周五\", \"周六\"][now.getDay()];\n\n  return (\n    <div style={{ padding: 14, height: \"100%\", display: \"flex\", flexDirection: \"column\", color: \"var(--ygg-fg)\" }}>\n      <div\n        style={{\n          fontFamily: \"var(--ygg-font-mono)\",\n          fontSize: 30,\n          letterSpacing: \".04em\",\n          color: \"var(--ygg-accent-hi)\",\n          lineHeight: 1.2,\n        }}\n      >\n        {hhmmss}\n      </div>\n      <div style={{ fontSize: 11, color: \"var(--ygg-fg-muted)\", marginTop: 4 }}>\n        {now.getFullYear()}-{pad(now.getMonth() + 1)}-{pad(now.getDate())} {weekday}\n      </div>\n\n      <div style={{ marginTop: 12, display: \"flex\", alignItems: \"center\", gap: 8 }}>\n        <button className=\"ygg-btn ghost tiny\" onClick={() => setLap(hhmmss)}>\n          记下此刻\n        </button>\n        <span style={{ fontSize: 11, color: \"var(--ygg-fg-muted)\" }}>\n          {lap ? \"上一个标记：\" + lap : \"还没标记过\"}\n        </span>\n      </div>\n      {lap ? (\n        <button className=\"ygg-btn ghost tiny\" style={{ marginTop: 8, alignSelf: \"flex-start\" }} onClick={() => setLap(null)}>\n          清除标记\n        </button>\n      ) : null}\n    </div>\n  );\n}\n"
+  }
+}

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useDesktopStore, MAX_SESSIONS, traceTotal } from '../store/desktopStore';
 import { pluginPageKey, pluginPageWindowId, pluginPages } from '../kernel/plugin/runtime';
-import { ExportIcon, ImportIcon, NewInputIcon, NodesIcon, PluginIcon, ResetIcon, SettingsIcon, TraceIcon, WorkspaceIcon } from './icons';
+import { ExportIcon, ImportIcon, NewInputIcon, NodesIcon, PluginGlyph, PluginIcon, ResetIcon, SettingsIcon, TraceIcon, WorkspaceIcon } from './icons';
 
 /**
  * 固定在页面上方两组按钮。
@@ -58,7 +58,21 @@ function TopRight() {
    * 那是最像"功能没做"的一类 bug。useMemo 的依赖也用它，保证装/卸时重算。
    */
   const plugins = useDesktopStore((s) => s.plugins);
-  const pages = useMemo(() => pluginPages(), [plugins]);
+  /*
+   * **按插件分组**：一个插件可能有多个页面，它的按钮要挨在一起。
+   * 分组只影响视觉（多留一点间距），点击行为与层级完全不受影响 ——
+   * 分组是为了"看得出哪几个按钮是同一个插件的"，不是为了改变谁先谁后。
+   * 顺序 = 插件安装顺序（这个顺序本来就是稳定的，提示词补丁也依赖它）。
+   */
+  const pageGroups = useMemo(() => {
+    const out: { id: string; name: string; hosts: ReturnType<typeof pluginPages> }[] = [];
+    for (const h of pluginPages()) {
+      const last = out[out.length - 1];
+      if (last && last.id === h.plugin.id) last.hosts.push(h);
+      else out.push({ id: h.plugin.id, name: h.plugin.name, hosts: [h] });
+    }
+    return out;
+  }, [plugins]);
   const pageOpen = useDesktopStore((s) => s.pluginPageOpen);
   const setPageOpen = useDesktopStore((s) => s.setPluginPageOpen);
   const bringToFront = useDesktopStore((s) => s.bringToFront);
@@ -95,31 +109,40 @@ function TopRight() {
       <button className="ygg-topbtn" title="插件" onClick={() => setPluginsOpen(true)}>
         <PluginIcon />
       </button>
-      {pages.map((h) => {
-        const key = pluginPageKey(h.plugin.id, h.page.id);
-        const domId = pluginPageWindowId(h.plugin.id, h.page.id);
-        const open = pageOpen[key] === true && !pageMinimized['page:' + key];
-        return (
-          <button
-            key={key}
-            className={'ygg-topbtn' + (open ? ' is-on' : '')}
-            title={h.page.description || h.plugin.name + ' · ' + h.page.label}
-            onClick={() => {
-              // 已开 → 抬到最上层（再点一次不关：工具栏按钮的惯例是"打开/聚焦"）。
-              // 已关 → 打开。要关就用窗口右上角的 ✕。
-              if (open) bringToFront(domId);
-              else setPageOpen(key, true);
-            }}
-          >
-            {/*
-              按钮**只有图标**，页面名放在 title 里 —— 与这一排其它按钮（节点树 / 工作区 / 设置）
-              完全一致。加一行文字会把这一排的节奏打乱，而且它是"永久占位"的，
-              页面一多就把别的按钮挤走；名字本来就是 hover 才需要的信息。
-            */}
-            <PluginIcon />
-          </button>
-        );
-      })}
+      {pageGroups.map((group) => (
+        /*
+         * 每个插件一组。组之间只多留一点间距（见 .ygg-topgroup）——
+         * 这一排本来就靠留白分区，加一条竖线反而与别处不一致。
+         */
+        <span className="ygg-topgroup" key={group.id}>
+          {group.hosts.map((h) => {
+            const key = pluginPageKey(h.plugin.id, h.page.id);
+            const domId = pluginPageWindowId(h.plugin.id, h.page.id);
+            const open = pageOpen[key] === true && !pageMinimized['page:' + key];
+            return (
+              <button
+                key={key}
+                className={'ygg-topbtn' + (open ? ' is-on' : '')}
+                title={h.page.description || h.plugin.name + ' · ' + h.page.label}
+                onClick={() => {
+                  // 已开 → 抬到最上层（再点一次不关：工具栏按钮的惯例是"打开/聚焦"）。
+                  // 已关 → 打开。要关就用窗口右上角的 ✕。
+                  if (open) bringToFront(domId);
+                  else setPageOpen(key, true);
+                }}
+              >
+                {/*
+                  按钮**只有图标**，页面名放在 title 里 —— 与这一排其它按钮（节点树 / 工作区 / 设置）
+                  完全一致。加一行文字会把这一排的节奏打乱，而且它是"永久占位"的，
+                  页面一多就把别的按钮挤走；名字本来就是 hover 才需要的信息。
+                  图标来自清单的 pages[].icon；没写就退回通用图标（老插件不受影响）。
+                */}
+                {h.page.icon && h.page.icon.length ? <PluginGlyph paths={h.page.icon} /> : <PluginIcon />}
+              </button>
+            );
+          })}
+        </span>
+      ))}
       <button className="ygg-topbtn" title="设置" onClick={() => setSettingsOpen(true)}>
         <SettingsIcon />
       </button>

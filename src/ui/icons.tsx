@@ -32,6 +32,23 @@ function Svg({ children, ...rest }: { children: ReactNode } & SVGProps<SVGSVGEle
   );
 }
 
+/**
+ * **插件自带图标**：按 path 画。
+ *
+ * 走这里而不是让插件交一段 svg：描边宽度、颜色、圆角、渲染尺寸全由宿主的 `base` 决定，
+ * 于是插件图标与内置图标**观感一致**（否则一排里会出现粗细/颜色都不一样的那个）。
+ * path 只当数据用，不进 innerHTML —— 少一条注入路径。
+ */
+export function PluginGlyph({ paths, ...props }: SVGProps<SVGSVGElement> & { paths: string[] }) {
+  return (
+    <Svg {...props}>
+      {paths.map((d, i) => (
+        <path key={i} d={d} />
+      ))}
+    </Svg>
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /* 顶栏                                                               */
 /* ------------------------------------------------------------------ */
