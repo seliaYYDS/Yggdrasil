@@ -1111,6 +1111,19 @@ interface DesktopState {
   introTree: boolean;
   /** 开场动画播完（由引导组件在动画结束时调用）。 */
   setIntroTree: (on: boolean) => void;
+  /**
+   * 是否停在**收尾动画**那一段（卡片渐隐 → 中间浮出「Yggdrasil」→ 文字与暗化一起淡出）。
+   *
+   * 与开场同理：它是"引导之后的一段"，单独一个开关。走完由组件关掉，
+   * 关掉之后整层什么都不渲染（引导这才真正结束）。
+   */
+  introOutro: boolean;
+  setIntroOutro: (on: boolean) => void;
+  /**
+   * **走完**引导（最后一步点「完成」）：先播收尾动画，动画结束才真正消失。
+   * 与 `endIntro` 的区别在语义：跳过 = 立刻不见，完成 = 播完收尾。
+   */
+  finishIntro: () => void;
   /** 从头播一遍引导（首次打开与设置里的"重放引导"都走它）。 */
   startIntro: () => void;
   setIntroStep: (step: number) => void;
@@ -1549,6 +1562,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   introStep: 0,
   introSeen: false,
   introTree: false,
+  introOutro: false,
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -1721,6 +1735,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       introStep: introSeen ? 0 : 1,
       // 首次打开先播开场动画（与设置里的"重放引导"同一条路）。
       introTree: introSeen !== true,
+      // 刷新时收尾动画不重播（它是一次性的过场，不是状态）。
+      introOutro: false,
       introSeen: introSeen === true,
       zCounter: z ?? 10 + Object.keys(safeNodes).length,
       panelZ: {
@@ -2147,8 +2163,18 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   startIntro: () => set({ introStep: 1, introTree: true }),
   setIntroStep: (step) => set({ introStep: Math.max(1, Math.round(step)) }),
   setIntroTree: (on) => set({ introTree: on }),
+  setIntroOutro: (on) => set({ introOutro: on }),
+  /*
+   * 走完：立刻把"步骤"归零（此后不再有卡片步骤），但留着 introOutro 让收尾动画播。
+   * introSeen 现在就记下 —— 收尾播到一半刷新页面，不该又从头看一遍。
+   */
+  finishIntro: () => {
+    set({ introStep: 0, introTree: false, introOutro: true, introSeen: true });
+    schedulePersist();
+  },
+  // 跳过：立刻不见，不播收尾。
   endIntro: () => {
-    set({ introStep: 0, introTree: false, introSeen: true });
+    set({ introStep: 0, introTree: false, introOutro: false, introSeen: true });
     // 看过就记下来，否则每次刷新都会再拦一次。
     schedulePersist();
   },

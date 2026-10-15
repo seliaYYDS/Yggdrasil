@@ -33,7 +33,9 @@ interface IntroStep {
  * 引导此刻处在哪一段。**导出是为了能被断言**：这三段的先后关系（树 → 卡片 → 都不显示）
  * 是"说好的行为"，不该只存在于 JSX 的条件里靠人眼看。
  */
-export function introPhase(step: number, tree: boolean): 'hidden' | 'tree' | 'card' {
+export function introPhase(step: number, tree: boolean, outro = false): 'hidden' | 'tree' | 'card' | 'outro' {
+  // 收尾优先于步数：走完之后 step 已经归 0，但这一层还要留着播完动画。
+  if (outro) return 'outro';
   if (step < 1 || step > INTRO_STEPS.length) return 'hidden';
   return tree ? 'tree' : 'card';
 }
@@ -118,12 +120,22 @@ function IntroTree() {
   );
 }
 
+
+/**
+ * 收尾动画的时长。与 CSS 里各段动画的时间轴**必须一致**（见 global.css 的注释）：
+ *   0–300ms 卡片渐隐 → 300–760ms 「Yggdrasil」浮现 → 1100–1600ms 文字与暗化一起淡出
+ */
+const OUTRO_MS = 1600;
+
 export function IntroOverlay() {
   const step = useDesktopStore((s) => s.introStep);
   const setIntroStep = useDesktopStore((s) => s.setIntroStep);
   const endIntro = useDesktopStore((s) => s.endIntro);
+  const finishIntro = useDesktopStore((s) => s.finishIntro);
   const tree = useDesktopStore((s) => s.introTree);
   const setIntroTree = useDesktopStore((s) => s.setIntroTree);
+  const outro = useDesktopStore((s) => s.introOutro);
+  const setIntroOutro = useDesktopStore((s) => s.setIntroOutro);
   /** 目标控件的屏幕矩形；量不到就不挖洞（退化成整页压暗）。 */
   const [hole, setHole] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
@@ -134,12 +146,19 @@ export function IntroOverlay() {
     return () => window.clearTimeout(timer);
   }, [tree, setIntroTree]);
 
-  const phase = introPhase(step, tree);
-  const current = phase === 'hidden' ? null : INTRO_STEPS[step - 1];
+  /* 收尾动画：时间到了就把这一层整个撤掉（此后什么都不渲染）。 */
+  useEffect(() => {
+    if (!outro) return;
+    const timer = window.setTimeout(() => setIntroOutro(false), OUTRO_MS);
+    return () => window.clearTimeout(timer);
+  }, [outro, setIntroOutro]);
+
+  const phase = introPhase(step, tree, outro);
+  const current = step >= 1 && step <= INTRO_STEPS.length ? INTRO_STEPS[step - 1] : null;
   const target = current?.target;
 
   useEffect(() => {
-    if (!target) {
+    if (!target || phase !== 'card') {
       setHole(null);
       return;
     }
@@ -161,10 +180,9 @@ export function IntroOverlay() {
       window.clearInterval(timer);
       window.removeEventListener('resize', measure);
     };
-  }, [target, step]);
+  }, [target, phase, step]);
 
-  if (!current || !phase || phase === 'hidden') return null;
-  const last = step === INTRO_STEPS.length;
+  if (phase === 'hidden') return null;
 
   /*
    * 压暗 + 模糊层，并在有目标时把目标"挖"出来。
@@ -173,75 +191,101 @@ export function IntroOverlay() {
    * 不必算四块遮罩的坐标。挖出来的那块**既不压暗也不模糊** —— 否则被指的控件自己也是
    * 糊的，等于没指。
    */
-  const vw = '100%';
-  const vh = '100%';
   const clip = hole
-    ? 'polygon(evenodd, 0 0, ' + vw + ' 0, ' + vw + ' ' + vh + ', 0 ' + vh + ', 0 0, ' +
+    ? 'polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0, ' +
       hole.x + 'px ' + hole.y + 'px, ' + (hole.x + hole.w) + 'px ' + hole.y + 'px, ' +
       (hole.x + hole.w) + 'px ' + (hole.y + hole.h) + 'px, ' + hole.x + 'px ' + (hole.y + hole.h) + 'px, ' +
       hole.x + 'px ' + hole.y + 'px)'
     : undefined;
 
-  return (
-    <div className="ygg-intro">
-      <div className="ygg-intro-blur" style={clip ? { clipPath: clip } : undefined} />
-
-      {/*
-        占位示例：只在声明了 demo 的那两步出现，画在模糊层**之上**（所以它是清楚的），
-        并且随引导一起卸载 —— 不进节点树、不落盘、不可交互。
-      */}
-      {phase === 'tree' ? <IntroTree /> : null}
-      {current.demo === 'window' ? (
-        <div className="ygg-intro-demo-window" data-ygg-intro="demo-window">
-          <div className="ygg-intro-demo-title">示例组件</div>
-          <div className="ygg-intro-demo-body">窗口内容</div>
+  /** 卡片。收尾阶段用同一套外观，但换成"正在渐隐"的变体、并且不再有按钮。 */
+  const renderCard = (item: IntroStep, index: number, fading: boolean) => (
+    <div
+      className={'ygg-intro-card' + (fading ? ' is-out' : '')}
+      key={fading ? 'outro' : step}
+      role="dialog"
+      aria-label="初始引导"
+    >
+      <div className="ygg-intro-count">
+        {index} / {INTRO_STEPS.length}
+      </div>
+      <div className="ygg-intro-title">{item.title}</div>
+      {item.body.map((line, i) => (
+        <div className="ygg-intro-line" key={i}>
+          {line}
         </div>
-      ) : null}
-      {phase === 'card' && current.demo === 'taskbar' ? (
-        <div className="ygg-intro-demo-task" data-ygg-intro="demo-taskbar">
-          示例窗口
-        </div>
-      ) : null}
-      {hole ? (
-        <div
-          className="ygg-intro-hole"
-          style={{ left: hole.x, top: hole.y, width: hole.w, height: hole.h }}
-        />
-      ) : null}
-
-      {/*
-        跳过放在左上角，并且**第一帧就在**：想跳过的人不该先走完七步。
-        它在模糊层之上，随时可点。
-      */}
-      <button className="ygg-intro-skip" onClick={endIntro} title="不再显示这段引导">
-        跳过引导
-      </button>
-
-      {/* key 跟着步骤走：每翻一步都重播一次入场动画，节奏比"整块只播一次"更容易跟上。 */}
-      {phase === 'card' ? (
-      <div className="ygg-intro-card" key={step} role="dialog" aria-label="初始引导">
-        <div className="ygg-intro-count">
-          {step} / {INTRO_STEPS.length}
-        </div>
-        <div className="ygg-intro-title">{current.title}</div>
-        {current.body.map((line, i) => (
-          <div className="ygg-intro-line" key={i}>
-            {line}
-          </div>
-        ))}
+      ))}
+      {fading ? null : (
         <div className="ygg-intro-actions">
-          {step > 1 ? (
-            <button className="ygg-btn ghost" onClick={() => setIntroStep(step - 1)}>
+          {index > 1 ? (
+            <button className="ygg-btn ghost" onClick={() => setIntroStep(index - 1)}>
               上一步
             </button>
           ) : null}
           <span className="ygg-intro-spacer" />
-          <button className="ygg-btn primary" onClick={() => (last ? endIntro() : setIntroStep(step + 1))}>
-            {last ? '完成' : '下一步'}
+          <button
+            className="ygg-btn primary"
+            onClick={() => (index === INTRO_STEPS.length ? finishIntro() : setIntroStep(index + 1))}
+          >
+            {index === INTRO_STEPS.length ? '完成' : '下一步'}
           </button>
         </div>
-      </div>
-      ) : null}
+      )}
+    </div>
+  );
+
+  const outroCard = INTRO_STEPS[INTRO_STEPS.length - 1];
+
+  return (
+    <div className="ygg-intro">
+      {/*
+        跳过放在左上角，并且**第一帧就在**：想跳过的人不该先走完七步。
+        它在模糊层之上，随时可点；收尾那一段没有东西可跳过，所以不渲染。
+      */}
+      {phase === 'outro' ? null : (
+        <button className="ygg-intro-skip" onClick={endIntro} title="不再显示这段引导">
+          跳过引导
+        </button>
+      )}
+
+      {phase === 'outro' ? (
+        /*
+         * 收尾：卡片渐隐 → 中间浮出「Yggdrasil」→ 文字与暗化一起淡出。
+         * 三段的时间轴全在 CSS 里（global.css 的 ygg-intro-outro-*），
+         * 定时器只负责"以后把这一层撤掉"。
+         */
+        <div className="ygg-intro-outro" aria-hidden="true">
+          <div className="ygg-intro-outro-dim" />
+          {renderCard(outroCard, INTRO_STEPS.length, true)}
+          <div className="ygg-intro-outro-word">Yggdrasil</div>
+        </div>
+      ) : (
+        <>
+          <div className="ygg-intro-blur" style={clip ? { clipPath: clip } : undefined} />
+          {hole ? (
+            <div className="ygg-intro-hole" style={{ left: hole.x, top: hole.y, width: hole.w, height: hole.h }} />
+          ) : null}
+
+          {/*
+            占位示例：只在声明了 demo 的那两步出现，画在模糊层**之上**（所以它是清楚的），
+            并且随引导一起卸载 —— 不进节点树、不落盘、不可交互。
+          */}
+          {phase === 'card' && current && current.demo === 'window' ? (
+            <div className="ygg-intro-demo-window" data-ygg-intro="demo-window">
+              <div className="ygg-intro-demo-title">示例组件</div>
+              <div className="ygg-intro-demo-body">窗口内容</div>
+            </div>
+          ) : null}
+          {phase === 'card' && current && current.demo === 'taskbar' ? (
+            <div className="ygg-intro-demo-task" data-ygg-intro="demo-taskbar">
+              示例窗口
+            </div>
+          ) : null}
+
+          {phase === 'tree' ? <IntroTree /> : null}
+          {phase === 'card' && current ? renderCard(current, step, false) : null}
+        </>
+      )}
     </div>
   );
 }
