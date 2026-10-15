@@ -4,6 +4,8 @@
 
 用自然语言生成界面的桌面。输入一句话，模型生成可拖动的窗口与组件，每个界面元素都是窗口。
 
+[English](docs/README.en.md) · [插件规范](docs/plugins.md)
+
 ## 运行
 
 ```bash
