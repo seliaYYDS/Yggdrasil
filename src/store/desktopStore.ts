@@ -29,6 +29,7 @@ import {
 import { clearSurfaceSource, exportSurfaceStates, importSurfaceStates } from '../kernel/registry/surfaceRegistry';
 import { favoriteFromNode, loadFavorites, nodeFromFavorite, saveFavorites, type FavoriteEntry } from './favorites';
 import { ALL_RESET_PARTS } from './reset';
+import { hasPluginContent } from '../kernel/plugin/package';
 import { buildSeed, seedStorageEntries, type SeedFile, type SeedPart } from './seed';
 import { syncPluginRuntime } from '../kernel/plugin/runtime';
 import { policyFor } from '../kernel/security';
@@ -605,7 +606,22 @@ function safePlugins(raw: unknown): InstalledPlugin[] {
     if (!item || typeof item !== 'object') continue;
     const p = item as Partial<InstalledPlugin>;
     if (typeof p.id !== 'string' || !p.id) continue;
-    if (!Array.isArray(p.endpoints) || p.endpoints.length === 0) continue;
+    /*
+     * ⚠ 这里原来写的是"没有端点就丢掉"。
+     *
+     * 那是一个**装载期**的判据，比校验器更致命：校验器只是在安装时拒绝新插件，
+     * 而这里会把已经装着、已经生效的插件在**刷新时整个丢掉** ——
+     * 表现就是"改核心代码的插件保存不下来"。而它其实一直都在存储里，只是被这行滤掉了。
+     *
+     * 判据现在与校验器共用同一个 hasPluginContent（端点/工具/提示词/页面，有一即算）。
+     */
+    const hasContent = hasPluginContent({
+      endpoints: Array.isArray(p.endpoints) ? p.endpoints.length : 0,
+      tools: Array.isArray(p.tools) ? p.tools.length : 0,
+      prompts: Array.isArray(p.prompts) ? p.prompts.length : 0,
+      pages: Array.isArray(p.pages) ? p.pages.length : 0,
+    });
+    if (!hasContent) continue;
     out.push({
       id: p.id,
       name: typeof p.name === 'string' ? p.name : p.id,
@@ -618,7 +634,8 @@ function safePlugins(raw: unknown): InstalledPlugin[] {
       description: typeof p.description === 'string' ? p.description : '',
       hosts: Array.isArray(p.hosts) ? p.hosts.filter((h): h is string => typeof h === 'string') : [],
       fields: Array.isArray(p.fields) ? p.fields : [],
-      endpoints: p.endpoints,
+      // 上面那条判据不再保证 endpoints 一定是数组（有一类内容就够），所以这里显式兜底。
+      endpoints: Array.isArray(p.endpoints) ? p.endpoints : [],
       tools: Array.isArray(p.tools) ? p.tools : [],
       ui: Array.isArray(p.ui) ? p.ui : [],
       // 老数据没有这两项：补空数组，不能让它们变成 undefined（下游会 .map）。

@@ -116,6 +116,23 @@ const CAPS: (ActCap | null)[] = ['desktop', 'style', 'global', 'net', 'browser',
  * 因为端点会进提示词，无上限等于把提示词交给插件作者随意撑大。
  */
 export const MAX_ENDPOINTS = 60;
+/**
+ * 一个插件"有没有内容"。
+ *
+ * 判据曾经只认"端点或工具"，于是每次新增一类能力都要在这一处、校验器那一处、
+ * 打包脚本那一处各改一遍 —— 漏掉任何一处就是"凭空封死一类插件"。
+ * 这个坑**踩了三次**（校验器、打包脚本、以及最后的持久化装载器 —— 第三次最严重：
+ * 它把插件在刷新时整个丢掉）。所以判据收到这里，谁要判断都调它。
+ */
+export function hasPluginContent(counts: {
+  endpoints: number;
+  tools: number;
+  prompts: number;
+  pages: number;
+}): boolean {
+  return counts.endpoints > 0 || counts.tools > 0 || counts.prompts > 0 || counts.pages > 0;
+}
+
 /** 一条提示词补丁的文字上限。够写一段要求，又不至于把系统提示挤爆。 */
 export const MAX_PATCH_TEXT = 4000;
 /** 插件图标：最多几条 path、单条多长。够画一个图标，又不至于塞进来一张画。 */
@@ -432,13 +449,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
   }
 
   const epsRaw = epsRawForNames;
-  /*
-   * "有内容"的判据要跟上能力的增长：**端点、工具、提示词补丁、页面**都算。
-   *
-   * 只认前两者的时候，一个"只改提示词 + 加一个页面"的插件会被判成"装它没有意义" ——
-   * 而它恰恰是这次新能力的用法。判据漏掉一类能力，就是凭空封死一类插件。
-   */
-  if (epsRaw.length === 0 && tools.length === 0 && prompts.length === 0 && pages.length === 0) {
+  if (!hasPluginContent({ endpoints: epsRaw.length, tools: tools.length, prompts: prompts.length, pages: pages.length })) {
     return bad('至少要有一个 endpoint / tools / prompts / pages，否则装它没有意义。');
   }
   /*

@@ -121,7 +121,8 @@ for (const dir of dirs) {
     if (manifest[key] === undefined) { console.error('[' + dir + '] manifest 缺少 ' + key); failed++; }
   }
   /*
-   * 与 src/kernel/plugin/package.ts 的校验保持一致：**至少要有一个 endpoint 或 tools**。
+   * 与 src/kernel/plugin/package.ts 的校验保持一致：
+ * **端点 / 工具 / 提示词补丁 / 页面，至少要有一样**。
    *
    * 这里原来写死"必须至少一个 endpoint"，于是"只提供工具、不提供端点"的插件
    * （exposeAs: "tool" 那种，比如 toolbox）**打不出包来** —— 而真正的校验器是接受它的。
