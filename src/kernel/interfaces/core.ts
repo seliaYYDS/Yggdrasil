@@ -60,6 +60,17 @@ function agentDetailText(id: string): string {
   const lines: string[] = [];
   lines.push('- name: "' + node.name + '" id=' + id);
   lines.push('- host: ' + (node.root === true ? 'the base agent (default receiver of every message)' : 'attached to component ' + node.parentId));
+  /*
+   * 档位必须写出来：它是"这个 agent 会回话还是会动桌面"的唯一判据，而**别的入口都看不到它**
+   * （源码只能渲染 useAgent().mode，op 的返回文字只在创建那一刻出现）。
+   * 上一版没写，于是"档位被静默降级成 act"没有任何地方能发现（§5.141）。
+   */
+  lines.push('- tier: ' + f.mode + (f.mode === 'reply'
+    ? ' (talk only: replies are appended to messages)'
+    : ' (acts: emits ops over multiple rounds)'));
+  lines.push('- capability switches: ' + (f.mode === 'reply'
+    ? 'none (the reply tier has no ops)'
+    : (f.caps ? f.caps.join(', ') : 'all (unlimited)')));
   lines.push('- role (systemPrompt): ' + (f.systemPrompt || '(empty)'));
   lines.push('- tool subset: ' + (f.toolIds.length ? f.toolIds.join(', ') : 'all available tools'));
   lines.push('- scope: ' + (f.scope === '*' ? 'all nodes' : (f.scope as string[]).join(', ') || '(empty)'));

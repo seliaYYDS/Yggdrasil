@@ -44,6 +44,18 @@ function hasAgentSubstance(role: unknown, tools: unknown): boolean {
 }
 
 /**
+ * 显式点名 reply 档。
+ *
+ * reply 没有 ops，**本来就不需要职责或工具** —— 所以 `agent:{mode:"reply"}` 单独一个字段
+ * 就是完整的需求，不能按"空壳"丢掉。
+ *
+ * 只对 reply 放宽：act 没有职责或工具就是"没有用途的 Agent"，那正是当初要拦的东西。
+ */
+function wantsReply(raw: unknown): boolean {
+  return raw === 'reply';
+}
+
+/**
  * 判断 create_component 的 op 是否真的要接能力（见 hasAgentSubstance）。
  *
  * 只认两种写法：显式给了 agent 对象，或顶层直接给了职责 systemPrompt。
@@ -53,9 +65,15 @@ function isSubstantiveAgent(op: DerivationOp): boolean {
   const raw = op.agent;
   if (raw && typeof raw === 'object') {
     const a = raw as Record<string, unknown>;
-    return hasAgentSubstance(a.systemPrompt ?? op.systemPrompt, a.tools);
+    return hasAgentSubstance(a.systemPrompt ?? op.systemPrompt, a.tools) || wantsReply(a.mode);
   }
-  return hasAgentSubstance(op.systemPrompt, null);
+  return hasAgentSubstance(op.systemPrompt, null) || wantsReply(op.mode);
+}
+
+/** 把一个可能嵌套在 `agent` 里的字段取出来：顶层优先，其次嵌套。 */
+function nested(agentRaw: Record<string, unknown> | null, key: string, top: unknown): unknown {
+  if (top !== undefined) return top;
+  return agentRaw ? agentRaw[key] : undefined;
 }
 
 /**
@@ -369,7 +387,7 @@ export function registerNodeInterfaces(): void {
     kind: 'create_component',
     label: '创建组件',
     description:
-      '**Create a page/window** (the only creation entry point): one source yields one plain component. Placement is pos / size only, both optional — without them it lands in a free spot; there is no center or align parameter. Pass frame: "widget" for a widget. The agent field is optional (normally omitted): whether to attach, how, which tier and which capability switches are covered in the "Agent capability" section.',
+      '**Create a page/window** (the only creation entry point): one source yields one plain component. Placement is pos / size only, both optional — without them it lands in a free spot; there is no center or align parameter. Pass frame: "widget" for a widget. The agent field is optional (normally omitted): the two tiers and their creation syntax are in the "Agent tiers" section (always present); the mechanics of attaching, and which capability switches exist, are in "Agent capability" (only when you have the agents switch).',
     example: {
       kind: 'create_component',
       name: 'Calculator',
@@ -596,30 +614,41 @@ export function registerNodeInterfaces(): void {
       if (node.agent) {
         return fail('Component "' + node.name + '" already has agent capability. Use set_agent_config to change its role.');
       }
+      /*
+       * 字段可以写在顶层，也可以包在一个 agent 对象里 —— 后者是模型照着"创建时
+       * `agent:{...}`"那条写法顺手搬过来的形状。只认顶层会让它被拒，然后它补一个顶层职责、
+       * 把 mode 留在嵌套里，**档位就这么被静默丢掉了**（§5.141 的实测）。
+       */
+      const attachAgentRaw =
+        op.agent && typeof op.agent === 'object' ? (op.agent as Record<string, unknown>) : null;
+      const attachRole = nested(attachAgentRaw, 'systemPrompt', op.systemPrompt);
+      const attachTools = nested(attachAgentRaw, 'tools', op.tools);
+      const attachMode = parseMode(nested(attachAgentRaw, 'mode', op.mode));
       // 没有职责也没有工具的空壳接入会让这个组件变成"没有用途的 Agent"，
       // 这正是"对派生 agent 太敏感"的另一种表现，直接拒绝并把默认做法说清楚。
-      if (!hasAgentSubstance(op.systemPrompt, op.tools)) {
+      // 例外是显式的 reply 档：它没有 ops，不需要职责（见 wantsReply）。
+      if (!hasAgentSubstance(attachRole, attachTools) && !wantsReply(nested(attachAgentRaw, 'mode', op.mode))) {
         return fail(
           'attach_agent needs either a role (systemPrompt) or tools for this component.' +
-          'If you only want it to display content, a plain component is enough — do not attach agent capability.',
+          'If it only needs to talk, pass mode:"reply" — that needs neither.' +
+          'If you only want it to display content, a plain component is enough.',
         );
       }
-      const rawScope = op.scope;
+      const rawScope = nested(attachAgentRaw, 'scope', op.scope);
       // 必须用 setFacet 而不是 updateFacet：后者只在 facet 已存在时才生效，
       // 而"接入能力"恰恰是给还没有 facet 的组件装上它。
-      const attachMode = parseMode(op.mode);
       const attachScope = parseScope(rawScope, id);
       const attachCaps =
-        attachMode === 'reply' ? undefined : parseCaps(op.caps) ?? DEFAULT_ACT_CAPS;
+        attachMode === 'reply' ? undefined : parseCaps(nested(attachAgentRaw, 'caps', op.caps)) ?? DEFAULT_ACT_CAPS;
       const attachConflict = attachMode === 'reply' ? null : capScopeConflict(attachCaps, attachScope);
       if (attachConflict) return fail('Capability switches conflict with the scope: ' + attachConflict);
       useDesktopStore.getState().setFacet(id, makeFacet({
-        systemPrompt: typeof op.systemPrompt === 'string' ? op.systemPrompt : '',
-        toolIds: pickToolIds(op.tools),
+        systemPrompt: typeof attachRole === 'string' ? attachRole : '',
+        toolIds: pickToolIds(attachTools),
         messages: [],
         ledger: [],
         scope: attachScope,
-        progress: parseProgress(op.progress),
+        progress: parseProgress(nested(attachAgentRaw, 'progress', op.progress)),
         mode: attachMode,
         caps: attachCaps,
       }));

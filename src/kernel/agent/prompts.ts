@@ -247,6 +247,7 @@ export const PROMPT_SECTIONS = [
   'style-rules',
   'global-rules',
   'surface-rules',
+  'agent-tier',
   'agent-rules',
   'browser-rules',
   'net-rules',
@@ -416,6 +417,8 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
     { id: 'style-rules', text: on('style') ? styleRules(terse).join('\n') : '' },
     { id: 'global-rules', text: on('global') ? globalRules(terse).join('\n') : '' },
     { id: 'surface-rules', text: on('global') ? surfaceRules(terse).join('\n') : '' },
+    // 档位说明**不受 agents 开关门控**：任何会创建组件的东西都需要知道 reply 存在（见 agentTierRules 的注释）。
+    { id: 'agent-tier', text: agentTierRules(terse).join('\n') },
     { id: 'agent-rules', text: on('agents') ? agentRules(terse).join('\n') : '' },
     { id: 'browser-rules', text: on('browser') ? browserRules(terse).join('\n') : '' },
     { id: 'net-rules', text: on('net') ? netRules(terse).join('\n') : '' },
@@ -807,6 +810,61 @@ function surfaceRules(terse = false): string[] {
   ];
 }
 
+/**
+ * 两档的区别与**选择写法**。
+ *
+ * 这一段**不受 `agents` 能力开关门控**，理由是实测出来的：门控它之后，一个派生的 act agent
+ * （默认只有 desktop + style）收到的提示词里既没有"reply 存在"、也没有写法、也没有 attach_agent，
+ * 而 `create_component` 的简介还让它去读这一节 —— 于是它创建出来的东西**永远只能是 act**。
+ * 谁会创建组件，谁就需要知道档位；"怎么接入"的细节才需要 agents 开关。
+ */
+export function agentTierRules(terse = false): string[] {
+  if (terse) {
+    return [
+      '## Agent tiers: reply (talks) or act (does things)',
+      '- Do not attach capability by default: a plain component unless the user asks for an assistant / ongoing work.',
+      '- **reply**: talk only, one question one answer, shown **directly in its own interface**; cannot create,',
+      '  restyle or go online. **Cheaper — prefer it.**',
+      '- **act**: only when it must change the desktop, fetch data or drive the browser. Emits ops over multiple rounds;',
+      '  **it cannot speak**.',
+      '- Test: **shown in its own window → reply; must change the desktop → act.**',
+      '- Creation syntax: `agent:{mode:"reply"}` is enough on its own (reply needs no role); for act also give one:',
+      '  `agent:{systemPrompt:"...", mode:"act"}`. Omitted = **act**.',
+    ];
+  }
+  return [
+    '## Agent tiers: reply (talks) or act (does things)',
+    'A component with agent capability runs in one of two tiers. They differ **only in the pipeline** — same sessions,',
+    'same progress, same memory.',
+    '',
+    '### reply — talk only',
+    '- One question one answer. The model answers with **text**, and that text is appended to the agent `messages` as',
+    '  an assistant message — render `a.messages` and you have a chat box.',
+    '- **It cannot act**: no ops, no JSON, no rounds, no ledger, no scope. It cannot create components, restyle or go',
+    '  online.',
+    '- Far cheaper (a few hundred characters of prompt, a single call). **Prefer it** for chat, Q&A, explanation, advice.',
+    '',
+    '### act — takes action',
+    '- Outputs ops over multiple rounds and changes the desktop; every round comes back with the observations.',
+    '- **It cannot speak**: anything it expresses has to be built as a component.',
+    '- This is the default when no tier is given.',
+    '',
+    '### Choosing, and the creation syntax',
+    '- Test: **what the user wants can be shown inside its own window → reply; it must change anything on the desktop',
+    '  → act.**',
+    '- `agent:{mode:"reply"}` is **enough on its own**: the reply tier has no ops, so it needs neither a role nor tools.',
+    '- act does need a purpose: give a role (and only the capability switches it needs), e.g.',
+    '  `agent:{systemPrompt:"...", mode:"act", caps:["desktop"]}`.',
+    '- Omitted `mode` = **act**. Changing the tier later needs the `agents` capability (`set_agent_config`).',
+    '',
+    '### Do not attach by default',
+    '- Unless the user asks for an assistant / assistant-like behaviour / ongoing work / further input it must decide on',
+    '  itself, build a **plain component** (calculator, news list, chart, calendar, restyle all belong there).',
+    '- Unsure → do not attach: a plain component is the safe default (attaching later also needs the `agents`',
+    '  capability).',
+  ];
+}
+
 function agentRules(terse = false): string[] {
   if (terse) {
     return [
@@ -814,9 +872,9 @@ function agentRules(terse = false): string[] {
       '- Unless the user asks for an agent / assistant / automatic / ongoing work, build a plain component. Attach only',
       '  for autonomous ongoing work or further input it must decide on itself.',
       '- Attach with create_component(agent) or attach_agent; change with set_agent_config; remove with detach_agent. The',
-      '  agent object holds capabilities only, no source; an empty object is ignored.',
-      '- Tier: reply = talk only, shown in its own window, cheaper; act = changes the desktop over multiple rounds.',
-      '  Default act; only desktop + style capabilities unless listed explicitly.',
+      '  agent object holds capabilities only, no source; an empty object is ignored (see the tier section for the',
+      '  creation syntax).',
+      '- Only desktop + style capabilities unless listed explicitly.',
       '- Sub-agents run in their own session; you decide how their progress shows (`useAgent().progress`).',
       '- `useAgent` from "yggdrasil" attaches capability automatically; without it `send()` is a no-op.',
       '- scope is a hard limit; an agent renders exactly like a plain component (no chat box appears).',
@@ -839,17 +897,10 @@ function agentRules(terse = false): string[] {
     '- One step: `create_component` with source + agent; two steps: create it, then `attach_agent` (interface',
     '  unchanged). Change role / scope / tools / tier / caps → `set_agent_config`; remove → `detach_agent`.',
     '- The agent object holds **capabilities only** (systemPrompt / tools / scope / mode / caps / progress), **no',
-    '  source**. An empty object is **ignored**: give systemPrompt or tools or the attach is rejected.',
+    '  source**. An empty object is **ignored**: give systemPrompt or tools — or `mode:"reply"`, which needs neither',
+    '  (see the tier section) — otherwise the attach is rejected.',
     '- ⚠ Importing and calling `useAgent` from "yggdrasil" **attaches the capability automatically** — do not import it',
     '  when you do not want capability.',
-    '',
-    '### Tier: reply (talk only) or act (takes action)',
-    '- **reply**: talk only (chat, Q&A, explanation), one question one answer, shown **directly in its own interface**;',
-    '  cannot create components, restyle or go online. **Cheaper — prefer it.**',
-    '- **act**: only when it must change the desktop, fetch data or drive the browser. Emits ops over multiple rounds;',
-    '  **it cannot speak** — anything it expresses has to be built.',
-    '- Test: **shown in its own window → reply; must change the desktop → act.** `agent:{mode:"reply"|"act"}` at',
-    '  creation (omitted = act), `set_agent_config` later.',
     '',
     '### Act capability switches',
     '- They decide **which instructions it gets** and **which operations it can call** (the rest are rejected):',
