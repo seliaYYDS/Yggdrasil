@@ -31,6 +31,9 @@ Desktop.ini
 .env.local
 .env.*.local
 
+# 开发日志（本地记录，不进仓库）
+dev.md
+
 # 本地临时文件
 *.local
 .tmp/
