@@ -468,30 +468,35 @@ button:focus:not(:focus-visible) { outline: none; }
 
 /*
  * 引导整层盖在**所有东西之上**（顶部按钮组是 400000），因为它的作用就是"拦住并说明"。
- * 全层 pointer-events: none，只让卡片与跳过按钮可点 —— 这样挖出来的洞不会挡住用户看，
- * 也不会出现"遮罩吃掉了一次点击"这种说不清的行为。
+ * 全层 pointer-events: none，只让卡片与跳过按钮可点。
  */
 .ygg-intro {
   position: fixed;
   inset: 0;
   z-index: 500000;
   pointer-events: none;
-  animation: ygg-fade-in var(--ygg-t-slow) var(--ygg-ease) both;
-}
-/* 没有要指的东西时：整页压暗（内部没有洞）。 */
-.ygg-intro-dim {
-  position: absolute;
-  inset: 0;
-  background: color-mix(in srgb, var(--ygg-bg) 72%, transparent);
+  animation: ygg-fade-in 460ms var(--ygg-ease) both;
 }
 /*
- * 指向某个控件时：一块与控件等大的透明矩形，靠一圈极大的阴影把**其余地方**压暗。
- * 一块元素就能表达"除了这里都暗"，不必跟着目标尺寸算四个矩形。
+ * 压暗 + 模糊层：**背景要比别的模态重得多**，因为引导是"只留一个东西可看"的场景。
+ * 7px 模糊落在用户要求的 5–8px 之间：足够把"背景里还有很多东西"这句话说清楚，
+ * 又不至于把不该看的地方糊成一团。
+ *
+ * 有目标时这一层会被组件用 clip-path(evenodd) 挖掉一块 —— 被指的控件**既不压暗也不模糊**，
+ * 否则它自己也是糊的，等于没指。
  */
+.ygg-intro-blur {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--ygg-bg) 90%, transparent);
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+}
+/* 挖出来的那块只留一圈亮边，提示"看这里"。 */
 .ygg-intro-hole {
   position: absolute;
   border-radius: var(--ygg-radius);
-  box-shadow: 0 0 0 9999px color-mix(in srgb, var(--ygg-bg) 72%, transparent), 0 0 0 1px var(--ygg-accent);
+  border: 1px solid var(--ygg-accent-hi);
   transition: left var(--ygg-t) var(--ygg-ease), top var(--ygg-t) var(--ygg-ease), width var(--ygg-t) var(--ygg-ease), height var(--ygg-t) var(--ygg-ease);
 }
 /* 跳过：**左上角，第一帧就在** —— 想跳过的人不该先走完七步。 */
@@ -511,19 +516,28 @@ button:focus:not(:focus-visible) { outline: none; }
   transition: color var(--ygg-t) var(--ygg-ease), border-color var(--ygg-t) var(--ygg-ease);
 }
 .ygg-intro-skip:hover { color: var(--ygg-accent-hi); border-color: var(--ygg-accent); }
+/*
+ * 提示框贴在**页面底部**居中。
+ * 顶部那排按钮（左上场景、右上工具栏）是引导要点名的地方，卡片放下面就不会挡住它们。
+ */
 .ygg-intro-card {
   position: absolute;
   left: 50%;
-  /* 落在页面下半部分：上半部分要留给"被挖出来"的那些顶部控件。 */
-  top: 62%;
-  transform: translate(-50%, -50%);
+  bottom: 28px;
   pointer-events: auto;
-  width: min(460px, calc(100vw - 48px));
-  padding: 16px 18px;
-  border: 1px solid var(--ygg-accent-dim);
+  width: min(520px, calc(100vw - 48px));
+  padding: 18px 20px;
+  /* 比界面其它地方更粗更亮：它是此刻唯一该看的东西。 */
+  border: 2px solid var(--ygg-accent-hi);
   border-radius: var(--ygg-radius);
   background: var(--ygg-surface);
   box-shadow: var(--ygg-shadow);
+  /* 每翻一步重播一次。460ms 比界面里其它过渡（260ms）慢一档 —— 引导不需要抢节奏。 */
+  animation: ygg-intro-card-in 460ms var(--ygg-ease-out) both;
+}
+@keyframes ygg-intro-card-in {
+  from { opacity: 0; transform: translate(-50%, 14px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
 }
 .ygg-intro-count {
   font-size: 11px;
@@ -533,7 +547,7 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-intro-title {
   margin: 4px 0 8px;
   font-family: var(--ygg-font-display);
-  font-size: 15px;
+  font-size: 16px;
   color: var(--ygg-accent-hi);
 }
 .ygg-intro-line {
