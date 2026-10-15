@@ -488,7 +488,7 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-intro-blur {
   position: absolute;
   inset: 0;
-  background: color-mix(in srgb, var(--ygg-bg) 90%, transparent);
+  background: color-mix(in srgb, var(--ygg-bg) 80%, transparent);
   backdrop-filter: blur(7px);
   -webkit-backdrop-filter: blur(7px);
 }
@@ -499,6 +499,56 @@ button:focus:not(:focus-visible) { outline: none; }
   border: 1px solid var(--ygg-accent-hi);
   transition: left var(--ygg-t) var(--ygg-ease), top var(--ygg-t) var(--ygg-ease), width var(--ygg-t) var(--ygg-ease), height var(--ygg-t) var(--ygg-ease);
 }
+/*
+ * 「窗口与组件」与「任务栏」两步摆出来的**占位示例**。
+ *
+ * 界面上本来是空的（没有窗口、没有最小化过的东西），只靠文字讲"窗口能拖"是空口白话。
+ * 这两个是纯展示：不可交互、不进节点树、不落盘，引导卸载时一起消失。
+ * 画在模糊层之上，所以它们是清楚的。
+ */
+.ygg-intro-demo-window {
+  position: absolute;
+  left: 50%;
+  top: 15%;
+  transform: translateX(-50%);
+  width: min(360px, 70vw);
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  background: var(--ygg-surface);
+  box-shadow: var(--ygg-shadow);
+  overflow: hidden;
+}
+.ygg-intro-demo-title {
+  height: 30px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--ygg-fg-muted);
+  /* 标题与正文靠**底色差**分层，不画单侧边线 —— 界面里没有单侧边框，这里也不破例。 */
+  background: var(--ygg-surface-2);
+}
+.ygg-intro-demo-body {
+  height: 110px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--ygg-fg-muted);
+}
+/* 与真实任务栏同一角落、同一观感 —— 讲的就是"最小化的窗口会出现在这儿"。 */
+.ygg-intro-demo-task {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  padding: 5px 10px;
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  background: var(--ygg-surface-2);
+  color: var(--ygg-fg-muted);
+  font-size: 12px;
+}
+
 /* 跳过：**左上角，第一帧就在** —— 想跳过的人不该先走完七步。 */
 .ygg-intro-skip {
   position: absolute;

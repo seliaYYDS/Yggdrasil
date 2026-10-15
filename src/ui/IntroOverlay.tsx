@@ -18,9 +18,22 @@ interface IntroStep {
   body: string[];
   /** 要"挖出来"的控件。找不到就退化成整页压暗（不挖洞）。 */
   target?: string;
+  /**
+   * 这一步要额外摆出来的**占位示例**。
+   *
+   * 有些东西光说没用：「窗口与组件」与「任务栏」两步，界面上本来是空的
+   * （没有窗口、没有最小化的窗口），只靠文字讲"窗口可以拖"是空口白话。
+   * 所以临时摆一个**不可交互的占位**，指给它看 —— 引导结束（组件卸载）时一起消失，
+   * 不进节点树、不落盘、不参与任何交互。
+   */
+  demo?: 'window' | 'taskbar';
 }
 
-const STEPS: IntroStep[] = [
+/**
+ * 步骤表。**导出是为了能被断言**：哪一步指向哪个控件、哪一步摆占位示例，
+ * 都是"说好的行为"，不该只存在于源码里靠人眼看。
+ */
+export const INTRO_STEPS: IntroStep[] = [
   {
     title: '配置模型',
     body: ['点右上角的 ⚙ 打开设置，在「入口」里填 Base / Key / Model。', '配置只存在本地。'],
@@ -34,6 +47,8 @@ const STEPS: IntroStep[] = [
   {
     title: '窗口与组件',
     body: ['模型按输入生成窗口与组件。', '所有窗口都可以拖动、缩放、最小化。'],
+    demo: 'window',
+    target: '[data-ygg-intro="demo-window"]',
   },
   {
     title: '面板',
@@ -48,7 +63,8 @@ const STEPS: IntroStep[] = [
   {
     title: '任务栏',
     body: ['最小化的窗口收在左下角，点击恢复。'],
-    target: '[data-ygg-intro="taskbar"]',
+    demo: 'taskbar',
+    target: '[data-ygg-intro="demo-taskbar"]',
   },
   {
     title: '结束',
@@ -63,7 +79,7 @@ export function IntroOverlay() {
   /** 目标控件的屏幕矩形；量不到就不挖洞（退化成整页压暗）。 */
   const [hole, setHole] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
 
-  const current = step >= 1 && step <= STEPS.length ? STEPS[step - 1] : null;
+  const current = step >= 1 && step <= INTRO_STEPS.length ? INTRO_STEPS[step - 1] : null;
   const target = current?.target;
 
   useEffect(() => {
@@ -92,7 +108,7 @@ export function IntroOverlay() {
   }, [target, step]);
 
   if (!current) return null;
-  const last = step === STEPS.length;
+  const last = step === INTRO_STEPS.length;
 
   /*
    * 压暗 + 模糊层，并在有目标时把目标"挖"出来。
@@ -113,6 +129,22 @@ export function IntroOverlay() {
   return (
     <div className="ygg-intro">
       <div className="ygg-intro-blur" style={clip ? { clipPath: clip } : undefined} />
+
+      {/*
+        占位示例：只在声明了 demo 的那两步出现，画在模糊层**之上**（所以它是清楚的），
+        并且随引导一起卸载 —— 不进节点树、不落盘、不可交互。
+      */}
+      {current.demo === 'window' ? (
+        <div className="ygg-intro-demo-window" data-ygg-intro="demo-window">
+          <div className="ygg-intro-demo-title">示例组件</div>
+          <div className="ygg-intro-demo-body">窗口内容</div>
+        </div>
+      ) : null}
+      {current.demo === 'taskbar' ? (
+        <div className="ygg-intro-demo-task" data-ygg-intro="demo-taskbar">
+          示例窗口
+        </div>
+      ) : null}
       {hole ? (
         <div
           className="ygg-intro-hole"
@@ -131,7 +163,7 @@ export function IntroOverlay() {
       {/* key 跟着步骤走：每翻一步都重播一次入场动画，节奏比"整块只播一次"更容易跟上。 */}
       <div className="ygg-intro-card" key={step} role="dialog" aria-label="初始引导">
         <div className="ygg-intro-count">
-          {step} / {STEPS.length}
+          {step} / {INTRO_STEPS.length}
         </div>
         <div className="ygg-intro-title">{current.title}</div>
         {current.body.map((line, i) => (
