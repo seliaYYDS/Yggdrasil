@@ -94,3 +94,7 @@ pnpm typecheck
 ```
 
 密钥只存在浏览器本地，不经过任何后端；模型请求由浏览器直接发往所填端点。
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。

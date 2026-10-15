@@ -94,3 +94,7 @@ pnpm typecheck
 ```
 
 Keys are stored in the browser only and pass through no backend; model requests go from the browser straight to the endpoint you configure.
+
+## License
+
+MIT — see [LICENSE](../LICENSE).
