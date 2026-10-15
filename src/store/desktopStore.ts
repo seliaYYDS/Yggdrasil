@@ -2273,10 +2273,24 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         };
       };
 
-      // 会话面板与派生窗口一起按比例走（尺寸封顶在它的设计尺寸上，避免棘轮）。
+      /*
+       * 输入框：按比例走 x/w，**高度不参与**。
+       *
+       * 这里原来写的是 `h: Math.min(fitted.h, DEFAULT_INPUT_RECT.h)` —— 把
+       * `DEFAULT_INPUT_RECT.h`（88）当成了高度上限。它不是上限，是**缺省值**：
+       * 输入框是"内容多高就多高"，高度由输入框自己的 auto-height 效应每一轮重算，
+       * 而那个效应是靠"当前 h"反推 y 来保持底边不动的。
+       *
+       * 两者一撞就是这个现象：fitToViewport 每次 resize 都跑（**只改宽度也跑**），
+       * 它把 h 从 200 改回 88，auto-height 效应再把 h 拉回 200 并把 y 减少 112 ——
+       * 盒子整体上移，而底边其实没动。输入框越长，跳得越远。
+       *
+       * 所以高度只交给 fitRectToViewport 做"装不进视口才收紧"，
+       * 宽度仍然封顶在设计宽度上（那是齐整性，不是上限问题）。
+       */
       const sessions = s.sessions.map((ses) => {
         const fitted = fitRectToViewport(
-          scaleOf(ses.rect),
+          { x: ses.rect.x * sx, y: ses.rect.y * sy, w: ses.rect.w * sx, h: ses.rect.h },
           viewW,
           viewH,
           PANEL_MIN_SESSION.w,
@@ -2287,7 +2301,6 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
           rect: {
             ...fitted,
             w: Math.min(fitted.w, DEFAULT_INPUT_RECT.w),
-            h: Math.min(fitted.h, DEFAULT_INPUT_RECT.h),
           },
         };
       });
