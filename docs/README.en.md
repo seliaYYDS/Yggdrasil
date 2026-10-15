@@ -1,4 +1,4 @@
-<p align="center"><img src="../public/yggdrasil-180.png" width="120" alt="Yggdrasil"></p>
+<p align="center"><img src="yggdrasil-180.png" width="120" alt="Yggdrasil"></p>
 
 # Yggdrasil
 
