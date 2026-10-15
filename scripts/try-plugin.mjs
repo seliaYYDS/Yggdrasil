@@ -270,8 +270,14 @@ for (const t of toolEntries) console.log('  工具  ' + t.name + '（' + t.id + 
 if ((plugin.ui ?? []).length) console.log('  界面  ' + plugin.ui.map((u) => u.name).join('、') + '（用 plugin_ui 摆出来）');
 /* 下面两类是"改核心"的能力，没有可调用的入口，所以单独列 —— 否则它们看起来像没提供任何东西。 */
 for (const patch of patches) {
-  const where = patch.op === 'insert' ? patch.anchor || 'end' : patch.section || '?';
-  console.log('  提示词改动  ' + patch.op + ' @' + where +
+  // substitute 没有段落可指，显示的是"把什么换成什么"。
+  const where =
+    patch.op === 'insert'
+      ? '@' + (patch.anchor || 'end')
+      : patch.op === 'substitute'
+        ? '：' + patch.find + ' → ' + patch.replace
+        : '@' + (patch.section || '?');
+  console.log('  提示词改动  ' + patch.op + ' ' + where +
     (patch.label ? '（' + patch.label + '）' : '') + ' —— 每轮拼提示词时生效，关掉插件立刻失效');
 }
 for (const pg of pages) {

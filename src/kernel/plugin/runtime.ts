@@ -695,8 +695,12 @@ export function pluginDiff(prev: InstalledPlugin | undefined, next: InstalledPlu
    * 被当成"无关紧要的更新"点掉。只报新增的主机与端点是不够的：一个插件完全可以在
    * 不新增任何网络出口的情况下，靠插一段提示词改变 Agent 的行为。
    */
-  const patchKey = (p: { op: string; anchor?: string; section?: string; text?: string }) =>
-    p.op + '@' + (p.op === 'insert' ? p.anchor ?? 'end' : p.section ?? '?') + ':' + (p.text ?? '').slice(0, 40);
+  const patchKey = (p: { op: string; anchor?: string; section?: string; text?: string; find?: string; replace?: string }) =>
+    p.op +
+    '@' +
+    (p.op === 'insert' ? p.anchor ?? 'end' : p.op === 'substitute' ? (p.find ?? '') + '→' + (p.replace ?? '') : p.section ?? '?') +
+    ':' +
+    (p.text ?? '').slice(0, 40);
   const prevPatches = new Set((prev.prompts ?? []).map(patchKey));
   const nextPatches = new Set((next.prompts ?? []).map(patchKey));
   const newPatches = (next.prompts ?? []).filter((p) => !prevPatches.has(patchKey(p)));

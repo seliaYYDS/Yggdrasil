@@ -152,9 +152,10 @@ export interface PluginPromptPatch {
   /**
    * - `insert`：在 `anchor` 段的前/后插入一段文字；
    * - `replace`：整段替换 `section` 的文字；
-   * - `remove`：删掉 `section`。
+   * - `remove`：删掉 `section`；
+   * - `substitute`：把**整份提示词里**出现的 `find` 字面量都换成 `replace`（逐字替换，不是正则）。
    */
-  op: 'insert' | 'replace' | 'remove';
+  op: 'insert' | 'replace' | 'remove' | 'substitute';
   /** insert 用：锚点段落 id，或 `start` / `end`（整份提示词的开头 / 结尾）。 */
   anchor?: string;
   /** insert 用：插在锚点之前还是之后。缺省 after。 */
@@ -163,6 +164,10 @@ export interface PluginPromptPatch {
   section?: string;
   /** insert / replace 用：文字内容。 */
   text?: string;
+  /** substitute 用：要被替换掉的**字面量**（不是正则）。 */
+  find?: string;
+  /** substitute 用：换成什么。空串表示删掉这些字。 */
+  replace?: string;
   /** 给人看的一行说明（安装确认里显示）。 */
   label?: string;
 }

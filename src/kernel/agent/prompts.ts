@@ -274,10 +274,12 @@ interface PromptSection {
 /**
  * 应用已启用插件声明的提示词补丁。
  *
- * 顺序是 **remove → replace → insert**，三条理由：
+ * 顺序是 **remove → replace → insert → substitute**，四条理由：
  * 1. 先删后改会让"删了又想替换"变成空操作（那是矛盾的声明，静默忽略比报错好）；
  * 2. 插入放最后，这样锚点指向的是**原始**段落，不会因为前面的替换而找不到；
  * 3. 多个插件的插入按"插件安装顺序、补丁声明顺序"稳定排列 —— 顺序稳定才能缓存。
+ * 4. **替换放最后**：它作用在"最终那份文字"上，所以既改得动默认提示词，
+ *    也改得动前面几步刚插进来的内容 —— 这才是"把这份提示词里的 X 统一改成 Y"的意思。
  */
 function applyPromptPatches(sections: PromptSection[]): PromptSection[] {
   const patches = promptPatches();
@@ -321,6 +323,28 @@ function applyPromptPatches(sections: PromptSection[]): PromptSection[] {
     const at = out.findIndex((x) => x.id === anchor);
     if (at < 0) continue;
     out.splice(patch.position === 'before' ? at : at + 1, 0, section);
+  }
+
+  /*
+   * 逐字替换，作用在**整份提示词**上。
+   *
+   * 为什么需要它：`replace` / `remove` 只能整段动，而 `identity` 是受保护段落
+   * （删了 Agent 就不知道自己是谁、能调什么）。于是"把提示词里的某个名字统一改掉"
+   * 这件事，用前三种 op 一个也做不到 —— 它要改的是**受保护段落里的几个词**，
+   * 不是整段。所以单独给一个 op，而不是去放宽保护名单：那样风险大得多。
+   *
+   * 有意用**字面量**而不是正则：插件的声明要能被静态读懂（"把 Yggdrasil 换成小喵"），
+   * 正则既难审，也容易写出灾难性的回溯。
+   *
+   * 它是这条能力里**最强**的一个 op —— 能改到输出契约本身。所以安装确认里单独列出来，
+   * 并且明确写出"它会改写整份提示词"。
+   */
+  for (const patch of patches) {
+    if (patch.op !== 'substitute') continue;
+    const find = patch.find ?? '';
+    if (!find) continue;
+    const withText = patch.replace ?? '';
+    out = out.map((x) => (x.text.includes(find) ? { id: x.id, text: x.text.split(find).join(withText) } : x));
   }
   return out;
 }

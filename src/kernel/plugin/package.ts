@@ -344,8 +344,8 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     if (!raw || typeof raw !== 'object') return bad('prompts 里有一项不是对象。');
     const o = raw as Record<string, unknown>;
     const op = o.op;
-    if (op !== 'insert' && op !== 'replace' && op !== 'remove') {
-      return bad('prompts[].op 只能是 insert / replace / remove（现在是 ' + JSON.stringify(op) + '）。');
+    if (op !== 'insert' && op !== 'replace' && op !== 'remove' && op !== 'substitute') {
+      return bad('prompts[].op 只能是 insert / replace / remove / substitute（现在是 ' + JSON.stringify(op) + '）。');
     }
     const text = typeof o.text === 'string' ? o.text : '';
     const anchor = typeof o.anchor === 'string' ? o.anchor : undefined;
@@ -355,6 +355,12 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     if (op === 'insert') {
       if (!anchor) return bad('prompts 里 insert 必须写 anchor（段落 id，或 start / end）。');
       if (!text.trim()) return bad('prompts 里 insert 的 text 是空的。');
+    } else if (op === 'substitute') {
+      const find = typeof o.find === 'string' ? o.find : '';
+      if (!find) return bad('prompts 里 substitute 必须写 find（要被替换掉的字面量）。');
+      if (find.length > MAX_PATCH_TEXT) return bad('prompts 里 substitute 的 find 太长。');
+      if (typeof o.replace !== 'string') return bad('prompts 里 substitute 必须写 replace（换成什么，可以为空串）。');
+      if (o.replace.length > MAX_PATCH_TEXT) return bad('prompts 里 substitute 的 replace 太长。');
     } else {
       if (!section) return bad('prompts 里 ' + op + ' 必须写 section（要动的段落 id）。');
       if (op === 'replace' && !text.trim()) return bad('prompts 里 replace 的 text 是空的（要删就用 remove）。');
@@ -362,7 +368,17 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     if (text.length > MAX_PATCH_TEXT) {
       return bad('prompts 里的 text 太长（' + text.length + ' 字符，上限 ' + MAX_PATCH_TEXT + '）。');
     }
-    prompts.push({ op, anchor, position: position as 'before' | 'after', section, text, label: typeof o.label === 'string' ? o.label : undefined });
+    prompts.push({
+      op,
+      anchor,
+      position: position as 'before' | 'after',
+      section,
+      text,
+      ...(op === 'substitute'
+        ? { find: (o.find as string), replace: (o.replace as string) }
+        : {}),
+      label: typeof o.label === 'string' ? o.label : undefined,
+    });
   }
 
   // ---- 默认页面 ----
@@ -765,9 +781,21 @@ export function describeManifest(m: PluginManifest): string[] {
   if (promptPatches.length) {
     lines.push('**会改动 Agent 提示词**（' + promptPatches.length + ' 处）：');
     for (const patch of promptPatches) {
+      const label = patch.label ? patch.label + ' — ' : '';
+      if (patch.op === 'substitute') {
+        /*
+         * 替换是**最强**的一个 op：它作用在整份提示词上，连输出契约都能改到。
+         * 所以这里不跟别的 op 用同一种写法，而是把"改写范围"明写出来 ——
+         * 用户点安装前至少知道它的份量。
+         */
+        lines.push(
+          '    · ' + label + 'substitute：把整份提示词里的「' + (patch.find ?? '') + '」全部换成「' +
+            (patch.replace ?? '') + '」（**会改写全篇，包括输出契约**）',
+        );
+        continue;
+      }
       const where = patch.op === 'insert' ? patch.anchor || 'end' : patch.section || '?';
       const preview = (patch.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
-      const label = patch.label ? patch.label + ' — ' : '';
       lines.push(
         '    · ' + label + patch.op + ' @' + where + (preview ? '：' + preview + (preview.length >= 60 ? '…' : '') : ''),
       );
