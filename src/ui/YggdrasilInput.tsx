@@ -556,6 +556,8 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   return (
     <WindowFrame
       id={session.id}
+      // 初始引导的锚点：它要"挖出"这个窗口给第一次打开的人看。
+      introTag="input"
       title={title}
       rect={rect}
       zIndex={z}

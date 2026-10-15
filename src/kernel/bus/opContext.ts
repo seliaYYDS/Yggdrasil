@@ -27,6 +27,17 @@ export interface OpContext {
   index: number;
   /** 上报一条子步骤（用于透明化：比如编译耗时、替换了哪个插槽）。 */
   note: (text: string) => void;
+  /**
+   * 用户按"停止"时会被 abort。
+   *
+   * 为什么必须传到这里：**已经发出去的那次请求不会因为"下一轮不跑了"而停下**。
+   * 抓网页、调插件端点、跑 js 工具都是几十秒量级的事，用户按了停止却还要等它跑完，
+   * 那这个按钮就只是"不再开新的"，而不是"停下来"。
+   *
+   * 处理接口的方式：把它交给 `fetch` 的 init（浏览器会真的断开连接），
+   * 长任务（沙箱工具）自己监听 abort 并终止。
+   */
+  signal?: AbortSignal;
 }
 
 export function ok(message: string, extra: Partial<OpResult> = {}): OpResult {

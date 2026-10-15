@@ -104,7 +104,7 @@ export function registerWorkspaceRunInterface(): void {
     },
     mutates: true,
     cap: 'net',
-    handler: async (op: DerivationOp, _ctx: OpContext): Promise<OpResult> => {
+    handler: async (op: DerivationOp, ctx: OpContext): Promise<OpResult> => {
       const script = strOr(op.script, '');
       if (!script.trim()) return fail('ws_run 需要 script：一个函数表达式，形如 async (ctx) => { ... }。');
       if (toolSandboxKind() === 'unavailable') {
@@ -239,6 +239,8 @@ export function registerWorkspaceRunInterface(): void {
         maxResponseBytes: policy.responseBytes,
         logChars: policy.logChars,
         workspace,
+        // 停止时终止脚本：它可能正卡在一个长循环里。
+        signal: ctx.signal,
       });
 
       const logText = res.logs.length ? '\n脚本日志：\n' + res.logs.join('\n') : '';

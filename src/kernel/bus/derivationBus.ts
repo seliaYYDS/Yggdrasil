@@ -139,6 +139,13 @@ export interface ExecuteOptions {
   sessionId: string;
   /** 每一步开始时回调，用于实时更新进度面板。 */
   onStep?: (step: TraceStep) => void;
+  /**
+   * 用户按"停止"时会被 abort。
+   *
+   * 停止要**真的停下**：正在发的那次请求会跟着断（见 OpContext.signal），
+   * 还没发出去的操作则一条都不再执行 —— 否则按了停止还会看见组件继续一个个冒出来。
+   */
+  signal?: AbortSignal;
 }
 
 export async function executeOps(
@@ -153,6 +160,29 @@ export async function executeOps(
   const tokensBefore = { ...desktop().tokens };
 
   for (let index = 0; index < ops.length; index += 1) {
+    /*
+     * 停止检查放在**每条操作之前**（而不是整批之后）：
+     * 一批里可能有十条操作，用户在看到第三条的副作用时就按了停止 ——
+     * 剩下七条不该继续落地。已经落地的不回滚（那是实实在在的结果）。
+     */
+    if (options.signal?.aborted) {
+      const rest = ops.length - index;
+      steps.push({
+        id: newId(),
+        runId: options.runId,
+        round: options.round,
+        index,
+        kind: 'stopped',
+        label: '已停止',
+        summary: '',
+        status: 'fail',
+        message: '用户停止，剩余 ' + rest + ' 条操作未执行。',
+        startedAt: Date.now(),
+        endedAt: Date.now(),
+      });
+      options.onStep?.(steps[steps.length - 1]);
+      break;
+    }
     const op = ops[index];
     const def = getInterface(op.kind);
     const label = def?.label ?? op.kind;
@@ -195,6 +225,7 @@ export async function executeOps(
         sessionId: options.sessionId,
         round: options.round,
         index,
+        signal: options.signal,
         note: (text) => {
           step.message = text;
           options.onStep?.({ ...step });

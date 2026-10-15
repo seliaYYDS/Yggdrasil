@@ -464,6 +464,91 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-range { width: 100%; accent-color: var(--ygg-accent); }
 .ygg-hint { font-size: 10px; line-height: 1.6; color: var(--ygg-fg-muted); margin-top: 5px; }
 
+/* ---------------- 初始引导 ---------------- */
+
+/*
+ * 引导整层盖在**所有东西之上**（顶部按钮组是 400000），因为它的作用就是"拦住并说明"。
+ * 全层 pointer-events: none，只让卡片与跳过按钮可点 —— 这样挖出来的洞不会挡住用户看，
+ * 也不会出现"遮罩吃掉了一次点击"这种说不清的行为。
+ */
+.ygg-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 500000;
+  pointer-events: none;
+  animation: ygg-fade-in var(--ygg-t-slow) var(--ygg-ease) both;
+}
+/* 没有要指的东西时：整页压暗（内部没有洞）。 */
+.ygg-intro-dim {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--ygg-bg) 72%, transparent);
+}
+/*
+ * 指向某个控件时：一块与控件等大的透明矩形，靠一圈极大的阴影把**其余地方**压暗。
+ * 一块元素就能表达"除了这里都暗"，不必跟着目标尺寸算四个矩形。
+ */
+.ygg-intro-hole {
+  position: absolute;
+  border-radius: var(--ygg-radius);
+  box-shadow: 0 0 0 9999px color-mix(in srgb, var(--ygg-bg) 72%, transparent), 0 0 0 1px var(--ygg-accent);
+  transition: left var(--ygg-t) var(--ygg-ease), top var(--ygg-t) var(--ygg-ease), width var(--ygg-t) var(--ygg-ease), height var(--ygg-t) var(--ygg-ease);
+}
+/* 跳过：**左上角，第一帧就在** —— 想跳过的人不该先走完七步。 */
+.ygg-intro-skip {
+  position: absolute;
+  left: 14px;
+  top: 56px;
+  pointer-events: auto;
+  padding: 5px 10px;
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  background: var(--ygg-surface-2);
+  color: var(--ygg-fg-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color var(--ygg-t) var(--ygg-ease), border-color var(--ygg-t) var(--ygg-ease);
+}
+.ygg-intro-skip:hover { color: var(--ygg-accent-hi); border-color: var(--ygg-accent); }
+.ygg-intro-card {
+  position: absolute;
+  left: 50%;
+  /* 落在页面下半部分：上半部分要留给"被挖出来"的那些顶部控件。 */
+  top: 62%;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  width: min(460px, calc(100vw - 48px));
+  padding: 16px 18px;
+  border: 1px solid var(--ygg-accent-dim);
+  border-radius: var(--ygg-radius);
+  background: var(--ygg-surface);
+  box-shadow: var(--ygg-shadow);
+}
+.ygg-intro-count {
+  font-size: 11px;
+  color: var(--ygg-fg-muted);
+  letter-spacing: .04em;
+}
+.ygg-intro-title {
+  margin: 4px 0 8px;
+  font-family: var(--ygg-font-display);
+  font-size: 15px;
+  color: var(--ygg-accent-hi);
+}
+.ygg-intro-line {
+  font-size: 12px;
+  line-height: 1.75;
+  color: var(--ygg-fg);
+}
+.ygg-intro-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+}
+.ygg-intro-spacer { flex: 1; }
+
 /* ---------------- 顶部按钮组（固定右上角） ---------------- */
 
 /* 左上角那一组：场景的导出 / 导入（右边那组是打开面板） */

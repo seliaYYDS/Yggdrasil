@@ -30,7 +30,7 @@ export function Taskbar() {
   if (stashed.length === 0 && panelKeys.length === 0 && pageKeys.length === 0 && stashedSessions.length === 0) return null;
 
   return (
-    <div className="ygg-taskbar">
+    <div className="ygg-taskbar" data-ygg-intro="taskbar">
       {stashedSessions.map((ses) => (
         <button
           key={ses.id}

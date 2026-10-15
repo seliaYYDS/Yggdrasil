@@ -47,6 +47,13 @@ export interface SandboxJob {
   workspace?: (req: { op: string; name?: string; data?: unknown }) => Promise<unknown>;
   /** 日志上限之外，还要不要额外限制脚本能写多少文件（防止一次调用刷爆工作区）。 */
   maxWorkspaceWrites?: number;
+  /**
+   * 用户按"停止"时会被 abort。
+   *
+   * 一个脚本工具可能跑满整个 timeout（默认 8 秒，最长 30 秒），
+   * 只靠"下一轮不再调用"是停不下来的 —— 必须真的把 Worker 终止掉。
+   */
+  signal?: AbortSignal;
 }
 
 export interface SandboxResult {
@@ -55,6 +62,8 @@ export interface SandboxResult {
   error?: string;
   logs: string[];
   fetches: number;
+  /** true = 因为用户停止而结束（不是失败，不该报成错误）。 */
+  stopped?: boolean;
 }
 
 /** 可注入的执行器：测试用它在 Node 里跑同一套协议（Node 没有 Worker）。 */
@@ -73,6 +82,11 @@ export function toolSandboxKind(): 'injected' | 'worker' | 'unavailable' {
 }
 
 export async function runTool(job: SandboxJob): Promise<SandboxResult> {
+  /*
+   * 已经按过停止：一条都不跑。
+   * 注意这个检查在**注入执行器之前** —— 测试里注入的执行器也该享受同样的语义。
+   */
+  if (job.signal?.aborted) return { ok: false, error: '已停止', logs: [], fetches: 0, stopped: true };
   if (injected) return injected(job);
   if (typeof Worker === 'undefined') {
     return {
@@ -177,6 +191,8 @@ export async function bridgeFetch(
   allowHosts: string[],
   fetchImpl: typeof fetch,
   maxBytes = 200000,
+  /** 用户按"停止"时把它交给 fetch —— 在途的那次请求会被真的断掉。 */
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   let url: URL;
   try {
@@ -189,11 +205,13 @@ export async function bridgeFetch(
     return { error: '插件不允许访问 ' + url.hostname + '（白名单：' + (allowHosts.join(', ') || '空') + '）' };
   }
   try {
-    const res = await fetchImpl(url.href, (init as RequestInit) || undefined);
+    const res = await fetchImpl(url.href, { ...((init as RequestInit) || {}), ...(signal ? { signal } : {}) });
     const text = await res.text();
     // 工具拿到的正文也限制一下：不然一个 100MB 的响应会先炸内存再炸上下文。
     return { ok: res.ok, status: res.status, text: text.slice(0, maxBytes) };
   } catch (e) {
+    // 中止不是"请求失败"：如实说停止，别让它看起来像网络故障。
+    if (signal?.aborted) return { error: '已停止' };
     return { error: '请求 ' + url.hostname + ' 失败：' + (e as Error).message };
   }
 }
@@ -211,10 +229,14 @@ async function runInWorker(job: SandboxJob): Promise<SandboxResult> {
       if (settled) return;
       settled = true;
       window.clearTimeout(timer);
+      // 用户按了停止：把 Worker 直接 terminate（它可能正卡在一个长循环里）。
+      job.signal?.removeEventListener('abort', onAbort);
       worker.terminate();
       URL.revokeObjectURL(url);
       resolve(r);
     };
+    const onAbort = () => finish({ ok: false, error: '已停止', logs, fetches, stopped: true });
+    job.signal?.addEventListener('abort', onAbort, { once: true });
     const timer = window.setTimeout(() => {
       finish({ ok: false, error: '执行超时（' + job.timeoutMs + 'ms），已终止。', logs, fetches });
     }, job.timeoutMs);
@@ -247,7 +269,7 @@ async function runInWorker(job: SandboxJob): Promise<SandboxResult> {
         const overQuota = job.maxFetches !== undefined && fetches > job.maxFetches;
         const result = overQuota
           ? { error: '这次调用已经用完联网配额（' + job.maxFetches + ' 个请求）。' }
-          : await bridgeFetch(String(m.url), m.init, job.allowHosts, fetchImpl, job.maxResponseBytes);
+          : await bridgeFetch(String(m.url), m.init, job.allowHosts, fetchImpl, job.maxResponseBytes, job.signal);
         worker.postMessage({ type: 'fetch-result', id: m.id, result });
         return;
       }

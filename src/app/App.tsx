@@ -7,6 +7,7 @@ import { ResetDialog } from '../ui/ResetDialog';
 import { StructChangeDialog } from '../ui/StructChangeDialog';
 import { ConsoleErrorPrompt } from '../ui/ConsoleErrorPrompt';
 import { SeedDialog } from '../ui/SeedDialog';
+import { IntroOverlay } from '../ui/IntroOverlay';
 import { installConsoleErrorHooks, subscribeConsoleErrors } from '../host/consoleErrors';
 import { useDesktopStore } from '../store/desktopStore';
 
@@ -72,6 +73,11 @@ export function App() {
       <ConsoleErrorPrompt />
       <SeedDialog />
       <Feedback />
+      {/*
+        初始引导盖在最上面。放在最后是因为它要压住顶部按钮组（它自己会挖出当前指向的控件）。
+        没在引导时它自己返回 null，不占层级也不吃事件。
+      */}
+      <IntroOverlay />
     </>
   );
 }

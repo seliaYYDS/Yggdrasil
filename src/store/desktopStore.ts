@@ -300,6 +300,8 @@ interface PersistedRoot {
   plugins?: InstalledPlugin[];
   pluginPageRects?: Record<string, PanelRect>;
   pluginPageOpen?: Record<string, boolean>;
+  /** 引导是否看过。存起来，免得每次刷新都再拦一次。 */
+  introSeen?: boolean;
 }
 
 const K_NODES = 'nodes';
@@ -314,6 +316,7 @@ const K_PLUGINS = 'plugins';
 /** 插件页面的几何与开合；与内置面板分开存，因为它们的数量是动态的。 */
 const K_PAGE_RECTS = 'pluginPageRects';
 const K_PAGE_OPEN = 'pluginPageOpen';
+const K_INTRO = 'introSeen';
 
 /** 除 API 设置外，这些键在重置时全部清除。 */
 const RESETTABLE_KEYS = [K_NODES, K_ROOT, K_THEME, K_LOGS, K_PANELS, K_SESSIONS, 'z', 'panelZ', K_SURFACES, K_PAGE_RECTS, K_PAGE_OPEN];
@@ -536,7 +539,13 @@ export function resolvePanels(viewW: number, viewH: number): PanelRects {
   };
 }
 
-/** 第一个输入框的默认落点（贴底居中），按视口夹一遍。 */
+/**
+ * 第一个输入框的默认落点：**页面正中**（水平垂直都居中），按视口夹一遍。
+ *
+ * 曾经是"贴底居中"。改成正中是因为它其实是这个应用唯一的入口 ——
+ * 空白页面上放在底部，第一次打开的人不一定注意得到；放在正中，视线落点就是它。
+ * 之后用户把它拖到哪儿就一直在哪儿（落点只在首次与"新建会话"时用）。
+ */
 export function resolveInputRect(viewW: number, viewH: number): PanelRect {
   const w = Math.min(DEFAULT_INPUT_RECT.w, Math.max(PANEL_MIN_SESSION.w, viewW - 48));
   return fitRectToViewport(
@@ -544,7 +553,7 @@ export function resolveInputRect(viewW: number, viewH: number): PanelRect {
       ...DEFAULT_INPUT_RECT,
       w,
       x: Math.max(24, Math.round((viewW - w) / 2)),
-      y: Math.max(80, viewH - DEFAULT_INPUT_RECT.h - 20),
+      y: Math.max(80, Math.round((viewH - DEFAULT_INPUT_RECT.h) / 2)),
     },
     viewW,
     viewH,
@@ -1083,6 +1092,20 @@ interface DesktopState {
   dismissConsolePrompt: () => void;
   /** 导出/导入场景的对话框：'export' | 'import' | null。 */
   seedDialog: 'export' | 'import' | null;
+  /**
+   * 初始引导的当前步骤：**0 = 不显示**，1..N = 第几步。
+   *
+   * 用"步骤号"而不是"要不要显示"：引导是多步的，显示状态与进度本来就是同一件事，
+   * 分成两个字段只会出现"显示着但步骤是 0"这种矛盾态。
+   */
+  introStep: number;
+  /** 引导看过没有。首次打开自动播一遍，之后只在设置里手动重放。 */
+  introSeen: boolean;
+  /** 从头播一遍引导（首次打开与设置里的"重放引导"都走它）。 */
+  startIntro: () => void;
+  setIntroStep: (step: number) => void;
+  /** 结束引导（走完或跳过），并记为看过。 */
+  endIntro: () => void;
   setSeedDialog: (mode: 'export' | 'import' | null) => void;
   /** 按勾选的区块组装一个 .seed（纯函数，不落盘 —— 下载交给 UI）。 */
   exportSeed: (parts: SeedPart[], includeApiKey: boolean) => SeedFile;
@@ -1419,6 +1442,7 @@ export function snapshot(): PersistedRoot {
     plugins: s.plugins,
     pluginPageRects: s.pluginPageRects,
     pluginPageOpen: s.pluginPageOpen,
+    introSeen: s.introSeen,
   };
 }
 
@@ -1459,6 +1483,7 @@ async function saveNow(): Promise<void> {
     await adapter.set('panelZ', snap.panelZ);
     await adapter.set(K_PAGE_RECTS, snap.pluginPageRects);
     await adapter.set(K_PAGE_OPEN, snap.pluginPageOpen);
+    await adapter.set(K_INTRO, snap.introSeen);
     await adapter.set(K_SURFACES, snap.surfaces);
   } catch (e) {
     useDesktopStore.getState().log('warn', 'persist \u2715 ' + (e as Error).message);
@@ -1511,6 +1536,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   consolePrompt: null,
   pendingShot: null,
   seedDialog: null,
+  introStep: 0,
+  introSeen: false,
 
   hydrate: async () => {
     const adapter = await initStorage();
@@ -1527,6 +1554,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     let favorites: FavoriteEntry[] | undefined;
     let pageRects: Record<string, PanelRect> | undefined;
     let pageOpen: Record<string, boolean> | undefined;
+    let introSeen: boolean | undefined;
     let panels: Partial<PanelRects> & { input?: PanelRect } | undefined;
     let sessions: PersistedSession[] | undefined;
     let z: number | undefined;
@@ -1548,6 +1576,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       favorites = await loadFavorites();
       pageRects = await adapter.get<Record<string, PanelRect>>(K_PAGE_RECTS);
       pageOpen = await adapter.get<Record<string, boolean>>(K_PAGE_OPEN);
+      introSeen = await adapter.get<boolean>(K_INTRO);
       sessions = await adapter.get<PersistedSession[]>(K_SESSIONS);
       z = await adapter.get<number>('z');
       panelZ = await adapter.get<Record<string, number>>('panelZ');
@@ -1673,6 +1702,13 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       favorites: favorites ?? get().favorites,
       pluginPageRects: pageRects ?? {},
       pluginPageOpen: pageOpen ?? {},
+      /*
+       * 首次打开（本地还没有这个标记）**自动播一遍引导**。
+       * 判据是"没看过"而不是"没配过 Key"：用户可能已经配好了，
+       * 但仍需要认识这个界面 —— 引导里也包含这部分。
+       */
+      introStep: introSeen ? 0 : 1,
+      introSeen: introSeen === true,
       zCounter: z ?? 10 + Object.keys(safeNodes).length,
       panelZ: {
         ...DEFAULT_PANEL_Z,
@@ -2093,6 +2129,14 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   dismissConsolePrompt: () => set({ consolePrompt: null }),
 
   setSeedDialog: (mode) => set({ seedDialog: mode }),
+
+  startIntro: () => set({ introStep: 1 }),
+  setIntroStep: (step) => set({ introStep: Math.max(1, Math.round(step)) }),
+  endIntro: () => {
+    set({ introStep: 0, introSeen: true });
+    // 看过就记下来，否则每次刷新都会再拦一次。
+    schedulePersist();
+  },
 
   installPlugin: (pkg, source) => {
     const manifest = pkg.manifest;

@@ -19,6 +19,9 @@ type Section = 'general' | 'llm';
 export function SettingsPanel() {
   const open = useDesktopStore((s) => s.settingsOpen);
   const setOpen = useDesktopStore((s) => s.setSettingsOpen);
+  // 重放引导：先关掉设置面板，否则引导会盖在它上面、看不到被指的那些控件。
+  const setSettingsOpen = useDesktopStore((s) => s.setSettingsOpen);
+  const startIntro = useDesktopStore((s) => s.startIntro);
   const settings = useDesktopStore((s) => s.settings);
   const setSettings = useDesktopStore((s) => s.setSettings);
   const [section, setSection] = useState<Section>('llm');
@@ -132,6 +135,25 @@ export function SettingsPanel() {
               图片中转以前放在 LLM 区 —— 那是错的：它跟模型无关，
               是"浏览器读不了跨域图时怎么办"的应用行为，所以归到常规。
             */}
+            {/*
+              重放引导放在常规区：引导本身最后一步会告诉用户"入口在这儿"，
+              所以它必须真的在这儿，不然那句话就是假的。
+            */}
+            <div className="ygg-field">
+              <label className="ygg-label">初始引导</label>
+              <div className="ygg-row-gap">
+                <button
+                  className="ygg-btn ghost"
+                  onClick={() => {
+                    setSettingsOpen(false);
+                    startIntro();
+                  }}
+                >
+                  重放引导
+                </button>
+              </div>
+              <div className="ygg-hint">重新看一遍界面与模型配置的说明。</div>
+            </div>
             <div className="ygg-field">
               <label className="ygg-label">图片中转（可选）</label>
               <input

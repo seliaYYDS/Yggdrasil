@@ -301,6 +301,8 @@ export async function httpCall(
   e: PluginEndpoint,
   op: DerivationOp,
   fetchImpl: typeof fetch = fetch,
+  /** 用户按"停止"时交给 fetch，断开在途的那次请求。 */
+  signal?: AbortSignal,
 ): Promise<OpResult> {
   const missing = missingFields(plugin, e);
   if (missing.length) {
@@ -360,8 +362,10 @@ export async function httpCall(
 
   let res: Response;
   try {
-    res = await fetchImpl(url.href, init);
+    res = await fetchImpl(url.href, { ...init, ...(signal ? { signal } : {}) });
   } catch (e2) {
+    // 中止不是"请求失败"：如实说停止，别写成 CORS/网络故障（那会把用户引到错的方向）。
+    if (signal?.aborted) return fail('已停止（这次调用被用户中止）。');
     return fail(
       'Calling ' + url.hostname + ' failed: ' + (e2 as Error).message +
         '。若是浏览器拦下的跨域请求，那是主机端不允许页面读取（CORS），插件与页面都无法绕过；' +
@@ -433,7 +437,8 @@ function registerEndpoint(plugin: InstalledPlugin, e: PluginEndpoint): void {
     mutates: e.mutates === true,
     cap: e.cap === null ? undefined : e.cap ?? 'net',
     pluginId: plugin.id,
-    handler: (op: DerivationOp, _ctx: OpContext) => httpCall(plugin, e, op),
+    // 把 ctx.signal 一路交给 fetch：用户按停止时在途的那次请求会真的断开。
+    handler: (op: DerivationOp, ctx: OpContext) => httpCall(plugin, e, op, fetch, ctx.signal),
   });
 }
 
@@ -455,7 +460,7 @@ function registerToolInterface(plugin: InstalledPlugin, tool: PluginTool): void 
     cap: tool.cap === null ? undefined : tool.cap ?? 'net',
     pluginId: plugin.id,
     // op 形态与 tool 形态共用同一段执行（配额 / 白名单 / 密钥遮蔽 / 截断都必须一致）。
-    handler: (op: DerivationOp): Promise<OpResult> => executePluginTool(plugin, tool, op),
+    handler: (op: DerivationOp, ctx: OpContext): Promise<OpResult> => executePluginTool(plugin, tool, op, ctx.signal),
   });
 }
 
@@ -463,7 +468,12 @@ function registerToolInterface(plugin: InstalledPlugin, tool: PluginTool): void 
  * 跑一个插件的 js 工具。**op 形态与 tool 形态共用这段** —— 两条路只是"模型怎么发现它"不同，
  * 执行、配额、密钥遮蔽、白名单、截断必须完全一致，否则同一份代码会因为注册方式不同而松紧不同。
  */
-async function executePluginTool(plugin: InstalledPlugin, tool: PluginTool, args: unknown): Promise<OpResult> {
+async function executePluginTool(
+  plugin: InstalledPlugin,
+  tool: PluginTool,
+  args: unknown,
+  signal?: AbortSignal,
+): Promise<OpResult> {
   const source = plugin.files[tool.file];
   if (!source) return fail('插件包里找不到 ' + tool.file + '（装的时候没带进来？）。');
   const policy = securityPolicy();
@@ -493,6 +503,8 @@ async function executePluginTool(plugin: InstalledPlugin, tool: PluginTool, args
     maxFetches: policy.fetchPerCall,
     maxResponseBytes: policy.responseBytes,
     logChars: policy.logChars,
+    // 停止时把 Worker 终止掉：脚本可能正卡在一个长循环里，等它自己跑完就等于没停。
+    signal,
   });
   const head = plugin.name + ' · ' + tool.label;
   if (!res.ok) {
@@ -530,8 +542,8 @@ function registerPluginTool(plugin: InstalledPlugin, tool: PluginTool): void {
     builtin: false,
     pluginId: plugin.id,
     cap: tool.cap === null ? undefined : tool.cap ?? 'net',
-    run: async (args) => {
-      const res = await executePluginTool(plugin, tool, args);
+    run: async (args, signal?: AbortSignal) => {
+      const res = await executePluginTool(plugin, tool, args, signal);
       if (!res.ok) throw new Error(res.message || 'plugin tool failed');
       return res.observation ?? '';
     },

@@ -994,6 +994,8 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
           runId,
           round,
           sessionId,
+          // 停止信号一路传到每条操作：在途的请求会断，未执行的直接不执行。
+          signal,
           onStep: (step) => {
             pushStep(step);
             setRunStatus({

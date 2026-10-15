@@ -19,7 +19,8 @@ export function TopBar() {
         放在左边是有意的 —— 右边那组是"打开某个面板"（视图），左边这组是"整个场景的进出"，
         两类操作分开，不必在一排图标里找。
       */}
-      <div className="ygg-topbar ygg-topbar-left">
+      {/* data-ygg-intro 是初始引导用来"挖出"这一块的锚点，不参与样式。 */}
+      <div className="ygg-topbar ygg-topbar-left" data-ygg-intro="scene">
         <button className="ygg-topbtn" title="导出场景（.seed）" onClick={() => setSeedDialog('export')}>
           <ExportIcon />
         </button>
@@ -81,7 +82,7 @@ function TopRight() {
   const runningCount = useDesktopStore((s) => s.sessions.filter((ses) => ses.status.running).length);
 
   return (
-    <div className="ygg-topbar">
+    <div className="ygg-topbar" data-ygg-intro="panels">
       <button
         className="ygg-topbtn"
         title={sessionCount >= MAX_SESSIONS ? '已达输入框上限' : '新建输入框'}
@@ -143,7 +144,7 @@ function TopRight() {
           })}
         </span>
       ))}
-      <button className="ygg-topbtn" title="设置" onClick={() => setSettingsOpen(true)}>
+      <button className="ygg-topbtn" title="设置" data-ygg-intro="settings" onClick={() => setSettingsOpen(true)}>
         <SettingsIcon />
       </button>
       <button className="ygg-topbtn is-danger" title="重置" onClick={() => setResetOpen(true)}>

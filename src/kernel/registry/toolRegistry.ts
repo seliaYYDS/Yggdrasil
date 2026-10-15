@@ -22,7 +22,13 @@ export interface RuntimeTool {
    * 它必须在这里声明，否则会出现一个真实的安全缺口 —— 见 call_tool 里的检查。
    */
   cap?: ActCap;
-  run: (args: unknown) => unknown;
+  /**
+   * 执行工具。
+   *
+   * `signal`：用户按"停止"时中止长任务（沙箱里的脚本工具可能跑满整个 timeout）。
+   * 内置工具（calc / now / random）是纯计算，忽略它即可。
+   */
+  run: (args: unknown, signal?: AbortSignal) => unknown;
 }
 
 const tools = new Map<string, RuntimeTool>();
@@ -55,10 +61,10 @@ export function toolCatalog(): ToolCatalogEntry[] {
   }));
 }
 
-export async function callTool(id: string, args: unknown): Promise<unknown> {
+export async function callTool(id: string, args: unknown, signal?: AbortSignal): Promise<unknown> {
   const tool = tools.get(id);
   if (!tool) throw new Error('No such tool: ' + id);
-  return await tool.run(args);
+  return await tool.run(args, signal);
 }
 
 /**

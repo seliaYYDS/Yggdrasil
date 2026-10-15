@@ -60,6 +60,8 @@ interface Props {
    * 只有显式传了它的窗口才接拖放，别的窗口不受影响。
    */
   onDropFiles?: (files: File[]) => void;
+  /** 初始引导的锚点（渲染成 data-ygg-intro）。只有输入框窗口会传。 */
+  introTag?: string;
   /** 正在播"被收走"的淡出动画：淡出结束后才真正删除。 */
   dying?: boolean;
   /**
@@ -100,6 +102,7 @@ export function WindowFrame({
   newborn,
   children,
   onDropFiles,
+  introTag,
 }: Props) {
   const isWidget = frame === 'widget';
   /** 挂件固定后连操控按钮都不出，避免误碰。 */
@@ -400,6 +403,8 @@ export function WindowFrame({
       }
       onPointerDownCapture={onPointerDown}
       data-ygg-node={id}
+      // 初始引导用的锚点（只有输入框会传）。
+      {...(introTag ? { 'data-ygg-intro': introTag } : {})}
     >
       {/*
         挂件**不画标题栏**（也不占它的高度）：它就是一整块内容。

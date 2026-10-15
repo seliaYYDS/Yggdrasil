@@ -404,7 +404,8 @@ export function registerCoreInterfaces(): void {
         }
       }
       try {
-        const value = await tool.run(op.args);
+        // 停止信号交给工具：沙箱里的脚本工具会被 terminate，在途的 ctx.fetch 会被断开。
+    const value = await tool.run(op.args, ctx.signal);
         /*
          * 结果要**完整**回灌给模型，而不是截到 400 字符。
          *

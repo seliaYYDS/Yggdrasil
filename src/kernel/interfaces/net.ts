@@ -17,12 +17,13 @@ export function registerNetInterfaces(): void {
       'Fetch a URL: body (HTML stripped) + title + **direct image links** + followable links. To see images, read that section of the response — no need to fetch again. A direct request blocked by CORS automatically goes through the render proxy. maxChars defaults to 12000 / max 60000 and trims only the body (links and images are unaffected).',
     example: { kind: 'fetch_url', url: 'https://example.com', maxChars: 4000 },
     cap: 'net',
-    handler: async (op) => {
+    handler: async (op, ctx) => {
       const url = strOr(op.url, '');
       if (!url) return fail('fetch_url needs a url.');
       const maxChars = typeof op.maxChars === 'number' ? op.maxChars : undefined;
       try {
-        const r = await fetchWebSmart(url, { maxChars });
+        // 停止信号交给 fetch：用户按停止时这次请求会真的断开，而不是等它下载完。
+        const r = await fetchWebSmart(url, { maxChars, signal: ctx.signal });
         if (r.status < 200 || r.status >= 400) {
           return fail('Fetching ' + url + ' returned ' + r.status + '.');
         }
@@ -60,13 +61,13 @@ export function registerNetInterfaces(): void {
       'Check whether an image URL is reachable (HEAD first, no body download) and return status, content-type and byte size. Use it with the direct image links returned by fetch_url: confirm it works, then write it into a component.',
     example: { kind: 'fetch_image', url: 'https://example.com/a.png' },
     cap: 'net',
-    handler: async (op) => {
+    handler: async (op, ctx) => {
       const url = strOr(op.url, '');
       if (!url) return fail('fetch_image needs a url.');
       try {
         // 和 view_image 走同一条链：设置里填了中转就用它兜底，别出现"探测说不可用、看图却能读"。
         const relay = (useDesktopStore.getState().settings.imageRelay ?? '').trim() || undefined;
-        const r = await probeImage(url, { relay });
+        const r = await probeImage(url, { relay, signal: ctx.signal });
         if (r.status < 200 || r.status >= 400) return fail('Image ' + url + ' returned ' + r.status + '.');
         // 网页或 JSON 说明这不是直链（常见于图床的中间页 / 防盗链拦截页）。
         if (/^(text\/|application\/(json|xml))/i.test(r.contentType)) {
@@ -105,7 +106,7 @@ export function registerNetInterfaces(): void {
       try {
         // 中转地址来自设置（默认空 = 不中转）。识图本身始终是"base64 交给当前模型"。
         const relay = (useDesktopStore.getState().settings.imageRelay ?? '').trim() || undefined;
-        const img = await fetchImageData(url, { relay });
+        const img = await fetchImageData(url, { relay, signal: ctx.signal });
         // 压一遍再进上下文：原图动辄几 MB，base64 之后更大，而且每轮都会重发。
         const prepared = await prepareImage(img.blob);
         const dataUrl = prepared?.dataUrl ?? img.dataUrl;
