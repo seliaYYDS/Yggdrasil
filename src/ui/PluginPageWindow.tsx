@@ -22,7 +22,7 @@ export function PluginPageWindow({ host, index }: { host: PluginPageHost; index:
   const rect = useDesktopStore((s) => s.pluginPageRects[key]);
   const minimized = useDesktopStore((s) => !!s.minimizedPanels['page:' + key]);
   /*
-   * 层级读**裸键**（`brief.audit`），不是带前缀的 DOM id —— 与内置面板同一套约定：
+   * 层级读**裸键**（`<插件 id>.<页面 id>`），不是带前缀的 DOM id —— 与内置面板同一套约定：
    * DOM id 带 `page-`/`panel-` 前缀，层级表里存的是不带前缀的那个键。
    * 读错了会一直是 undefined，于是永远用兜底值，也就永远在最底层。
    */

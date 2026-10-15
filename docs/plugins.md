@@ -343,10 +343,10 @@ Worker 中不存在 `window`、`document`、`localStorage` 与 Node 内置模块
 
     "pages": [
       {
-        "id": "clock",
-        "label": "时钟",
-        "description": "一个走着的时钟",
-        "file": "ui/clock-page.tsx",
+        "id": "board",
+        "label": "看板",
+        "description": "显示一行行 label / value",
+        "file": "ui/board.tsx",
         "icon": ["M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20", "M12 7v5l3 2"]
       }
     ]
@@ -592,16 +592,13 @@ Worker 中不存在 `window`、`document`、`localStorage` 与 Node 内置模块
 | 目录 | 内容 |
 | --- | --- |
 | `plugins/weather` | 端点能力的最小实例：两个端点 + `pick`，指南中带 WMO 代码表 |
-| `plugins/music-search` | 搜索类端点，返回可直接使用的媒体直链 |
-| `plugins/currency` | 三个端点，全部无需密钥 |
 | `plugins/github` | 可选鉴权：未填 Token 时降级为匿名只读 |
 | `plugins/netease-music` | 自建服务：主机由 `{config:base_url}` 提供 |
-| `plugins/status-board` | 端点 + js 工具 + `ui` 三种形态并存 |
-| `plugins/status-board-1.1` | 与上者同 id、更高版本，用于验证升级差异 |
 | `plugins/toolbox` | 八个 `exposeAs: "tool"` 的工具，无网络访问 |
-| `plugins/clock` | 页面能力的最小实例：仅一个 `pages` 条目 |
-| `plugins/brief` | 提示词补丁与一个用于查看改动的页面 |
 | `plugins/nya` | 提示词能力的最小实例：`substitute` 改名与 `insert` 口吻要求 |
+
+这批示例覆盖了端点、工具与提示词三类能力。`pages` 与 `ui` 目前没有随包示例，
+用法见上文各自的最小示例。
 
 ## 尚未实现
 

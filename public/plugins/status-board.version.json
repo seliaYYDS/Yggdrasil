@@ -1,5 +1,0 @@
-{
-  "version": "1.1",
-  "url": "/plugins/status-board-1.1.graft",
-  "note": "演示用：1.1 新增一个 repo_info 端点与一个 GitHub Token 字段，所以升级确认里应当能看到权限差异。"
-}

@@ -1,7 +1,7 @@
 # toolbox
 
 A demo plugin whose contribution is **new tools**, not new operations — compare it with
-`status-board`, which contributes operations.
+`github`, which contributes operations.
 
 ## Why these tools exist
 
@@ -58,4 +58,4 @@ as **strings** (that is the plugin contract), so the tools parse numbers themsel
     node scripts/try-plugin.mjs --dir plugins/toolbox tool:encode --op sha256 --text abc
 
 All eight are pure computation (`cap: null`), so `hosts` is empty and nothing here touches
-the network — a network-backed plugin tool looks like `status-board.probe` instead.
+the network — a network-backed plugin tool would call `ctx.fetch` from inside the sandbox instead.

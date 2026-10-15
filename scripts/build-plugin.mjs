@@ -2,7 +2,7 @@
 /**
  * 把一个插件目录打成交付物：<公共目录>/<id>.graft（zip）与 <id>.json（单文件）。
  *
- * 用法：node scripts/build-plugin.mjs music-search
+ * 用法：node scripts/build-plugin.mjs weather
  *      （不带参数就打 plugins/ 下的全部）
  *
  * 这里**自己写一个极小 zip writer（stored 模式）**，是有意的：

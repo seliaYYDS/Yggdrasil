@@ -583,7 +583,7 @@ export function registerPluginDocsInterface(): void {
     label: '读插件指南',
     description:
       'Read the usage guide of an installed plugin (its guide.md) plus the exact parameters of its operations and tools. Call this before using a plugin you have not used yet — the prompt only lists plugin names, their operations and their tool names. Note the two ways a plugin gives you something to call: **operations** (use them directly, kind = <plugin id>.<name>) and **tools** (already listed under "Available tools"; call them with call_tool). Pass id, or omit it to list the installed plugins.',
-    example: { kind: 'plugin_docs', id: 'music-search' },
+    example: { kind: 'plugin_docs', id: 'weather' },
     cap: null as never,
     handler: (op: DerivationOp): OpResult => {
       const id = strOr(op.id, '');

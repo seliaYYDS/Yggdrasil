@@ -57,9 +57,9 @@ export function PluginsPanel() {
   const onDemo = async () => {
     setError('');
     try {
-      const res = await fetch('/plugins/music-search.graft');
+      const res = await fetch('/plugins/weather.graft');
       if (!res.ok) throw new Error('取示例插件失败：HTTP ' + res.status);
-      await read('music-search.graft', new Uint8Array(await res.arrayBuffer()));
+      await read('weather.graft', new Uint8Array(await res.arrayBuffer()));
     } catch (e) {
       setError((e as Error).message);
     }
