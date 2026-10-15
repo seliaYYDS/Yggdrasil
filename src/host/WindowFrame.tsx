@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Surface } from './Surface';
-import { useDesktopStore } from '../store/desktopStore';
+import { clampWidgetPos, useDesktopStore, widgetControlsOffset } from '../store/desktopStore';
 import { snapCenterToGrid } from '../app/grid';
 import { CloseIcon, MoveIcon, ScaleIcon } from '../ui/icons';
 
@@ -111,6 +111,9 @@ export function WindowFrame({
   /** 拖动中是否按着 Shift（= 网格吸附）。用 ref 记，pointermove 里比对，避免反复写 store。 */
   const snapRef = useRef(false);
   const setSnapDrag = useDesktopStore((s) => s.setSnapDrag);
+  // 挂件的控制面板要按视口算落点，位置夹取也要用它。
+  const viewW = useDesktopStore((s) => s.viewW);
+  const viewH = useDesktopStore((s) => s.viewH);
 
   // 最小化 / 恢复都由 store 驱动：先标记 leaving（或 restoring），动画播完才真正收放。
   const leaving = useDesktopStore((s) => !!s.leaving[id]);
@@ -263,7 +266,12 @@ export function WindowFrame({
           y: Math.max(0, origin.current.py + (e.clientY - origin.current.y)),
         };
         const snapped = e.shiftKey ? snapCenterToGrid(next) : { x: next.x, y: next.y };
-        move({ ...next, x: snapped.x, y: snapped.y });
+        const placed = { ...next, x: snapped.x, y: snapped.y };
+        /*
+         * 挂件额外夹一次：保证右下角那块控制面板还留在视口里。
+         * 普通窗口不用夹 —— 它的标题栏就是把手，而挂件的把手就在那一小块上。
+         */
+        move(isWidget ? clampWidgetPos(placed, viewW, viewH) : placed);
       } else {
         move({
           ...rect,
@@ -290,7 +298,7 @@ export function WindowFrame({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [drag, minH, minW, move, rect, setSnapDrag, setResizing]);
+  }, [drag, isWidget, minH, minW, move, rect, setSnapDrag, setResizing, viewW, viewH]);
 
   const builtinTitlebar = (
     <div className="ygg-titlebar" data-ygg-drag={onRect ? '1' : '0'}>
@@ -411,8 +419,22 @@ export function WindowFrame({
         前两个是**把手**（按住才生效），第三个是普通点击。
         固定之后整个不渲染 —— 用户"固定"的意思就是别再来烦我。
       */}
+      {/*
+        挂件拖动 / 缩放时的**尺寸提示框**。
+        挂件没有标题栏、背景也常常是全透明的（状态灯、计数器、纯装饰），
+        光看内容看不出它有多大、边界在哪 —— 拖一个看不见边的东西很难受。
+        所以按住把手期间补一圈白框：框就是窗口的实际外框，所见即所得。
+      */}
+      {isWidget && drag ? <div className="ygg-widget-size-frame" /> : null}
       {isWidget && !pinned ? (
-        <div className="ygg-widget-controls">
+        <div
+          className="ygg-widget-controls"
+          /*
+           * 控制面板默认贴窗口右下角；窗口右下角出界时自动往回挪到可见处 ——
+           * 否则挂件被拖出屏幕后那三个按钮也跟着出界，就再也点不到、要不回来了。
+           */
+          style={widgetControlsOffset(rect, viewW, viewH)}
+        >
           <button
             className="ygg-widget-btn"
             title="按住拖动可缩放"

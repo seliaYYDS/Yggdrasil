@@ -621,8 +621,28 @@ button:focus:not(:focus-visible) { outline: none; }
 .ygg-window.is-widget > .ygg-window-body { padding: 0; }
 
 /*
+ * 挂件拖动 / 缩放时的尺寸提示：一圈白框，贴在窗口的边框内侧。
+ *
+ * 为什么需要：挂件没有标题栏，背景又常常是全透明的 —— 拖一个看不见边界的东西时，
+ * 用户没有任何参照知道它现在多大、边界在哪。白框只在按住把手期间出现，松手即消失。
+ *
+ * 用子元素而不是给窗口加 outline：窗口是 overflow: hidden，子元素画在框内最稳，
+ * 也不受动画/层级影响。pointer-events: none 保证它不抢把手的指针。
+ */
+.ygg-widget-size-frame {
+  position: absolute;
+  inset: 0;
+  border: 1px solid #fff;
+  border-radius: var(--ygg-radius);
+  pointer-events: none;
+}
+
+/*
  * 挂件的操控按钮：hover 时才浮出来，固定在右下角。
  * 前两个是"把手"——按住拖动才移动 / 缩放；第三个点一下就关。
+ *
+ * 定位默认 right/bottom = 2px，但**会由 widgetControlsOffset() 覆盖**：
+ * 窗口右下角出界时把它往回挪进可见区域（尺寸常量 WIDGET_CONTROLS = 62×22 见 desktopStore）。
  */
 .ygg-widget-controls {
   position: absolute;

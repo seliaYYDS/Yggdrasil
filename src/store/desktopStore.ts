@@ -403,6 +403,69 @@ export const PANEL_MIN: Record<PanelKey, { w: number; h: number }> = {
 export const PANEL_MIN_SESSION = { w: 300, h: 70 };
 
 /**
+ * 挂件右下角那三个操控按钮的尺寸。
+ *
+ * 与 `global.css` 的 `.ygg-widget-controls` 同步（3 个 18px 按钮 + 2×2 间距 + 2×2 内边距
+ * = 62×22）。这类"TS 与 CSS 必须对得上"的常量在本项目已有先例（DEATH_MS 与 --ygg-t-slow 都是 260），
+ * 所以这里同样写死并注明来源。
+ */
+export const WIDGET_CONTROLS = { w: 62, h: 22 };
+
+/**
+ * 挂件**必须留在视口里**的那一小块：控制面板本身 + 它距窗口边缘的 2px。
+ *
+ * 为什么是"这一块"而不是"整个挂件"：挂件没有标题栏，用户能抓住的**只有右下角这三个按钮**。
+ * 那块一旦跑出屏幕，挂件就再也挪不回来、也改不了大小 —— 所以夹取的对象是它，不是整个挂件。
+ */
+export const WIDGET_GRAB = { w: WIDGET_CONTROLS.w + 2, h: WIDGET_CONTROLS.h + 2 };
+
+/**
+ * 移动挂件时夹住位置：保证右下角那块（控制面板所在处）始终落在视口内。
+ *
+ * 只夹**位置**，不夹尺寸 —— 尺寸那边不需要：控制面板会自己往可见处挪（见 widgetControlsOffset），
+ * 而"挪得回去"只取决于窗口的左上角离视口边缘够不够远。
+ */
+export function clampWidgetPos(
+  rect: PanelRect,
+  viewW: number,
+  viewH: number,
+): PanelRect {
+  // 右边至少露出 WIDGET_GRAB.w，所以 x 最大是 viewW 减它；左边最多藏到只剩这一块。
+  const minX = WIDGET_GRAB.w - rect.w;
+  const maxX = Math.max(minX, viewW - WIDGET_GRAB.w);
+  // y 不能为负（与普通窗口一致：别把窗口顶部拖到屏幕外），下边同理留出那一块。
+  const minY = Math.max(0, WIDGET_GRAB.h - rect.h);
+  const maxY = Math.max(minY, viewH - WIDGET_GRAB.h);
+  return {
+    ...rect,
+    x: Math.min(Math.max(rect.x, minX), maxX),
+    y: Math.min(Math.max(rect.y, minY), maxY),
+  };
+}
+
+/**
+ * 挂件控制面板的落点：默认贴窗口右下角（right/bottom = 2px）。
+ *
+ * 窗口右下角出界时**往回挪**，让它落在可见区域里 —— 否则挂件被拖到屏幕外之后，
+ * 那三个按钮就跟着出界，用户再也点不到，挂件也就"要不回来"了。
+ *
+ * 挪动有上限：窗口是 `overflow: hidden`，挪出窗口自身范围就会被裁掉，
+ * 所以最多挪到窗口左/上边缘。
+ */
+export function widgetControlsOffset(
+  rect: PanelRect,
+  viewW: number,
+  viewH: number,
+): { right: number; bottom: number } {
+  const overRight = Math.max(0, rect.x + rect.w - viewW);
+  const overBottom = Math.max(0, rect.y + rect.h - viewH);
+  return {
+    right: Math.min(2 + overRight, Math.max(2, rect.w - WIDGET_CONTROLS.w - 2)),
+    bottom: Math.min(2 + overBottom, Math.max(2, rect.h - WIDGET_CONTROLS.h - 2)),
+  };
+}
+
+/**
  * 插件页面的**设计尺寸**与尺寸下限。
  *
  * 与内置面板同理：视口变大时不该让窗口无限跟着长（否则"缩小再放大"会越放越大），
