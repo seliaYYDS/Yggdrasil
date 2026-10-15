@@ -1,0 +1,47 @@
+{
+  "format": "yggdrasil.plugin",
+  "manifest": {
+    "id": "brief",
+    "name": "简报模式",
+    "version": "1.0",
+    "author": "Yggdrasil",
+    "minAppVersion": "0.1",
+    "description": "示例插件：**改 Agent 的核心行为**（往系统提示里插一段\"输出从简\"）并**给界面加一个页面**（工具栏按钮 + 常驻窗口）。",
+    "hosts": [],
+    "fields": [],
+    "endpoints": [],
+    "prompts": [
+      {
+        "op": "insert",
+        "anchor": "output-format",
+        "position": "before",
+        "label": "输出从简",
+        "text": "## Keep it short\nKeep the \"reasoning\" field to **one short sentence (at most ~20 words)** and never restate the user request.\nThe user reads the ops, not your prose — a long reasoning pushes the thing they asked about out of view."
+      }
+    ],
+    "pages": [
+      {
+        "id": "audit",
+        "label": "改动一览",
+        "description": "看看「简报模式」到底改了 Agent 的什么",
+        "file": "ui/brief-page.tsx",
+        "data": {
+          "title": "「简报模式」改了什么",
+          "note": "它往 Agent 的系统提示里插了下面这一段（在输出契约之前）。关掉插件即失效，卸载即撤销。",
+          "patches": [
+            {
+              "op": "insert",
+              "where": "output-format 之前",
+              "label": "输出从简",
+              "text": "## Keep it short\nKeep the \"reasoning\" field to **one short sentence (at most ~20 words)** and never restate the user request.\nThe user reads the ops, not your prose — a long reasoning pushes the thing they asked about out of view."
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "guide": "# brief\n\n一个演示**\"插件改动核心\"**这一能力的插件。它做两件事：\n\n1. **改 Agent 的系统提示词** —— 在 `output-format` 之前插一段\"输出从简\"的要求；\n2. **给界面加一个页面与按钮** —— 工具栏上多一个「改动一览」，点开是一个常驻窗口，\n   里面列出这个插件到底改了什么（可展开看原文）。\n\n## 为什么这个例子是\"审查页\"而不是别的\n\n提示词补丁会**直接改变 Agent 的行为**。安装确认里已经列过一次，但那是一次性的；\n插件长期装着，改动却是长期的 —— 所以给一个随时可查的地方，是这类能力本来就该配的东西。\n\n## 清单里对应的两段\n\n    \"prompts\": [\n      { \"op\": \"insert\", \"anchor\": \"output-format\", \"position\": \"before\",\n        \"label\": \"输出从简\", \"text\": \"## Keep it short\\n...\" }\n    ],\n    \"pages\": [\n      { \"id\": \"audit\", \"label\": \"改动一览\", \"file\": \"ui/brief-page.tsx\",\n        \"data\": { \"title\": \"...\", \"patches\": [ ... ] } }\n    ]\n\n两点值得注意：\n\n- `anchor` / `section` 用的是**段落 id**（见 src/kernel/agent/prompts.ts 的 PROMPT_SECTIONS）。\n  最稳的用法是把东西插在 `output-format` 之前 —— 那一段之后是输出契约，不该被挤走。\n- `identity` / `operations` / `output-format` **不允许** replace 或 remove：\n  删掉它们 Agent 就不知道该说什么、能调什么了。这是\"**一定程度**更改核心代码\"的界线。\n  想影响它们就在附近 insert。\n\n## 想看卸掉之后的样子\n\n在插件面板里关掉它（不要卸载）：工具栏按钮立刻消失、提示词补丁立刻不再生效 ——\n补丁是在**每轮拼提示词时**现读的，所以开关是即时的，不需要重启。\n",
+  "files": {
+    "ui/brief-page.tsx": "import * as React from \"react\";\n\n/**\n * 插件自带的**默认页面**（清单里的 pages，不是 ui + plugin_ui）。\n *\n * 它要做的事只有一件：让用户**随时能看见这个插件改了什么**。\n * 安装确认里已经说过一次，但那是一次性的；插件长期装着，改的东西却是长期的 ——\n * 所以这里再给一个随时可查的地方，而且不用记在哪。\n *\n * 数据来自清单里的 pages[].data（静态注入成模块顶层的 data 常量），\n * 因为运行时没有人会给它传参。\n */\nexport default function BriefPage() {\n  const d = (typeof data === \"object\" && data) || {};\n  const patches = Array.isArray(d.patches) ? d.patches : [];\n  const [openAt, setOpenAt] = React.useState(-1);\n\n  const rowStyle = {\n    display: \"flex\",\n    gap: 8,\n    alignItems: \"flex-start\",\n    padding: \"6px 0\",\n  };\n\n  return (\n    <div style={{ padding: 12, height: \"100%\", overflow: \"auto\", color: \"var(--ygg-fg)\" }}>\n      <div style={{ fontFamily: \"var(--ygg-font-display)\", fontSize: 13, color: \"var(--ygg-accent-hi)\", marginBottom: 6 }}>\n        {d.title || \"这个插件改了什么\"}\n      </div>\n      <div style={{ fontSize: 11, color: \"var(--ygg-fg-muted)\", lineHeight: 1.7, marginBottom: 10 }}>\n        {d.note || \"它会在 Agent 的系统提示里插一段要求。点标题展开原文。\"}\n      </div>\n\n      {patches.map((p, i) => (\n        <div key={i} style={{ borderBottom: \"1px solid var(--ygg-accent-dim)\" }}>\n          <button\n            // 页面里的按钮就是普通按钮：给它加 useAgent() 之类的能力都不是必需的。\n            className=\"ygg-btn ghost tiny\"\n            style={{ ...rowStyle, width: \"100%\", textAlign: \"left\", cursor: \"pointer\" }}\n            onClick={() => setOpenAt(openAt === i ? -1 : i)}\n            title=\"展开 / 收起原文\"\n          >\n            <span style={{ color: \"var(--ygg-accent)\", flex: \"none\" }}>{openAt === i ? \"−\" : \"+\"}</span>\n            <span>\n              <span style={{ fontSize: 11 }}>{p.label || p.op}</span>\n              <span style={{ display: \"block\", fontSize: 10, color: \"var(--ygg-fg-muted)\" }}>\n                {p.op} @ {p.where}\n              </span>\n            </span>\n          </button>\n          {openAt === i ? (\n            <pre\n              style={{\n                margin: \"0 0 8px 22px\",\n                padding: 8,\n                fontSize: 10,\n                lineHeight: 1.6,\n                whiteSpace: \"pre-wrap\",\n                color: \"var(--ygg-fg-muted)\",\n                border: \"1px solid var(--ygg-accent-dim)\",\n                borderRadius: \"var(--ygg-radius)\",\n                fontFamily: \"var(--ygg-font-mono)\",\n              }}\n            >\n              {String(p.text || \"\")}\n            </pre>\n          ) : null}\n        </div>\n      ))}\n\n      {patches.length === 0 ? (\n        <div style={{ fontSize: 11, color: \"var(--ygg-fg-muted)\" }}>这个插件没有声明任何提示词改动。</div>\n      ) : null}\n    </div>\n  );\n}\n"
+  }
+}

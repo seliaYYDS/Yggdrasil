@@ -1,4 +1,4 @@
-import type { ActCap } from '../types';
+import type { ActCap, PluginPage, PluginPromptPatch } from '../types';
 import {
   PLUGIN_ALLOWED_FILES,
   PLUGIN_FORMAT,
@@ -116,6 +116,8 @@ const CAPS: (ActCap | null)[] = ['desktop', 'style', 'global', 'net', 'browser',
  * 因为端点会进提示词，无上限等于把提示词交给插件作者随意撑大。
  */
 export const MAX_ENDPOINTS = 60;
+/** 一条提示词补丁的文字上限。够写一段要求，又不至于把系统提示挤爆。 */
+export const MAX_PATCH_TEXT = 4000;
 
 /** a >= b。 */
 export function versionAtLeast(a: string, b: string): boolean {
@@ -144,7 +146,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
   const m = raw as Record<string, unknown>;
   const bad = (msg: string) => ({ ok: false as const, error: 'manifest 有问题：' + msg });
 
-  const known = ['id', 'name', 'version', 'minAppVersion', 'author', 'description', 'hosts', 'fields', 'endpoints', 'tools', 'ui', 'signature', 'update'];
+  const known = ['id', 'name', 'version', 'minAppVersion', 'author', 'description', 'hosts', 'fields', 'endpoints', 'tools', 'ui', 'signature', 'update', 'prompts', 'pages'];
   const unknown = Object.keys(m).filter((k) => !known.includes(k));
   if (unknown.length) return bad('不认识的字段 ' + unknown.join(', ') + '（这一版只认 ' + known.join(', ') + '）。');
 
@@ -303,6 +305,66 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
     });
   }
 
+  // ---- 提示词补丁 ----
+  /*
+   * 只允许动**可寻址的段落**。这里校验的是"段落 id 认不认识、insert 有没有锚点" ——
+   * 至于"哪些段落不许动"（identity / operations / output-format）在执行侧再拦一次，
+   * 因为那份名单是提示词模块的知识，不该在这里抄一遍。
+   */
+  const promptsRaw = Array.isArray(m.prompts) ? m.prompts : [];
+  const prompts: PluginPromptPatch[] = [];
+  for (const raw of promptsRaw) {
+    if (!raw || typeof raw !== 'object') return bad('prompts 里有一项不是对象。');
+    const o = raw as Record<string, unknown>;
+    const op = o.op;
+    if (op !== 'insert' && op !== 'replace' && op !== 'remove') {
+      return bad('prompts[].op 只能是 insert / replace / remove（现在是 ' + JSON.stringify(op) + '）。');
+    }
+    const text = typeof o.text === 'string' ? o.text : '';
+    const anchor = typeof o.anchor === 'string' ? o.anchor : undefined;
+    const section = typeof o.section === 'string' ? o.section : undefined;
+    const position = o.position === 'before' ? 'before' : o.position === 'after' || o.position === undefined ? 'after' : null;
+    if (position === null) return bad('prompts[].position 只能是 before 或 after。');
+    if (op === 'insert') {
+      if (!anchor) return bad('prompts 里 insert 必须写 anchor（段落 id，或 start / end）。');
+      if (!text.trim()) return bad('prompts 里 insert 的 text 是空的。');
+    } else {
+      if (!section) return bad('prompts 里 ' + op + ' 必须写 section（要动的段落 id）。');
+      if (op === 'replace' && !text.trim()) return bad('prompts 里 replace 的 text 是空的（要删就用 remove）。');
+    }
+    if (text.length > MAX_PATCH_TEXT) {
+      return bad('prompts 里的 text 太长（' + text.length + ' 字符，上限 ' + MAX_PATCH_TEXT + '）。');
+    }
+    prompts.push({ op, anchor, position: position as 'before' | 'after', section, text, label: typeof o.label === 'string' ? o.label : undefined });
+  }
+
+  // ---- 默认页面 ----
+  const pagesRaw = Array.isArray(m.pages) ? m.pages : [];
+  const pages: PluginPage[] = [];
+  for (const raw of pagesRaw) {
+    if (!raw || typeof raw !== 'object') return bad('pages 里有一项不是对象。');
+    const o = raw as Record<string, unknown>;
+    const pid = typeof o.id === 'string' ? o.id : '';
+    if (!NAME_RE.test(pid)) return bad('pages[].id 不合法：' + pid);
+    if (pages.some((x) => x.id === pid)) return bad('page 名字重复：' + pid);
+    if (epsRawForNames.some((e) => (e as Record<string, unknown>).name === pid)) return bad('pages 与 endpoints 里名字重复：' + pid);
+    const plabel = typeof o.label === 'string' && o.label.trim() ? o.label.trim() : '';
+    if (!plabel) return bad('page ' + pid + ' 缺少 label（它是工具栏按钮上的字）。');
+    const pfile = typeof o.file === 'string' ? o.file.trim() : '';
+    if (!/^ui\/[a-z][a-z0-9_-]{0,30}\.tsx$/.test(pfile)) {
+      return bad('page ' + pid + ' 的 file 要形如 ui/xxx.tsx（现在是 "' + pfile + '"）。');
+    }
+    pages.push({
+      id: pid,
+      label: plabel,
+      description: typeof o.description === 'string' ? o.description : undefined,
+      file: pfile,
+      open: o.open === true,
+      rect: o.rect && typeof o.rect === 'object' ? (o.rect as PluginPage['rect']) : undefined,
+      data: o.data,
+    });
+  }
+
   // ---- 版本更新地址 ----
   let update: { url: string } | undefined;
   if (m.update && typeof m.update === 'object') {
@@ -331,8 +393,14 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
   }
 
   const epsRaw = epsRawForNames;
-  if (epsRaw.length === 0 && tools.length === 0) {
-    return bad('至少要有一个 endpoint 或 tools，否则装它没有意义。');
+  /*
+   * "有内容"的判据要跟上能力的增长：**端点、工具、提示词补丁、页面**都算。
+   *
+   * 只认前两者的时候，一个"只改提示词 + 加一个页面"的插件会被判成"装它没有意义" ——
+   * 而它恰恰是这次新能力的用法。判据漏掉一类能力，就是凭空封死一类插件。
+   */
+  if (epsRaw.length === 0 && tools.length === 0 && prompts.length === 0 && pages.length === 0) {
+    return bad('至少要有一个 endpoint / tools / prompts / pages，否则装它没有意义。');
   }
   /*
    * 现在知道这个插件**到底会不会发请求**了：
@@ -341,6 +409,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
    */
   const canReachNetwork =
     epsRaw.length > 0 || tools.some((t) => (t.cap === undefined ? true : t.cap !== null));
+  void canReachNetwork;
   if (hosts.length === 0 && canReachNetwork) {
     return bad('缺少 hosts 白名单（这个插件会发请求，必须写清楚能访问哪些主机）。');
   }
@@ -463,6 +532,8 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
       endpoints,
       tools,
       ui,
+      prompts,
+      pages,
       update,
       signature: (m.signature && typeof m.signature === 'object' ? (m.signature as PluginSignature) : undefined),
     },
@@ -632,6 +703,30 @@ export function describeManifest(m: PluginManifest): string[] {
   }
   const uis = m.ui ?? [];
   if (uis.length) lines.push('自带界面（Agent 可用 plugin_ui 摆出来）：' + uis.map((u) => u.name).join('、'));
+
+  /*
+   * **它会改动核心的什么地方。**
+   *
+   * 这一段是"插件能改核心代码"这件事的**审计面**：声明是静态的，所以安装前能把
+   * "动哪一段、插什么文字（前 60 字）"原样摊开给用户看。没有这一段，用户点"安装"
+   * 等于签了一张空白支票 —— 而提示词补丁是会直接改变 Agent 行为的。
+   */
+  const promptPatches = m.prompts ?? [];
+  if (promptPatches.length) {
+    lines.push('**会改动 Agent 提示词**（' + promptPatches.length + ' 处）：');
+    for (const patch of promptPatches) {
+      const where = patch.op === 'insert' ? patch.anchor || 'end' : patch.section || '?';
+      const preview = (patch.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+      const label = patch.label ? patch.label + ' — ' : '';
+      lines.push(
+        '    · ' + label + patch.op + ' @' + where + (preview ? '：' + preview + (preview.length >= 60 ? '…' : '') : ''),
+      );
+    }
+  }
+  const pages = m.pages ?? [];
+  if (pages.length) {
+    lines.push('**会往界面加页面与按钮**：' + pages.map((p) => p.label + (p.open ? '（默认打开）' : '')).join('、'));
+  }
 
   const secrets = (m.fields ?? []).filter((f) => f.secret);
   if (secrets.length) lines.push('需要你填的密钥：' + secrets.map((f) => f.label).join('、'));

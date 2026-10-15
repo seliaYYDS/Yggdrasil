@@ -87,6 +87,8 @@ export function PluginsPanel() {
       fields: m.fields ?? [],
       endpoints: m.endpoints,
       tools: m.tools ?? [],
+      prompts: m.prompts ?? [],
+      pages: m.pages ?? [],
       ui: m.ui ?? [],
       update: m.update,
       guide: m.guide ?? '',

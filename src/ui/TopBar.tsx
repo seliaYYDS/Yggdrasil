@@ -1,4 +1,6 @@
+import { useMemo } from 'react';
 import { useDesktopStore, MAX_SESSIONS, traceTotal } from '../store/desktopStore';
+import { pluginPageKey, pluginPageWindowId, pluginPages } from '../kernel/plugin/runtime';
 import { ExportIcon, ImportIcon, NewInputIcon, NodesIcon, PluginIcon, ResetIcon, SettingsIcon, TraceIcon, WorkspaceIcon } from './icons';
 
 /**
@@ -46,6 +48,21 @@ function TopRight() {
   const traceCount = useDesktopStore(traceTotal);
   const traceSeen = useDesktopStore((s) => s.traceSeen);
   const unseen = Math.max(0, traceCount - traceSeen);
+  /*
+   * 插件页面：**每个页面一个工具栏按钮**。这就是"插件给界面加一个按钮"的落点 ——
+   * 页面的开合、层级、最小化都与内置面板共用同一套机制。
+   */
+  /*
+   * 必须**订阅 plugins**：pluginPages() 读的是运行时模块里的模块级状态，它不是响应式的。
+   * 不订阅的话，装完插件工具栏不会多出按钮（要等到别的 state 变化才顺带重渲染）——
+   * 那是最像"功能没做"的一类 bug。useMemo 的依赖也用它，保证装/卸时重算。
+   */
+  const plugins = useDesktopStore((s) => s.plugins);
+  const pages = useMemo(() => pluginPages(), [plugins]);
+  const pageOpen = useDesktopStore((s) => s.pluginPageOpen);
+  const setPageOpen = useDesktopStore((s) => s.setPluginPageOpen);
+  const bringToFront = useDesktopStore((s) => s.bringToFront);
+  const pageMinimized = useDesktopStore((s) => s.minimizedPanels);
   const sessionCount = useDesktopStore((s) => s.sessions.length);
   const runningCount = useDesktopStore((s) => s.sessions.filter((ses) => ses.status.running).length);
 
@@ -78,6 +95,47 @@ function TopRight() {
       <button className="ygg-topbtn" title="插件" onClick={() => setPluginsOpen(true)}>
         <PluginIcon />
       </button>
+      {pages.map((h) => {
+        const key = pluginPageKey(h.plugin.id, h.page.id);
+        const domId = pluginPageWindowId(h.plugin.id, h.page.id);
+        const open = pageOpen[key] === true && !pageMinimized['page:' + key];
+        return (
+          <button
+            key={key}
+            className={'ygg-topbtn' + (open ? ' is-on' : '')}
+            title={h.page.description || h.plugin.name + ' · ' + h.page.label}
+            onClick={() => {
+              // 已开 → 抬到最上层（再点一次不关：工具栏按钮的惯例是"打开/聚焦"）。
+              // 已关 → 打开。要关就用窗口右上角的 ✕。
+              if (open) bringToFront(domId);
+              else setPageOpen(key, true);
+            }}
+          >
+            <PluginIcon />
+            <span className="tag">{h.page.label}</span>
+          </button>
+        );
+      })}
+      {pages.map((h) => {
+        const key = pluginPageKey(h.plugin.id, h.page.id);
+        const domId = pluginPageWindowId(h.plugin.id, h.page.id);
+        const open = pageOpen[key] === true && !pageMinimized['page:' + key];
+        return (
+          <button
+            key={key}
+            className={'ygg-topbtn' + (open ? ' is-on' : '')}
+            title={h.page.description || h.plugin.name + ' · ' + h.page.label}
+            onClick={() => {
+              // 已开 → 抬到最上层（工具栏按钮的惯例是"打开/聚焦"）；要关就用窗口右上角的 ✕。
+              if (open) bringToFront(domId);
+              else setPageOpen(key, true);
+            }}
+          >
+            <PluginIcon />
+            <span className="tag">{h.page.label}</span>
+          </button>
+        );
+      })}
       <button className="ygg-topbtn" title="设置" onClick={() => setSettingsOpen(true)}>
         <SettingsIcon />
       </button>

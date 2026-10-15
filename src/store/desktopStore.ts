@@ -297,6 +297,8 @@ interface PersistedRoot {
   panelZ: Record<string, number>;
   surfaces: Record<string, string>;
   plugins?: InstalledPlugin[];
+  pluginPageRects?: Record<string, PanelRect>;
+  pluginPageOpen?: Record<string, boolean>;
 }
 
 const K_NODES = 'nodes';
@@ -308,9 +310,12 @@ const K_PANELS = 'panels';
 const K_SURFACES = 'surfaces';
 const K_SESSIONS = 'sessions';
 const K_PLUGINS = 'plugins';
+/** 插件页面的几何与开合；与内置面板分开存，因为它们的数量是动态的。 */
+const K_PAGE_RECTS = 'pluginPageRects';
+const K_PAGE_OPEN = 'pluginPageOpen';
 
 /** 除 API 设置外，这些键在重置时全部清除。 */
-const RESETTABLE_KEYS = [K_NODES, K_ROOT, K_THEME, K_LOGS, K_PANELS, K_SESSIONS, 'z', 'panelZ', K_SURFACES];
+const RESETTABLE_KEYS = [K_NODES, K_ROOT, K_THEME, K_LOGS, K_PANELS, K_SESSIONS, 'z', 'panelZ', K_SURFACES, K_PAGE_RECTS, K_PAGE_OPEN];
 
 /** 常驻 UI 面板（输入框是会话，不在这里）。它们不是派生节点，不进派生树。 */
 export type PanelKey = 'inspector' | 'settings' | 'trace' | 'plugins' | 'workspace';
@@ -616,6 +621,9 @@ function safePlugins(raw: unknown): InstalledPlugin[] {
       endpoints: p.endpoints,
       tools: Array.isArray(p.tools) ? p.tools : [],
       ui: Array.isArray(p.ui) ? p.ui : [],
+      // 老数据没有这两项：补空数组，不能让它们变成 undefined（下游会 .map）。
+      prompts: Array.isArray(p.prompts) ? p.prompts : [],
+      pages: Array.isArray(p.pages) ? p.pages : [],
       update: p.update && typeof p.update === 'object' ? (p.update as { url: string }) : undefined,
       guide: typeof p.guide === 'string' ? p.guide : '',
       enabled: p.enabled !== false,
@@ -765,7 +773,11 @@ interface DesktopState {
   pluginsRect: PanelRect;
   workspaceRect: PanelRect;
   minimizedPanels: Record<string, boolean>;
-  panelZ: Record<PanelKey, number>;
+  /**
+   * 面板与插件页面的层级。键是 string 而不是 PanelKey —— 插件页面的键由装了哪些插件决定，
+   * 是动态的，塞不进一个固定联合类型里。
+   */
+  panelZ: Record<string, number>;
   /** 桌面视口的像素尺寸。窗口的 pos / size 都在这个坐标系里。不进持久化。 */
   viewW: number;
   viewH: number;
@@ -863,6 +875,19 @@ interface DesktopState {
    * 与 nodes 完全解耦：删组件、重置、清回收站都不会碰到它 ——
    * 只有用户自己点"取消收藏"才会消失。
    */
+  /* ---------------- 插件提供的默认页面 ---------------- */
+  /**
+   * 插件页面的窗口矩形与开合状态（key = 插件id.页面id）。
+   *
+   * 单独一份而不是塞进面板那套固定字段里：页面数量由**装了哪些插件**决定，是动态的；
+   * 内置面板是固定的五个。混在一起会让"哪些 key 合法"变得说不清。
+   */
+  pluginPageRects: Record<string, PanelRect>;
+  pluginPageOpen: Record<string, boolean>;
+  /** 开/关一个插件页面（工具栏按钮点它）。 */
+  setPluginPageOpen: (key: string, open: boolean) => void;
+  setPluginPageRect: (key: string, rect: PanelRect) => void;
+
   favorites: FavoriteEntry[];
   /** 收藏一个组件/挂件（同一个 source 已收藏过就只更新名称与截图信息）。 */
   favoriteNode: (nodeId: NodeId) => void;
@@ -932,7 +957,7 @@ interface DesktopState {
   /** 把当前这批轨迹标记为"已看过"（打开面板时自动调用）。 */
   markTraceSeen: () => void;
   setResetOpen: (open: boolean) => void;
-  setPanelMinimized: (panel: PanelKey, minimized: boolean) => void;
+  setPanelMinimized: (panel: string, minimized: boolean) => void;
   /** 打开 / 关掉一个面板（把三个各自不同的开合标记统一成一个入口）。 */
   setPanelOpen: (panel: PanelKey, open: boolean) => void;
   /** 拖动中切换网格吸附（按住 / 松开 Shift 都会调）。 */
@@ -1302,6 +1327,8 @@ export function snapshot(): PersistedRoot {
     // 插件：清单 + 开关 + 用户填的值。**值里可能有密钥**，所以它只落本地存储，
     // 不进 .seed（场景文件会被转发，密钥不该跟着走）。
     plugins: s.plugins,
+    pluginPageRects: s.pluginPageRects,
+    pluginPageOpen: s.pluginPageOpen,
   };
 }
 
@@ -1340,6 +1367,8 @@ async function saveNow(): Promise<void> {
     await adapter.set(K_SESSIONS, snap.sessions);
     await adapter.set('z', snap.zCounter);
     await adapter.set('panelZ', snap.panelZ);
+    await adapter.set(K_PAGE_RECTS, snap.pluginPageRects);
+    await adapter.set(K_PAGE_OPEN, snap.pluginPageOpen);
     await adapter.set(K_SURFACES, snap.surfaces);
   } catch (e) {
     useDesktopStore.getState().log('warn', 'persist \u2715 ' + (e as Error).message);
@@ -1358,6 +1387,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   logs: [],
   sessions: [makeSession(1, resolveInputRect(window.innerWidth, window.innerHeight), window.innerWidth, window.innerHeight)],
   agentRuns: {},
+  pluginPageRects: {},
+  pluginPageOpen: {},
   favorites: [],
   feedback: null,
   traceOpen: false,
@@ -1404,6 +1435,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     let logs: LogEntry[] | undefined;
     let plugins: InstalledPlugin[] | undefined;
     let favorites: FavoriteEntry[] | undefined;
+    let pageRects: Record<string, PanelRect> | undefined;
+    let pageOpen: Record<string, boolean> | undefined;
     let panels: Partial<PanelRects> & { input?: PanelRect } | undefined;
     let sessions: PersistedSession[] | undefined;
     let z: number | undefined;
@@ -1423,6 +1456,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
        * 所以这里单独读一次，而且读失败不该影响其它数据 —— loadFavorites 自己会兜住。
        */
       favorites = await loadFavorites();
+      pageRects = await adapter.get<Record<string, PanelRect>>(K_PAGE_RECTS);
+      pageOpen = await adapter.get<Record<string, boolean>>(K_PAGE_OPEN);
       sessions = await adapter.get<PersistedSession[]>(K_SESSIONS);
       z = await adapter.get<number>('z');
       panelZ = await adapter.get<Record<string, number>>('panelZ');
@@ -1546,6 +1581,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       // 收藏：**存储里没有就保留内存里那份**（与插件同一个理由 —— 它不是主库的键，
       // 读失败时不该把已经加载/刚收藏的那份清掉）。
       favorites: favorites ?? get().favorites,
+      pluginPageRects: pageRects ?? {},
+      pluginPageOpen: pageOpen ?? {},
       zCounter: z ?? 10 + Object.keys(safeNodes).length,
       panelZ: {
         ...DEFAULT_PANEL_Z,
@@ -1984,6 +2021,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       endpoints: manifest.endpoints,
       tools: manifest.tools ?? [],
       ui: manifest.ui ?? [],
+      prompts: manifest.prompts ?? [],
+      pages: manifest.pages ?? [],
       update: manifest.update,
       guide: manifest.guide ?? '',
       files: pkg.files ?? {},
@@ -2076,9 +2115,14 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   requestClose: (windowId) => {
     const s = get();
     const isPanel = windowId.startsWith('panel-');
+    /*
+     * 插件页面也是"常驻窗口"，不是组件节点 —— 少了这一条，关闭会被当成删组件，
+     * 于是页面关不掉（而且会在 nodes 里白查一次）。
+     */
+    const isPage = windowId.startsWith('page-');
     const isSession = s.sessions.some((ses) => ses.id === windowId);
     // 组件交给 removeNode：它自己会标记 dying 并延后删除。
-    if (!isPanel && !isSession) {
+    if (!isPanel && !isPage && !isSession) {
       get().removeNode(windowId);
       return;
     }
@@ -2087,7 +2131,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     if (s.dying[windowId]) return;
     set((cur) => ({ dying: { ...cur.dying, [windowId]: true } }));
     // 面板：记下这一轮的世代号，过期的关闭不再生效（见 openPanel）。
-    const closeKey = isPanel ? (windowId.slice('panel-'.length) as PanelKey) : null;
+    const closeKey = isPanel ? (windowId.slice('panel-'.length) as PanelKey) : isPage ? windowId.slice('page-'.length) : null;
     const closeToken = closeKey ? (panelCloseToken[closeKey] = (panelCloseToken[closeKey] ?? 0) + 1) : 0;
     window.setTimeout(() => {
       const st = get();
@@ -2109,7 +2153,10 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         delete dying[windowId];
         return { dying };
       });
-      if (isPanel) {
+      if (windowId.startsWith('page-')) {
+        // 插件页面：动画播完才真正关掉（与面板同一条路径，只是收尾方式不同）。
+        st.setPluginPageOpen(windowId.slice('page-'.length), false);
+      } else if (isPanel) {
         const key = windowId.slice('panel-'.length) as PanelKey;
         if (key === 'inspector') st.setTreeOpen(false);
         else if (key === 'trace') st.setTraceOpen(false);
@@ -2343,6 +2390,9 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       if (windowId.startsWith('panel-')) {
         const key = windowId.slice('panel-'.length) as PanelKey;
         if (ALL_PANELS.includes(key)) get().setPanelMinimized(key, true);
+      } else if (windowId.startsWith('page-')) {
+        // 插件页面：与面板同一套最小化机制，只是键带了 `page:` 前缀（避免与面板键撞名）。
+        get().setPanelMinimized('page:' + windowId.slice('page-'.length), true);
       } else if (get().sessions.some((ses) => ses.id === windowId)) {
         get().setSessionMinimized(windowId, true);
       } else {
@@ -2356,15 +2406,25 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     if (get().restoring[windowId]) return;
     const isPanel = windowId.startsWith('panel-');
     const key = isPanel ? (windowId.slice('panel-'.length) as PanelKey) : null;
+    /*
+     * 插件页面也是"常驻窗口"，也要能从任务栏长回来。
+     * 少了这一条它会在下面的"组件节点"判断里被挡掉 —— 表现是点任务栏那一项没反应，
+     * 而窗口明明还收在任务栏里。
+     */
+    const isPage = windowId.startsWith('page-');
+    const pageKey = isPage ? 'page:' + windowId.slice('page-'.length) : null;
     const isSession = get().sessions.some((ses) => ses.id === windowId);
     if (isPanel) {
       if (!key || !ALL_PANELS.includes(key)) return;
+    } else if (isPage) {
+      if (!pageKey || !get().minimizedPanels[pageKey]) return;
     } else if (!isSession && !get().nodes[windowId]) {
       return;
     }
     // 先标记再切状态：无论 React 是否把两次更新批到一起，窗口挂载时都能看到 restoring。
     set((s) => ({ restoring: { ...s.restoring, [windowId]: true } }));
     if (isPanel && key) get().setPanelMinimized(key, false);
+    else if (isPage && pageKey) get().setPanelMinimized(pageKey, false);
     else if (isSession) get().setSessionMinimized(windowId, false);
     else get().updateNode(windowId, { status: 'active' } as Partial<YggNode>);
     window.setTimeout(() => {
@@ -2374,6 +2434,16 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         return { restoring };
       });
     }, RESTORE_MS);
+  },
+
+  setPluginPageOpen: (key, open) => {
+    set((s) => ({ pluginPageOpen: { ...s.pluginPageOpen, [key]: open } }));
+    schedulePersist();
+  },
+
+  setPluginPageRect: (key, rect) => {
+    set((s) => ({ pluginPageRects: { ...s.pluginPageRects, [key]: rect } }));
+    schedulePersist();
   },
 
   favoriteNode: (nodeId) => {
@@ -2484,6 +2554,9 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       patch.viewH = viewH;
       patch.tokens = { ...DEFAULT_TOKENS };
       patch.minimizedPanels = {};
+      // 插件页面属于界面：位置与开合都复位（页面本身还在 —— 那是插件带来的，不是用户摆的）。
+      patch.pluginPageRects = {};
+      patch.pluginPageOpen = {};
       patch.panelZ = { ...DEFAULT_PANEL_Z };
       patch.zCounter = 10;
       patch.inspectorRect = panels.inspector;

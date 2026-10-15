@@ -3,7 +3,7 @@ import { isAgentNode } from '../types';
 import { capsAllow, CAP_HINTS, CAP_LABELS } from './caps';
 import { interfaceCatalog } from '../registry/interfaceRegistry';
 import { surfacesText } from '../registry/surfaceRegistry';
-import { pluginsText } from '../plugin/runtime';
+import { pluginsText, promptPatches } from '../plugin/runtime';
 import { SUMMARY_TAG as COMPRESS_TAG } from './compact';
 
 /** 发给模型的历史条数上限。 */
@@ -227,6 +227,104 @@ function scopeNodes(nodes: Record<string, YggNode>, scope?: string[] | '*'): Rec
 }
 
 
+/**
+ * 系统提示里**可以被插件寻址的段落 id**。这是对外契约（清单里的 prompts 补丁用它）：
+ * 改这里的名字等于破坏所有已发布插件的补丁，所以只增不改。
+ */
+export const PROMPT_SECTIONS = [
+  'identity',
+  'role',
+  'adult-mode',
+  'no-visible-output',
+  'operations',
+  'capabilities',
+  'output-format',
+  'examples',
+  'terse',
+  'long-task',
+  'component-rules',
+  'window-rules',
+  'style-rules',
+  'global-rules',
+  'surface-rules',
+  'agent-rules',
+  'browser-rules',
+  'net-rules',
+] as const;
+
+/** insert 时可用的一对虚拟锚点：整份提示词的开头 / 结尾。 */
+export const PROMPT_ANCHORS = ['start', 'end'] as const;
+
+/**
+ * **不允许被插件替换或删除**的段落。
+ *
+ * 这就是需求里"**一定程度上**更改核心代码"的那条界线：删掉这几段，Agent 会立刻
+ * 不知道怎么回话、有哪些操作可调 —— 那不是"定制"，是把应用弄坏，
+ * 而界面上的表现（模型开始胡言乱语）离原因太远，用户根本查不回来。
+ * 想改它们的**内容**仍然可以：用 insert 在附近插入自己的要求。
+ */
+export const PROTECTED_PROMPT_SECTIONS = ['identity', 'operations', 'output-format'];
+
+/** 一段带 id 的提示词正文。 */
+interface PromptSection {
+  id: string;
+  text: string;
+}
+
+/**
+ * 应用已启用插件声明的提示词补丁。
+ *
+ * 顺序是 **remove → replace → insert**，三条理由：
+ * 1. 先删后改会让"删了又想替换"变成空操作（那是矛盾的声明，静默忽略比报错好）；
+ * 2. 插入放最后，这样锚点指向的是**原始**段落，不会因为前面的替换而找不到；
+ * 3. 多个插件的插入按"插件安装顺序、补丁声明顺序"稳定排列 —— 顺序稳定才能缓存。
+ */
+function applyPromptPatches(sections: PromptSection[]): PromptSection[] {
+  const patches = promptPatches();
+  if (patches.length === 0) return sections;
+  let out = [...sections];
+  const known = new Set(out.map((x) => x.id));
+
+  for (const patch of patches) {
+    if (patch.op !== 'remove') continue;
+    const id = patch.section ?? '';
+    if (!known.has(id) || PROTECTED_PROMPT_SECTIONS.includes(id)) continue;
+    out = out.filter((x) => x.id !== id);
+  }
+
+  for (const patch of patches) {
+    if (patch.op !== 'replace') continue;
+    const id = patch.section ?? '';
+    const text = patch.text ?? '';
+    if (!known.has(id) || PROTECTED_PROMPT_SECTIONS.includes(id) || !text) continue;
+    out = out.map((x) => (x.id === id ? { id, text } : x));
+  }
+
+  for (const patch of patches) {
+    if (patch.op !== 'insert') continue;
+    const text = patch.text ?? '';
+    if (!text) continue;
+    // 每个补丁一个自己的 id：多个插件插在同一锚点上时，它们**各自是一段**，
+    // 不合并、不覆盖，顺序也稳定。
+    const id = 'plugin:' + (patch.pluginId ?? '?') + ':' + patch.index;
+    const section: PromptSection = { id, text };
+    const anchor = patch.anchor ?? 'end';
+    if (anchor === 'start') {
+      out.splice(patch.position === 'after' ? 1 : 0, 0, section);
+      continue;
+    }
+    if (anchor === 'end') {
+      if (patch.position === 'before') out.splice(Math.max(0, out.length - 1), 0, section);
+      else out.push(section);
+      continue;
+    }
+    const at = out.findIndex((x) => x.id === anchor);
+    if (at < 0) continue;
+    out.splice(patch.position === 'before' ? at : at + 1, 0, section);
+  }
+  return out;
+}
+
 export function buildSystemPrompt(input: SystemPromptInput): string {
   /*
    * 能力开关裁剪。
@@ -246,52 +344,65 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
       'scope. Outside your scope you can neither see nor change anything — create your own component or let the base\n' +
       'agent cross that boundary.';
 
-  return [
-    identity,
+  /*
+   * 先排成"带 id 的段落"，再让插件的补丁过一遍，最后才 join。
+   *
+   * 为什么要有 id：需求要插件能"插入 / 修改 / 删除"提示词。没有 id 就没法寻址 ——
+   * 只能安排一个固定插槽，那既不是修改也不是删除。id 是这份能力的接口。
+   */
+  const sections: PromptSection[] = [
+    { id: 'identity', text: identity },
     // 职责与成人模式是**稳定的**（同一个 Agent 每轮都一样），所以必须排在第一个"逐轮会变"的
     // 小节之前 —— 否则它们永远落在缓存失效区里，每轮白白重算。
-    input.rolePrompt ? '## Your dedicated role\n' + input.rolePrompt : '',
-    ...(input.adultMode ? adultRules() : []),
-    '',
-    ...noVisibleOutputRules(),
-    '',
-    '## Available operations (op "kind" must be one of these)',
-    ...lines,
+    { id: 'role', text: input.rolePrompt ? '## Your dedicated role\n' + input.rolePrompt : '' },
+    { id: 'adult-mode', text: input.adultMode ? adultRules().join('\n') : '' },
+    { id: 'no-visible-output', text: noVisibleOutputRules().join('\n') },
+    { id: 'operations', text: '## Available operations (op "kind" must be one of these)\n' + lines.join('\n') },
     // 能力摘要：让它清楚自己有哪些、没有哪些，而不是试了才知道被拒。
-    caps
-      ? '**Your capabilities**: ' + caps.map((c) => CAP_LABELS[c] + ' (' + CAP_HINTS[c] + ')').join('; ') +
-        '. Anything not listed above is rejected — do not waste a turn; ask the agent that created you to grant it.'
-      : '',
-    '',
-    '## Output format (follow exactly)',
-    'One JSON object only — no explanation, no code fence:',
-    '{ "reasoning": "one sentence explaining your judgement", "continue": false, "ops": [ ... ] }',
-    'Only JSON (first char "{", last char "}"); "kind" only from the list above, never invented.',
-    '- Empty ops = **nothing happened this round** (acceptable only when no change was asked for);',
-    '- **Handle only the LAST message tagged [CURRENT REQUEST]** — older tagged messages are **already handled**',
-    '  requests; do not redo them (that is the root cause of "did the previous task all over again"). Change things',
-    '  with update_component on the existing component; create a new one only when asked to redo it;',
-    '- Unsure about the state → inspect first (\`before="windows"\` or \`"all"\`) and act next round. Every operation',
-    '  returns its **full payload** next round (page text, image links, snapshots) — never re-run it "to take',
-    '  another look";',
-    '- **The last message is the live snapshot and the only source of truth**; history may be stale or compressed.',
+    {
+      id: 'capabilities',
+      text: caps
+        ? '**Your capabilities**: ' + caps.map((c) => CAP_LABELS[c] + ' (' + CAP_HINTS[c] + ')').join('; ') +
+          '. Anything not listed above is rejected — do not waste a turn; ask the agent that created you to grant it.'
+        : '',
+    },
+    {
+      id: 'output-format',
+      text: [
+        '## Output format (follow exactly)',
+        'One JSON object only — no explanation, no code fence:',
+        '{ "reasoning": "one sentence explaining your judgement", "continue": false, "ops": [ ... ] }',
+        'Only JSON (first char "{", last char "}"); "kind" only from the list above, never invented.',
+        '- Empty ops = **nothing happened this round** (acceptable only when no change was asked for);',
+        '- **Handle only the LAST message tagged [CURRENT REQUEST]** — older tagged messages are **already handled**',
+        '  requests; do not redo them (that is the root cause of "did the previous task all over again"). Change things',
+        '  with update_component on the existing component; create a new one only when asked to redo it;',
+        '- Unsure about the state → inspect first (`before="windows"` or `"all"`) and act next round. Every operation',
+        '  returns its **full payload** next round (page text, image links, snapshots) — never re-run it "to take',
+        '  another look";',
+        '- **The last message is the live snapshot and the only source of truth**; history may be stale or compressed.',
+      ].join('\n'),
+    },
     // 精简模式：示例整块不发（它是目录之外最大的一块）。
-    terse ? '' : '',
-    terse ? '' : 'Common op shapes (rest are in the list above):',
-    terse ? '' : examples,
-    ...(terse ? terseRules(caps ?? undefined, on) : []),
-    ...longTaskRules(terse),
-    '',
-    ...componentRules(on('net'), terse),
-    ...windowRules(terse),
-    ...(on('style') ? styleRules(terse) : []),
-    ...(on('global') ? globalRules(terse) : []),
-    ...(on('global') ? surfaceRules(terse) : []),
-    ...(on('agents') ? agentRules(terse) : []),
-    ...(on('browser') ? browserRules(terse) : []),
-    ...(on('net') ? netRules(terse) : []),
-  ]
-    .filter((l) => l !== '')
+    { id: 'examples', text: terse ? '' : ['Common op shapes (rest are in the list above):', ...examples].join('\n') },
+    { id: 'terse', text: terse ? terseRules(caps ?? undefined, on).join('\n') : '' },
+    { id: 'long-task', text: longTaskRules(terse).join('\n') },
+    { id: 'component-rules', text: componentRules(on('net'), terse).join('\n') },
+    { id: 'window-rules', text: windowRules(terse).join('\n') },
+    { id: 'style-rules', text: on('style') ? styleRules(terse).join('\n') : '' },
+    { id: 'global-rules', text: on('global') ? globalRules(terse).join('\n') : '' },
+    { id: 'surface-rules', text: on('global') ? surfaceRules(terse).join('\n') : '' },
+    { id: 'agent-rules', text: on('agents') ? agentRules(terse).join('\n') : '' },
+    { id: 'browser-rules', text: on('browser') ? browserRules(terse).join('\n') : '' },
+    { id: 'net-rules', text: on('net') ? netRules(terse).join('\n') : '' },
+  ];
+  /*
+   * 打完补丁再拼。补丁只影响**内容**，段间空行由"滤掉空串"来保证，
+   * 所以删掉一段不会留下一个空洞。
+   */
+  return applyPromptPatches(sections)
+    .map((x) => x.text)
+    .filter((t) => t !== '')
     .join('\n');
 }
 

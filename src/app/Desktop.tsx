@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useDesktopStore } from '../store/desktopStore';
 import { WindowFrame } from '../host/WindowFrame';
 import { ComponentHost } from '../host/ComponentHost';
@@ -13,6 +13,8 @@ import { TracePanel } from '../ui/TracePanel';
 import { SettingsPanel } from '../ui/SettingsPanel';
 import { PluginsPanel } from '../ui/PluginsPanel';
 import { WorkspacePanel } from '../ui/WorkspacePanel';
+import { PluginPageWindow } from '../ui/PluginPageWindow';
+import { pluginPageKey, pluginPages } from '../kernel/plugin/runtime';
 import type { ComponentNode } from '../kernel/types';
 
 export function Desktop() {
@@ -68,6 +70,10 @@ export function Desktop() {
   // 按住 Shift 拖动窗口时铺一层网格；网格尺寸与吸附点共用 SNAP_GRID，不会各写一份。
   const snapDrag = useDesktopStore((s) => s.snapDrag);
   const dying = useDesktopStore((s) => s.dying);
+  const pageOpen = useDesktopStore((s) => s.pluginPageOpen);
+  // 同上：pluginPages() 不是响应式的，靠订阅 plugins 保证装/卸后重算。
+  const plugins = useDesktopStore((s) => s.plugins);
+  const pages = useMemo(() => pluginPages(), [plugins]);
 
   const reportError = useCallback(
     (m: string, id: string, name: string) => log('error', 'comp ' + name + ' ✕ ' + m, id),
@@ -155,6 +161,17 @@ export function Desktop() {
       */}
       <PluginsPanel />
       <WorkspacePanel />
+
+      {/*
+        插件页面：与内置面板同一层，走同一套窗口机制（可拖、可最小化、层级可比）。
+        只渲染"开着"的那些 —— 插件被关掉/卸载时 pluginPages() 自然就不含它了，
+        所以不需要额外的清理路径。
+      */}
+      {pages.map((h, i) =>
+        pageOpen[pluginPageKey(h.plugin.id, h.page.id)] ? (
+          <PluginPageWindow key={pluginPageKey(h.plugin.id, h.page.id)} host={h} index={i} />
+        ) : null,
+      )}
 
       <Taskbar />
     </div>

@@ -1,4 +1,4 @@
-import type { ActCap } from '../types';
+import type { ActCap, PluginPage, PluginPromptPatch } from '../types';
 
 /**
  * 插件（plugin）的包格式与运行时类型。
@@ -182,6 +182,10 @@ export interface PluginManifest {
   endpoints: PluginEndpoint[];
   tools?: PluginTool[];
   ui?: PluginUi[];
+  /** 对系统提示词段落的改动（插入 / 替换 / 删除）。可寻址的段落 id 见 prompts 的 PROMPT_SECTIONS。 */
+  prompts?: PluginPromptPatch[];
+  /** 自带**默认页面**：每个页面变成工具栏上的一个按钮 + 一个常驻窗口。 */
+  pages?: PluginPage[];
   /** 有签名时装机前会验一遍；验不过直接拒绝安装。 */
   signature?: PluginSignature;
   /**
@@ -218,6 +222,8 @@ export interface InstalledPlugin {
   endpoints: PluginEndpoint[];
   tools: PluginTool[];
   ui: PluginUi[];
+  prompts: PluginPromptPatch[];
+  pages: PluginPage[];
   guide: string;
   /** 包内文件（tools/*.js、ui/*.tsx 的源码）。 */
   files: Record<string, string>;

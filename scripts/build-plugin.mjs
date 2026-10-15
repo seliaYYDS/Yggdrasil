@@ -127,10 +127,13 @@ for (const dir of dirs) {
    * （exposeAs: "tool" 那种，比如 toolbox）**打不出包来** —— 而真正的校验器是接受它的。
    * 打包脚本比校验器更严，就成了一个凭空的功能封锁，所以必须对齐。
    */
+  // 与 package.ts 的判据保持一致：端点 / 工具 / 提示词补丁 / 页面**都算内容**。
   const epCount = Array.isArray(manifest.endpoints) ? manifest.endpoints.length : 0;
   const toolCount = Array.isArray(manifest.tools) ? manifest.tools.length : 0;
-  if (epCount === 0 && toolCount === 0) {
-    console.error('[' + dir + '] 至少要有一个 endpoint 或 tools'); failed++; continue;
+  const promptCount = Array.isArray(manifest.prompts) ? manifest.prompts.length : 0;
+  const pageCount = Array.isArray(manifest.pages) ? manifest.pages.length : 0;
+  if (epCount === 0 && toolCount === 0 && promptCount === 0 && pageCount === 0) {
+    console.error('[' + dir + '] 至少要有一个 endpoint / tools / prompts / pages'); failed++; continue;
   }
   if (manifest.endpoints !== undefined && !Array.isArray(manifest.endpoints)) {
     console.error('[' + dir + '] endpoints 必须是数组'); failed++; continue;

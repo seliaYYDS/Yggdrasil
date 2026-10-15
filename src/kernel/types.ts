@@ -137,6 +137,52 @@ export type NodeFrame = 'window' | 'widget';
  */
 export type ResetPart = 'interface' | 'components' | 'history' | 'logs';
 
+/**
+ * 插件对**核心内容**的改动（"一定程度上更改核心代码"）。
+ *
+ * 三件事，都必须在清单里**声明**、在安装确认里**列出**、开关/卸载时**可逆**：
+ * 1. 系统提示词的段落（插入 / 替换 / 删除）；
+ * 2. 一个新按钮 + 一个新的默认页面（页面会以常驻窗口的形式出现）。
+ *
+ * 为什么坚持"声明式"而不是"插件跑一段代码去改"：声明是**静态可读**的 ——
+ * 用户安装前能看到它要动哪一段、插入什么文字；卸载时能原样撤回。
+ * 一段运行时代码改掉的东西，既没法在安装前展示，也没法保证撤干净。
+ */
+export interface PluginPromptPatch {
+  /**
+   * - `insert`：在 `anchor` 段的前/后插入一段文字；
+   * - `replace`：整段替换 `section` 的文字；
+   * - `remove`：删掉 `section`。
+   */
+  op: 'insert' | 'replace' | 'remove';
+  /** insert 用：锚点段落 id，或 `start` / `end`（整份提示词的开头 / 结尾）。 */
+  anchor?: string;
+  /** insert 用：插在锚点之前还是之后。缺省 after。 */
+  position?: 'before' | 'after';
+  /** replace / remove 用：要动的段落 id。 */
+  section?: string;
+  /** insert / replace 用：文字内容。 */
+  text?: string;
+  /** 给人看的一行说明（安装确认里显示）。 */
+  label?: string;
+}
+
+/** 插件提供的**默认页面**：一个常驻窗口 + 工具栏上的一个按钮。 */
+export interface PluginPage {
+  /** 插件内唯一，全小写字母数字连字符。窗口 id 会拼成 page-<插件id>.<名字>。 */
+  id: string;
+  label: string;
+  description?: string;
+  /** 包内路径，必须形如 ui/xxx.tsx（与 ui 条目同一份契约）。 */
+  file: string;
+  /** 装好之后默认就打开（"新的默认页面"）。 */
+  open?: boolean;
+  /** 默认位置尺寸；缺省时由宿主给一个错开的落点。 */
+  rect?: { x: number; y: number; w: number; h: number };
+  /** 渲染时注入成模块顶层常量 data（与 plugin_ui 同一套机制）。 */
+  data?: unknown;
+}
+
 export interface ComponentNode extends BaseNode {
   kind: 'component';
   source: string;

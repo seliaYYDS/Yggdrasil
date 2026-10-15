@@ -7,6 +7,7 @@ import { registerTool, unregisterPluginTools } from '../registry/toolRegistry';
 import { policyFor, type SecurityPolicy } from '../security';
 import { useDesktopStore } from '../../store/desktopStore';
 import type { InstalledPlugin, PluginEndpoint, PluginTool } from './types';
+import type { PluginPage, PluginPromptPatch } from '../types';
 
 /**
  * 插件的运行时：把插件的端点变成**普通接口**，并执行它们的 HTTP 调用。
@@ -78,6 +79,57 @@ export function enabledPlugins(): InstalledPlugin[] {
 
 export function allKnownPlugins(): InstalledPlugin[] {
   return current;
+}
+/**
+ * 已启用插件声明的**系统提示词补丁**，按"插件安装顺序 → 插件内声明顺序"展平。
+ *
+ * 顺序**必须稳定**：系统提示是缓存前缀，顺序一变整段缓存就失效。所以这里不排序、
+ * 不按字母序，就按声明顺序来。
+ *
+ * 另外给每条补上 pluginId 与 index —— 调用方要用它给插进去的段落一个稳定 id
+ * （多个插件插在同一锚点上时，各自成段、互不覆盖）。
+ */
+export function promptPatches(): (PluginPromptPatch & { pluginId: string; index: number })[] {
+  const out: (PluginPromptPatch & { pluginId: string; index: number })[] = [];
+  for (const p of current) {
+    const list = p.prompts ?? [];
+    for (let i = 0; i < list.length; i += 1) out.push({ ...list[i], pluginId: p.id, index: i });
+  }
+  return out;
+}
+
+/** 一个页面 + 它属于哪个插件（渲染与工具栏都要这两样）。 */
+export interface PluginPageHost {
+  plugin: InstalledPlugin;
+  page: PluginPage;
+}
+
+/** 已启用插件的**全部页面**（工具栏按钮 + 常驻窗口）。 */
+export function pluginPages(): PluginPageHost[] {
+  const out: PluginPageHost[] = [];
+  for (const p of current) for (const page of p.pages ?? []) out.push({ plugin: p, page });
+  return out;
+}
+
+/** 插件页面的窗口 id。用 page- 前缀与内置面板的 panel- 区分开。 */
+export function pluginPageWindowId(pluginId: string, pageId: string): string {
+  return 'page-' + pluginId + '.' + pageId;
+}
+
+/** 页面在 store 里的键（几何与开合都按它存）。 */
+export function pluginPageKey(pluginId: string, pageId: string): string {
+  return pluginId + '.' + pageId;
+}
+
+/** 从窗口 id 反解出页面（任务栏标题、渲染时都要用）。找不到说明插件已被关掉/卸载。 */
+export function pageFromWindowId(windowId: string): PluginPageHost | null {
+  if (!windowId.startsWith('page-')) return null;
+  const key = windowId.slice('page-'.length);
+  const dot = key.indexOf('.');
+  if (dot < 0) return null;
+  const pluginId = key.slice(0, dot);
+  const pageId = key.slice(dot + 1);
+  return pluginPages().find((x) => x.plugin.id === pluginId && x.page.id === pageId) ?? null;
 }
 
 /**
@@ -636,6 +688,23 @@ export function pluginDiff(prev: InstalledPlugin | undefined, next: InstalledPlu
     return !t || (old?.exposeAs === 'tool') !== (t.exposeAs === 'tool');
   });
   add((next.ui ?? []).map((u) => u.name), '自带界面', (n) => !(prev.ui ?? []).some((u) => u.name === n));
+  /*
+   * **提示词补丁与页面的差异必须单独报。**
+   *
+   * 它们是"这个版本开始会改变 Agent 行为 / 往界面加东西"的信号 —— 而升级最容易
+   * 被当成"无关紧要的更新"点掉。只报新增的主机与端点是不够的：一个插件完全可以在
+   * 不新增任何网络出口的情况下，靠插一段提示词改变 Agent 的行为。
+   */
+  const patchKey = (p: { op: string; anchor?: string; section?: string; text?: string }) =>
+    p.op + '@' + (p.op === 'insert' ? p.anchor ?? 'end' : p.section ?? '?') + ':' + (p.text ?? '').slice(0, 40);
+  const prevPatches = new Set((prev.prompts ?? []).map(patchKey));
+  const nextPatches = new Set((next.prompts ?? []).map(patchKey));
+  const newPatches = (next.prompts ?? []).filter((p) => !prevPatches.has(patchKey(p)));
+  const gonePatches = (prev.prompts ?? []).filter((p) => !nextPatches.has(patchKey(p)));
+  if (newPatches.length) lines.push('**新增/改动了 Agent 提示词**：' + newPatches.length + ' 处');
+  if (gonePatches.length) lines.push('移除了提示词改动：' + gonePatches.length + ' 处');
+  add((next.pages ?? []).map((p) => p.label), '页面', (n) => !(prev.pages ?? []).some((p) => p.label === n));
+  gone((prev.pages ?? []).map((p) => p.label), '页面', (n) => !(next.pages ?? []).some((p) => p.label === n));
   add((next.fields ?? []).filter((f) => f.secret).map((f) => f.label), '要填的密钥', (l) => !(prev.fields ?? []).some((f) => f.secret && f.label === l));
   // 能力开关变了也要说：从 net 变成 global 是完全不同的事。
   const capOf = (p: InstalledPlugin) => {

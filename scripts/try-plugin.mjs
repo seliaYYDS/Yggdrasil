@@ -84,6 +84,8 @@ const entrySource = [
   "export { pluginDiff, pluginsText, enabledPlugins } from '../../src/kernel/plugin/runtime';",
   "export { knownKinds } from '../../src/kernel/registry/interfaceRegistry';",
   "export { toolCatalog } from '../../src/kernel/registry/toolRegistry';",
+  "export { pluginPages, promptPatches } from '../../src/kernel/plugin/runtime';",
+  "export { PROMPT_SECTIONS, PROTECTED_PROMPT_SECTIONS } from '../../src/kernel/agent/prompts';",
   "export { bridgeFetch, setToolExecutor } from '../../src/kernel/plugin/sandbox';",
   "export { executeOps } from '../../src/kernel/bus/derivationBus';",
   "export { AgentIdContext, useAgent, isAgentId } from '../../src/host/agentRuntimeModule';",
@@ -258,10 +260,23 @@ const kinds = M.knownKinds().filter((k) => k.indexOf(manifest.id + '.') === 0);
 const toolEntries = M.toolCatalog().filter((t) => t.pluginId === manifest.id);
 console.log('');
 console.log('这个插件提供：');
-if (kinds.length === 0 && toolEntries.length === 0) console.log('  （什么都没有）');
+const patches = (plugin.prompts ?? []);
+const pages = (plugin.pages ?? []);
+if (kinds.length === 0 && toolEntries.length === 0 && patches.length === 0 && pages.length === 0) {
+  console.log('  （什么都没有）');
+}
 for (const k of kinds) console.log('  操作  ' + k);
 for (const t of toolEntries) console.log('  工具  ' + t.name + '（' + t.id + '）—— 用 call_tool 调用');
 if ((plugin.ui ?? []).length) console.log('  界面  ' + plugin.ui.map((u) => u.name).join('、') + '（用 plugin_ui 摆出来）');
+/* 下面两类是"改核心"的能力，没有可调用的入口，所以单独列 —— 否则它们看起来像没提供任何东西。 */
+for (const patch of patches) {
+  const where = patch.op === 'insert' ? patch.anchor || 'end' : patch.section || '?';
+  console.log('  提示词改动  ' + patch.op + ' @' + where +
+    (patch.label ? '（' + patch.label + '）' : '') + ' —— 每轮拼提示词时生效，关掉插件立刻失效');
+}
+for (const pg of pages) {
+  console.log('  页面与按钮  ' + pg.label + '（' + pg.file + '）' + (pg.open ? ' —— 默认打开' : ''));
+}
 console.log('');
 
 const call = async (op) => {
@@ -298,7 +313,18 @@ if (rest.length === 0) {
       examples.push(filled);
     }
   }
-  if (examples.length === 0) { console.log('没有可自动试跑的操作（都要必填参数）。'); process.exit(0); }
+  if (examples.length === 0) {
+    /*
+     * 没有 op/tool 的插件（比如只改提示词 + 加页面）到这一步就是正常的：
+     * 它不是"没有内容"，只是内容不在"可调用"这一侧。说清楚，别让人以为插件是空的。
+     */
+    const notes = [];
+    if ((plugin.prompts ?? []).length) notes.push('提示词改动 ' + plugin.prompts.length + ' 处');
+    if ((plugin.pages ?? []).length) notes.push('页面 ' + plugin.pages.length + ' 个');
+    console.log(notes.length ? '没有可调用的操作/工具；它的内容是：' + notes.join(' + ') + '。'
+      : '没有可自动试跑的内容。');
+    process.exit(0);
+  }
   console.log('自动试跑（只填了有默认值的参数；缺必填的会被明确拒绝 —— 那本身也是有用的信息）：');
   let ok = 0;
   for (const ex of examples) if (await call(ex)) ok += 1;
