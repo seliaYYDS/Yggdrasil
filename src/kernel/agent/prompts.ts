@@ -399,9 +399,9 @@ export function buildSystemPrompt(input: SystemPromptInput): string {
         '{ "reasoning": "one sentence explaining your judgement", "continue": false, "ops": [ ... ] }',
         'Only JSON (first char "{", last char "}"); "kind" only from the list above, never invented.',
         '- Empty ops = **nothing happened this round** (acceptable only when no change was asked for);',
-        '- **Handle only the LAST message tagged [CURRENT REQUEST]** — older tagged messages are **already handled**',
-        '  requests; do not redo them (that is the root cause of "did the previous task all over again"). Change things',
-        '  with update_component on the existing component; create a new one only when asked to redo it;',
+        '- **The last user message is what you are doing now**; earlier ones were already handled — do not redo them',
+        '  (that is the root cause of "did the previous task all over again"). Change things with update_component on',
+        '  the existing component; create a new one only when asked to redo it;',
         '- Unsure about the state → inspect first (`before="windows"` or `"all"`) and act next round. Every operation',
         '  returns its **full payload** next round (page text, image links, snapshots) — never re-run it "to take',
         '  another look";',
@@ -570,7 +570,7 @@ function longTaskRules(terse = false): string[] {
   if (terse) {
     return [
       '## Long tasks',
-      '- A good round is not necessarily a finished task: silently re-check the last [CURRENT REQUEST] (and, each,',
+      '- A good round is not necessarily a finished task: silently re-check the last user message (and, each,',
       '  numbers, language); anything missing → continue true. Keep the desktop usable between rounds.',
       '- reasoning = what this round does + what is still missing, one short sentence. **Do not restate the request.**',
       '- No round limit, but every round must progress: repeating the previous round exactly gets you a reminder,\n' +
@@ -580,7 +580,7 @@ function longTaskRules(terse = false): string[] {
   }
   return [
     '## Long tasks: do not stop halfway',
-    '- **A round that went well is not a finished task.** Before you stop, silently re-check the last [CURRENT REQUEST]',
+    '- **A round that went well is not a finished task.** Before you stop, silently re-check the last user message',
     '  (clauses: "and", "each", "with", numbers, language). Anything not visible yet → continue true, next round.',
     '- Slice the work so the desktop stays usable; never end on a half-built component the next round must finish.',
     '- reasoning = what this round does + what is still missing, one short sentence. **Do not restate the request**',

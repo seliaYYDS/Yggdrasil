@@ -277,26 +277,27 @@ function mkFeedback(level: FeedbackLevel, title: string, detail: string): RunFee
 /**
  * 判断一个错误是否值得重试。
  *
- * 之前是"先排除 4xx、再看白名单关键词" —— 白名单太窄（没覆盖 408/409/425/520~527 等），
- * 于是不少本来能重试的错直接放弃，用户看到的就是"错误处理有时不触发"。
- * 现在改成：**只有明确的 4xx 客户端错误才不重试，其余一律重试**（重试本身有次数上限）。
+ * **只有"请求本身出错"才重试**：
+ * - 服务端错误（5xx）与限流（429）→ 重试；
+ * - 连接层失败（断网 / DNS / 流中途断开，没有 HTTP 状态码）→ 重试；
+ * - 4xx 客户端错误 → 不重试（重发同一个请求结果一样）；
+ * - **响应拿到了、但内容不可用**（空内容 / 没有可读流）→ 不重试。
+ *   那是"服务端回了个没用的东西"，不是"请求没成功"；重发同一个请求通常还是同一个结果，
+ *   而且会把用户的时间花在等待上。这类情况应该直接报出来。
+ *
+ * 以前那版是"排除 4xx 后一律重试"，还把中文的「没有可读流|空内容」当判据 ——
+ * 而 client.ts 抛的是英文（"no readable stream" / "empty content"），
+ * 那两条**从来没匹配上**，于是空回复也会被重试三次。
  */
-function isRetryable(msg: string): boolean {
-  // 请求本身有问题：重试多少次都一样。
-  if (/\b(400|401|403|404|405|406|410|413|414|415|422|451)\b/.test(msg)) return false;
-  // 参数/响应格式类错误也不值得重试。
-  if (/没有可读流|空内容/.test(msg)) return false;
+function isRetryable(err: unknown): boolean {
+  const status = (err as { status?: unknown } | null)?.status;
+  if (typeof status === 'number') return status >= 500 || status === 429;
+  const msg = (err as Error)?.message ?? String(err);
+  if (/no readable stream|empty content/i.test(msg)) return false;
   return true;
 }
 
 const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
-
-/**
- * 单次模型请求的超时。
- * 没有它，一个卡住的连接会让调度器永远停在 busy —— 之后所有输入都只会进队列、永远发不出去，
- * 用户看到的就是"消息被吞掉"。
- */
-const REQUEST_TIMEOUT_MS = 120000;
 
 /** trace 里最多保留多少字符的思考 / 原始输出（够看，又不会把存储撑爆）。 */
 const MAX_THINK_CHARS = 20000;
@@ -324,11 +325,16 @@ function visionHint(images: string[], error: string): string {
   );
 }
 
-/** 当前请求的标记，与提示词里的「你每次只处理标注为【本次请求】的那一条消息」对应。 */
-const CURRENT_REQUEST_TAG = '[CURRENT REQUEST]';
-
 /** 单次运行允许的"出错后重来"次数上限，防止反复失败烧掉轮次。 */
 const MAX_RECOVERIES = 3;
+
+/**
+ * 一次模型请求最多发几次（**含第一次**）。
+ *
+ * 用户要求上限 5 次。只对"请求本身出错"生效（见 isRetryable）——
+ * 空回复之类的响应级问题不重试。
+ */
+const MAX_REQUEST_ATTEMPTS = 5;
 
 /**
  * 像不像模型自己的原生工具调用标记。
@@ -359,7 +365,14 @@ interface StreamHandlers {
    * **必须用它清空累积的正文 / 思考缓冲** —— 否则重试会把上一次的半截输出和新输出
    * 拼在一起，解析器取到的可能是上一次那半截坏 JSON。这是"重试好像没生效"的一个真实成因。
    */
-  onAttempt?: (attempt: number) => void;
+  onAttempt?: (attempt: number, isRetry: boolean) => void;
+  /**
+   * 一次请求失败、马上要重试时回调。
+   *
+   * 有它才谈得上"看得见的重试"：没有它，重试完全发生在内部，
+   * 轨迹上只有一条平直的"模型推理"，用户完全不知道刚才失败过。
+   */
+  onRetry?: (attempt: number, total: number, error: string) => void;
 }
 
 interface CallOk {
@@ -383,17 +396,26 @@ async function chatWithRetry(
   settings: Parameters<typeof chatStream>[0],
   messages: ChatMessage[],
   handlers: StreamHandlers,
-  attempts = 3,
+  attempts = MAX_REQUEST_ATTEMPTS,
   /** 用户按"停止"时会被 abort —— 中止不是故障，不该重试、也不该报成错误。 */
   stopSignal?: AbortSignal,
 ): Promise<CallOk | CallFail> {
   let lastError = '';
   for (let i = 0; i < attempts; i += 1) {
     if (stopSignal?.aborted) return { ok: false, error: '已停止', stopped: true };
-    handlers.onAttempt?.(i);
+    handlers.onAttempt?.(i, i > 0);
     const ctl = new AbortController();
-    const timer = window.setTimeout(() => ctl.abort(), REQUEST_TIMEOUT_MS);
-    // 停止信号与超时信号合并：任一触发都中止这次请求。
+    /*
+     * **不加超时。**
+     *
+     * 这里曾经挂着一个 120 秒的墙钟，理由是"防连接卡死让调度器永远 busy"。但它是**整条请求**的
+     * 上限，而不是"卡住才掐" —— 于是长文与慢端点会被拦腰砍掉，而且被判定成可重试，
+     * 用户看到的就是"写了一半突然从头再来"（实测：act 档一轮写完整组件很容易超过 2 分钟）。
+     *
+     * 用户明确要求：**只要服务端还在输出就不要截断。** 所以现在唯一的出口是：
+     * 流自然读完（成功）、出错（按上面的策略决定重不重试）、或用户按停止。
+     * 真卡死的连接由服务端与浏览器各自的 TCP 超时兜底，不再由我们制造一个假的失败。
+     */
     const onStop = () => ctl.abort();
     stopSignal?.addEventListener('abort', onStop, { once: true });
     try {
@@ -404,12 +426,19 @@ async function chatWithRetry(
       });
       return { ok: true, text: out.text, toolCalls: out.toolCalls, usage: out.usage, ms: out.ms };
     } catch (e) {
-      lastError = (e as Error).message;
+      lastError = (e as Error)?.message ?? String(e);
       if (stopSignal?.aborted) return { ok: false, error: '已停止', stopped: true };
-      if (!isRetryable(lastError) || i === attempts - 1) break;
-      await sleep(400 * (i + 1));
+      /*
+       * 重试要有痕迹：界面上必须能看到"这条请求失败过、正在重试"，
+       * 否则用户看到的就是"同一步莫名其妙又跑了一遍"。
+       */
+      if (isRetryable(e) && i < attempts - 1) {
+        handlers.onRetry?.(i + 1, attempts, lastError);
+        await sleep(400 * (i + 1));
+        continue;
+      }
+      break;
     } finally {
-      window.clearTimeout(timer);
       stopSignal?.removeEventListener('abort', onStop);
     }
   }
@@ -521,7 +550,7 @@ async function runReply(
       }),
     },
     ...historyMessages(originId, sessionId, input),
-    // 不加【本次请求】标记 —— 那是给 act 档多轮执行用的；这里就是普通的对话上下文。
+    // 就是普通的对话上下文：两档现在都不加任何标记（见 requestText 的注释）。
     { role: 'user', content: userContent(input, images, store.settings.vision !== false) },
   ];
 
@@ -539,7 +568,18 @@ async function runReply(
       text = '';
       thinking = '';
     },
-  }, 3, signal);
+    // reply 档同样要留痕（同一个理由：重试不该是看不见的）。
+    onRetry: (attempt, total, error) => {
+      store.upsertSessionStep(sessionId, {
+        ...step,
+        status: 'running',
+        label: '请求重试',
+        summary: '第 ' + attempt + ' / ' + (total - 1) + ' 次重试',
+        message: '上一次请求失败：' + error.slice(0, 200),
+      });
+      store.log('warn', 'reply retry #' + attempt + ' ' + error.slice(0, 80));
+    },
+  }, MAX_REQUEST_ATTEMPTS, signal);
 
   const failReply = (title: string, detail: string, err: string): RunSummary => {
     store.upsertSessionStep(sessionId, { ...step, status: 'fail', message: err, endedAt: Date.now() });
@@ -626,12 +666,18 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
   /*
    * act 档这一轮用户消息的**唯一拼法**：它既是发出去的那条请求，也是写进记忆的那条。
    *
-   * 两处必须是同一个字符串。以前发的是带 [CURRENT REQUEST] 标记的版本、存的却是不带标记的原文，
-   * 于是下一轮的历史里同一条消息短了十几个字符 —— **前缀缓存正是从那里断开**，后面那条旧请求
-   * 连同整段尾部全部作废（实测换轮只有 77% 能命中）。日志式请求的关键就在这：**只追加，不改写过的东西**。
-   * 代价是历史里的旧请求也带着这个标记，所以提示词里那条规则改成"只处理**最后一条**带标记的"。
+   * **不再加任何标记。** 以前每条请求前面都缀一个固定的方括号前缀，于是历史上每一条
+   * 请求都带着同一个印记、逐字节相同 —— 模型手上只有"最后一条"这一个位置线索，
+   * 而 act 档又不说话（产出是 ops，不是文本），历史里没有"这条已经处理完了"的痕迹。
+   * 结果就是它看到几个并列的、长得一样的任务，无从判断哪个做完了（用户反馈的正是这个）。
+   *
+   * 现在没有标记，历史就是**一串按时间排的普通用户消息** —— 谁先说、谁后说一目了然，
+   * 模型自己分得清。这不需要提示词去教。
+   *
+   * 两处仍然必须是同一个字符串（发出去的那条 = 写进记忆的那条）：只追加、不改写，
+   * 前缀缓存才不会断（这是当初加标记的原因，仍然成立）。
    */
-  const requestText = CURRENT_REQUEST_TAG + '\n' + input + uploadNote;
+  const requestText = input + uploadNote;
   pushMemory(originId, sessionId, { role: 'user', content: requestText });
 
   const pushStep = (step: TraceStep) => useDesktopStore.getState().upsertSessionStep(sessionId, step);
@@ -837,6 +883,30 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             thinking = '';
             flush(true);
           },
+          /*
+           * 重试要在轨迹上留痕。
+           *
+           * 以前重试完全发生在内部：一轮里发 5 次请求，轨迹上仍然只有一条平直的"模型推理"，
+           * 用户看到的就是"同一步莫名其妙又跑了一遍、而且刚才写的东西不见了"。
+           * 现在每次重试补一条步骤，写明这是第几次、上次为什么失败。
+           */
+          onRetry: (attempt, total, error) => {
+            pushStep({
+              id: newId(),
+              runId,
+              round,
+              // -6 排在模型步骤之前，读顺序就是"先失败、再重试"。
+              index: -6,
+              kind: 'recover',
+              label: '请求重试',
+              summary: '第 ' + attempt + ' / ' + (total - 1) + ' 次重试',
+              status: 'running',
+              message: '上一次请求失败：' + error.slice(0, 200),
+              startedAt: Date.now(),
+              endedAt: Date.now(),
+            });
+            store.log('warn', 'llm retry #' + attempt + ' ' + error.slice(0, 80));
+          },
           onDelta: (chunk) => {
             buffer += chunk;
             flush();
@@ -847,7 +917,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             flush();
             setRunStatus({ phase: '模型思考中', detail: chunk.slice(-140) });
           },
-        }, 3, signal);
+        }, MAX_REQUEST_ATTEMPTS, signal);
 
         if (call.ok) {
           // 每轮都记：act 档一轮可能发多次请求，累计的才是这次任务真实的开销。
@@ -871,14 +941,17 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
             endedAt: Date.now(),
           });
           store.log('error', 'llm ✕ ' + msg);
-          if (recoveries < MAX_RECOVERIES) {
-            pushObservations([
-              'The model call in the previous round failed: ' + msg,
-              'Retry with a simpler approach; if the task cannot be completed, finish with empty ops.',
-            ]);
-            notifyRetry(round, '模型调用失败，正在重试：' + msg);
-            continue;
-          }
+          /*
+           * **请求失败不再走"整轮恢复"。**
+           *
+           * chatWithRetry 内部已经把这条请求重发了 MAX_REQUEST_ATTEMPTS 次（这是"
+           * 请求本身出错"的正规处理）。这里再 continue 一轮，等于把**同一条请求**重发一遍 ——
+           * 模型根本没机会尝试，多出来的重发毫无意义，还让"最多 5 次"变成 4×5 = 20 次
+           * （实测：5xx 一直失败时一共发了 20 次）。
+           *
+           * 整轮恢复（notifyRetry）的用途是"这一轮**做过事**但结果不对" ——
+           * op 失败、指令不合法、单轮异常。那些情况下模型确实需要再看一遍现场。
+           */
           useDesktopStore.getState().setFeedback(
             mkFeedback(
               'fail',
