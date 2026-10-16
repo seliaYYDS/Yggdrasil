@@ -1925,9 +1925,19 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       const sessions = s0.sessions.map((ses) => ({
         ...ses,
         trace: [],
-        status: { ...ses.status, running: false, phase: '', detail: '', round: 0 },
+        status: {
+          ...ses.status,
+          running: false,
+          phase: '',
+          detail: '',
+          round: 0,
+          // 上下文占用也是"上一次请求"的痕迹，跟着记忆一起归零（见 clearSessionMessages）。
+          contextTokens: undefined,
+        },
         // 对话记忆也清掉：见上面 clearTraces 的说明。
         messages: [],
+        // 用量同理：它描述的是被清掉的那些历史。
+        metrics: emptyMetrics(),
       }));
       // agent：轨迹 + 记忆 + 账本一起清（记忆留着就等于没清）。
       const nodes = { ...s0.nodes };
@@ -1938,7 +1948,18 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       const agentRuns = Object.fromEntries(
         Object.entries(s0.agentRuns).map(([id, run]) => [
           id,
-          { ...run, trace: [], status: { ...run.status, running: false, phase: '', detail: '', round: 0 } },
+          {
+            ...run,
+            trace: [],
+            status: {
+              ...run.status,
+              running: false,
+              phase: '',
+              detail: '',
+              round: 0,
+              contextTokens: undefined,
+            },
+          },
         ]),
       );
       return { sessions, nodes, agentRuns, logs: [], feedback: null, traceSeen: 0 };
@@ -2613,8 +2634,40 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
+  /**
+   * 清掉一个会话的"上一次请求"痕迹：上下文占用与状态行。
+   *
+   * 抽出来是因为**三条路径都要做同一件事**（清空历史、清空轨迹、区块重置），
+   * 各写一遍迟早漏一个 —— 那正是"重置了但圆环还显示旧百分比"的来源。
+   */
   clearSessionMessages: (id) => {
-    set((s) => ({ sessions: s.sessions.map((ses) => (ses.id === id ? { ...ses, messages: [] } : ses)) }));
+    /*
+     * **用量与上下文数字必须一起清。**
+     *
+     * 它们描述的是"这段历史花了多少、占了多少上下文"—— 历史没了，它们就没有指代对象。
+     * 以前只清 messages，于是重置之后右下角还挂着旧会话的命中率 / token 总量 /
+     * 上下文圆环（用户报的正是这个）：数字说的是已经不存在的对话。
+     *
+     * status 里的三个 context* 字段同理：它们是"上一次请求的占用"，一并归零，
+     * 让圆环回到"还没跑过"的状态（而不是显示一个属于旧历史的百分比）。
+     */
+    set((s) => ({
+      sessions: s.sessions.map((ses) =>
+        ses.id === id
+          ? {
+              ...ses,
+              messages: [],
+              metrics: emptyMetrics(),
+              status: {
+                ...ses.status,
+                contextTokens: undefined,
+                // 窗口与阈值是**设置**决定的，不随历史走，所以留着（圆环仍能画轨道）。
+                detail: '',
+              },
+            }
+          : ses,
+      ),
+    }));
     schedulePersist();
   },
 
@@ -2882,6 +2935,9 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       patch.sessions = ((patch.sessions as InputSession[] | undefined) ?? s0.sessions).map((ses) => ({
         ...ses,
         messages: [],
+        // 用量与上下文跟着历史走（与 clearSessionMessages 同一个理由）。
+        metrics: emptyMetrics(),
+        status: { ...ses.status, contextTokens: undefined },
       }));
     }
 
