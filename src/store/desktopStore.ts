@@ -289,7 +289,14 @@ export function makeSession(n: number, base: PanelRect, viewW: number, viewH: nu
   };
 }
 
-/** 只持久化几何与可见性；status / trace / queue 是瞬态的。 */
+/**
+ * 会话的持久化形态。
+ *
+ * **status / queue 是瞬态的**（它们描述"此刻正在做什么"，刷新后本来就该重置）；
+ * **trace 会存**，但存的是**裁剪过的**版本 —— 见 persistedTrace()：
+ * 只保留骨架与原始输出，**丢掉思考流**。理由是体积：思考动辄几千字（单步上限 20000 字符），
+ * 而它主要服务于"当次排查格式问题"，事后回看价值低。
+ */
 export interface PersistedSession {
   id: string;
   title: string;
@@ -298,6 +305,8 @@ export interface PersistedSession {
   minimized: boolean;
   /** 会话自己的对话记忆，跟着会话一起存。 */
   messages?: Message[];
+  /** 这次会话历轮的步骤（裁剪过：没有 thinking，有 raw）。 */
+  trace?: TraceStep[];
 }
 
 interface PersistedRoot {
@@ -312,6 +321,20 @@ interface PersistedRoot {
   panelZ: Record<string, number>;
   surfaces: Record<string, string>;
   plugins?: InstalledPlugin[];
+  /**
+   * 每个组件 agent 的轨迹（裁剪过：没有 thinking，有 raw）。
+   *
+   * 与会话的 trace 分开：后者挂在 sessions 上，这个按 nodeId 索引 ——
+   * 因为组件 agent 的轨迹本来就住在 agentRuns 里（见 RunSlice）。
+   */
+  agentTraces?: Record<NodeId, TraceStep[]>;
+  /**
+   * 顶栏徽标的"已看过"水位。
+   *
+   * **轨迹持久化之后它也必须持久化**：轨迹回来了、水位却归零的话，用户一刷新就会看到
+   * 一个"未看 N"的徽标 —— 而那些步他明明都看过了（假通知，正是当初引入水位要解决的问题）。
+   */
+  traceSeen?: number;
   pluginPageRects?: Record<string, PanelRect>;
   pluginPageOpen?: Record<string, boolean>;
   /** 引导是否看过。存起来，免得每次刷新都再拦一次。 */
@@ -331,9 +354,13 @@ const K_PLUGINS = 'plugins';
 const K_PAGE_RECTS = 'pluginPageRects';
 const K_PAGE_OPEN = 'pluginPageOpen';
 const K_INTRO = 'introSeen';
+/** 组件 agent 的轨迹（单独一个键：它按 nodeId 索引，塞不进 sessions）。 */
+const K_AGENT_TRACES = 'agentTraces';
+/** 徽标水位：与轨迹一起存，否则刷新后会亮起假通知。 */
+const K_TRACE_SEEN = 'traceSeen';
 
 /** 除 API 设置外，这些键在重置时全部清除。 */
-const RESETTABLE_KEYS = [K_NODES, K_ROOT, K_THEME, K_LOGS, K_PANELS, K_SESSIONS, 'z', 'panelZ', K_SURFACES, K_PAGE_RECTS, K_PAGE_OPEN];
+const RESETTABLE_KEYS = [K_NODES, K_ROOT, K_THEME, K_LOGS, K_PANELS, K_SESSIONS, 'z', 'panelZ', K_SURFACES, K_PAGE_RECTS, K_PAGE_OPEN, K_AGENT_TRACES, K_TRACE_SEEN];
 
 /** 常驻 UI 面板（输入框是会话，不在这里）。它们不是派生节点，不进派生树。 */
 export type PanelKey = 'inspector' | 'settings' | 'trace' | 'plugins' | 'workspace';
@@ -1459,6 +1486,40 @@ function openPanel(key: PanelKey): void {
   st.bringToFront('panel-' + key);
 }
 
+/**
+ * 轨迹落盘时要保留多少步（按最近 N 步截断）。
+ *
+ * 为什么要封顶：轨迹没有天然的条数上限（appendSessionTrace 只追加），
+ * 而每步带着 raw 与 observation（各自上限 20000 / 64000 字符）。
+ * 不封顶的话，一个跑了几十轮的长任务就能把 localStorage 撑爆 ——
+ * 而 saveNow 是**整体重写**，写入开销也会随历史线性增长。
+ *
+ * 200 步是个折中：足够回看"最近做了什么、哪一步错了"，单步即使满配也在可接受范围内。
+ */
+export const MAX_PERSISTED_STEPS = 200;
+
+/**
+ * 落盘用的轨迹：**丢掉 thinking，留下其余**。
+ *
+ * 用户选的就是这一档（B 方案，但保留原始输出）：
+ * - **保留** id / runId / round / index / kind / label / summary / status / message
+ *   / observation / raw / startedAt / endedAt —— 刷新后能看到"做过哪些步、哪步失败、
+ *   模型当时输出了什么、接口返回了什么"；
+ * - **丢掉 thinking** —— 它是逐字流式的思考流，单步可达 20000 字符，占体积的大头，
+ *   而且主要服务于"当次排查"，事后回看价值低。
+ *
+ * 只裁这一个字段是**经过量化的选择**：实测单步 observation 41 KB / raw 12 KB / thinking 54 KB
+ * （都是灌满上限的情形），去掉 thinking 能把单步砍掉约一半。
+ */
+export function persistedTrace(trace: TraceStep[] | undefined): TraceStep[] {
+  if (!Array.isArray(trace) || trace.length === 0) return [];
+  return trace.slice(-MAX_PERSISTED_STEPS).map((step) => {
+    // 用解构剔除 thinking：以后 TraceStep 加了新字段，这里也不会漏掉它。
+    const { thinking: _thinking, ...rest } = step;
+    return rest;
+  });
+}
+
 export function snapshot(): PersistedRoot {
   const s = useDesktopStore.getState();
   return {
@@ -1475,8 +1536,8 @@ export function snapshot(): PersistedRoot {
       plugins: s.pluginsRect,
       workspace: s.workspaceRect,
     },
-    // 会话存几何、可见性，以及**它自己的对话记忆**；
-    // 运行状态与排队项是瞬态，不落盘。
+    // 会话存几何、可见性、它自己的对话记忆，以及**历轮的步骤**；
+    // 运行状态与排队项是瞬态，不落盘（刷新后本来就该重置）。
     sessions: s.sessions.map((ses) => ({
       id: ses.id,
       title: ses.title,
@@ -1484,7 +1545,20 @@ export function snapshot(): PersistedRoot {
       z: ses.z,
       minimized: ses.minimized,
       messages: ses.messages.slice(-MAX_STORED_MESSAGES),
+      trace: persistedTrace(ses.trace),
     })),
+    /*
+     * 组件 agent 的轨迹也要存 —— 它们与输入框的轨迹在面板里是**合并展示**的
+     * （见 TracePanel 的 merged）。只存会话那一半的话，刷新后那些行照样消失。
+     * 这里同样裁掉 thinking、并且只留"还在的组件"（被删的组件不用留垃圾）。
+     */
+    traceSeen: s.traceSeen,
+    agentTraces: Object.fromEntries(
+      Object.entries(s.agentRuns)
+        .filter(([id]) => !!s.nodes[id])
+        .map(([id, run]) => [id, persistedTrace(run.trace)])
+        .filter(([, trace]) => (trace as TraceStep[]).length > 0),
+    ),
     panelZ: s.panelZ,
     zCounter: s.zCounter,
     surfaces: exportSurfaceStates(),
@@ -1530,6 +1604,8 @@ async function saveNow(): Promise<void> {
     await adapter.set(K_PLUGINS, snap.plugins);
     await adapter.set(K_PANELS, snap.panels);
     await adapter.set(K_SESSIONS, snap.sessions);
+    await adapter.set(K_AGENT_TRACES, snap.agentTraces ?? {});
+    await adapter.set(K_TRACE_SEEN, snap.traceSeen ?? 0);
     await adapter.set('z', snap.zCounter);
     await adapter.set('panelZ', snap.panelZ);
     await adapter.set(K_PAGE_RECTS, snap.pluginPageRects);
@@ -1610,6 +1686,9 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     let introSeen: boolean | undefined;
     let panels: Partial<PanelRects> & { input?: PanelRect } | undefined;
     let sessions: PersistedSession[] | undefined;
+    /** 组件 agent 的轨迹（按 nodeId 索引）。 */
+    let agentTraces: Record<string, TraceStep[]> | undefined;
+    let traceSeenStored: number | undefined;
     let z: number | undefined;
     // 老数据里还有面板键 'input'（那时输入框还是个普通面板），所以这里用宽松类型读。
     let panelZ: Record<string, number> | undefined;
@@ -1631,6 +1710,8 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       pageOpen = await adapter.get<Record<string, boolean>>(K_PAGE_OPEN);
       introSeen = await adapter.get<boolean>(K_INTRO);
       sessions = await adapter.get<PersistedSession[]>(K_SESSIONS);
+      agentTraces = await adapter.get<Record<string, TraceStep[]>>(K_AGENT_TRACES);
+      traceSeenStored = await adapter.get<number>(K_TRACE_SEEN);
       z = await adapter.get<number>('z');
       panelZ = await adapter.get<Record<string, number>>('panelZ');
       surfaces = await adapter.get<Record<string, string>>(K_SURFACES);
@@ -1698,7 +1779,11 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
           z: typeof p.z === 'number' ? p.z : 2 + n,
           minimized: p.minimized === true,
           status: emptyStatus(),
-          trace: [],
+          /*
+           * 轨迹**从存储里读回来**（裁剪过的：没有 thinking，有 raw）。
+           * status / queue / metrics 仍然是空的 —— 它们是"此刻在做什么"，刷新后就该重置。
+           */
+          trace: Array.isArray(p.trace) ? p.trace : [],
           queue: [],
           metrics: emptyMetrics(),
           messages: Array.isArray(p.messages) ? (p.messages as Message[]) : [],
@@ -1729,6 +1814,32 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     if (typeof legacyZ === 'number' && restored[0]) restored[0].z = legacyZ;
 
     applyTheme(tokens);
+    /*
+     * 组件 agent 的运行状态：**只恢复轨迹**，status / queue 留空。
+     *
+     * 两条讲究：
+     * 1. 只恢复"还在的组件"（agentTraces 里可能留着已被删组件的记录 —— 那是旧数据），
+     *    与 snapshot 那边的过滤是对称的；
+     * 2. **内存里已有的那份优先**。hydrate 不只在页面加载时调用 —— 导入场景、
+     *    重置之后也会调，那时内存里可能有正在跑的 run。无条件覆盖会把它们抹掉，
+     *    而"存储里没有就保留内存里那份"正是这个文件里其它键（插件、收藏）一贯的规矩。
+     *
+     * 必须在 set() **之前**算出来：下面钳制水位（traceSeen）时要用的是"即将装上的那份"，
+     * 而不是 get() 里那份旧的 —— 用旧的那份会把总数算小、水位被误钳低，
+     * 于是刷新后又冒出一个"未看 N"的假徽标。
+     */
+    const restoredAgentRuns: Record<NodeId, RunSlice> = {
+      ...Object.fromEntries(
+        Object.entries(agentTraces ?? {})
+          .filter(([id]) => safeNodes[id]?.kind === 'component')
+          .map(([id, trace]) => [
+            id,
+            { status: emptyStatus(), trace: Array.isArray(trace) ? trace : [], queue: [] },
+          ]),
+      ),
+      ...get().agentRuns,
+    };
+
     importSurfaceStates(surfaces);
     // 已安装且已启用的插件要重新登记接口：接口表是内存里的，刷新页面就没了。
     syncPluginRuntime(safePluginList);
@@ -1744,6 +1855,15 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
       settings: { ...DEFAULT_SETTINGS, ...(settings ?? {}) },
       logs: logs ?? [],
       sessions: restored,
+      /*
+       * 水位：存储里有就用存储的，**并且不能超过当前总步数**（轨迹可能被"清空轨迹"
+       * 或裁剪减过；水位比总数还大的话，徽标会永远显示 0，等新步骤来了也不点亮）。
+       */
+      traceSeen: Math.min(
+        typeof traceSeenStored === 'number' ? traceSeenStored : 0,
+        traceTotal({ sessions: restored, agentRuns: restoredAgentRuns }),
+      ),
+      agentRuns: restoredAgentRuns,
       inspectorRect: panels?.inspector ?? fallback.inspector,
       settingsRect: panels?.settings ?? fallback.settings,
       traceRect: panels?.trace ?? fallback.trace,
