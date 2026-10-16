@@ -1010,6 +1010,9 @@ button:focus:not(:focus-visible) { outline: none; }
  *
  * 尺寸 15px 与 ContextRing.tsx 里的 SIZE 一致：两处都改才对齐。
  * 颜色只有三档（常规 / 接近阈值 / 到阈值），不用渐变 —— 与界面的扁平规则一致。
+ *
+ * **没有与 agent 工作状态相关的动画**：圆环只反映"上下文用了多少"，
+ * 那是个与"模型正在不在跑"无关的量。转圈会让人以为它在忙。
  */
 .ygg-ctx {
   display: inline-flex;
@@ -1018,25 +1021,47 @@ button:focus:not(:focus-visible) { outline: none; }
   cursor: pointer;
   pointer-events: auto;
   color: var(--ygg-fg-muted);
+  /* 一块小小的 hover 背景：padding 留出来，免得底色贴着圆环 */
+  padding: 1px 4px;
+  margin: -1px -4px;
+  border-radius: var(--ygg-radius);
+  background: transparent;
+  /* 背景与颜色都走同一条过渡，hover / 移出都是平滑的 */
+  transition: background-color var(--ygg-t) var(--ygg-ease), color var(--ygg-t) var(--ygg-ease);
 }
-.ygg-ctx:hover { color: var(--ygg-accent-hi); }
+.ygg-ctx:hover,
+.ygg-ctx.is-hover {
+  color: var(--ygg-accent-hi);
+  background: color-mix(in srgb, var(--ygg-accent) 16%, transparent);
+}
 .ygg-ctx-track { stroke: var(--ygg-accent-dim); opacity: .8; }
 .ygg-ctx-arc { transition: stroke-dashoffset var(--ygg-t) var(--ygg-ease); }
 .ygg-ctx-arc.is-ok { stroke: var(--ygg-accent); }
 .ygg-ctx-arc.is-warn { stroke: var(--ygg-accent-hi); }
 .ygg-ctx-arc.is-full { stroke: var(--ygg-accent-hi); }
-/* 压缩中：整圈转起来，明确"正在做事"。 */
-.ygg-ctx.is-busy { cursor: default; }
-.ygg-ctx.is-busy svg { animation: ygg-ctx-spin 900ms linear infinite; }
-@keyframes ygg-ctx-spin {
-  to { transform: rotate(360deg); }
-}
-/* hover 时出现的百分比：紧贴在圆环右边。 */
+/*
+ * hover 时出现的百分比，**在圆环左边**。
+ *
+ * 用 max-width + overflow 做展开而不是"有就渲染、没有就不渲染"：
+ * 后者是插入/删除一个元素，文字会**瞬间**跳一下；前者是宽度过渡，与背景同时发生。
+ * 不 hover 时宽度为 0、内容不可见，也不占地方（圆环位置不会因为 hover 而挪动）。
+ */
 .ygg-ctx-num {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   font-family: var(--ygg-font-mono);
   font-size: 10px;
   color: var(--ygg-accent-hi);
   letter-spacing: -.01em;
+  opacity: 0;
+  transition: max-width var(--ygg-t) var(--ygg-ease), opacity var(--ygg-t) var(--ygg-ease);
+}
+.ygg-ctx:hover .ygg-ctx-num,
+.ygg-ctx.is-hover .ygg-ctx-num {
+  /* 4 个字符够放 "100%"；再长也不会裁到（它是 inline-block 的收缩宽度） */
+  max-width: 4.5em;
+  opacity: 1;
 }
 
 .ygg-compose-hint { opacity: .85; }

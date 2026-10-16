@@ -3,11 +3,12 @@ import { useState } from 'react';
 /**
  * 上下文占用圆环。
  *
- * 位置由调用方决定（输入框右下角、用量指标右边），这里只管三件事：
- * **按百分比画一圈**、**悬浮给出准确数字**、**点一下要求压缩**。
+ * 位置由调用方决定（输入框右下角、用量指标的**左边**），这里只管四件事：
+ * **按百分比画一圈**、**hover 时给出百分比并给一块背景**、**点一下要求压缩**、
+ * 以及**不做与 agent 工作状态相关的动画**。
  *
  * 为什么是圆环而不是又一个数字：状态行那一排已经有三个数字了，再加一个只会更难扫。
- * 圆环把"还剩多少"变成一眼可判的形状，数字留到悬浮里 —— 那里本来就没有长度限制。
+ * 圆环把"还剩多少"变成一眼可判的形状，数字留到 hover —— 那里本来就没有长度限制。
  */
 
 /** 直径。要与 CSS 里的 .ygg-ctx 尺寸一致（两处都改才对齐）。 */
@@ -16,7 +17,7 @@ const STROKE = 2;
 
 /**
  * 阈值未知时的兜底分档（按窗口的百分比算）：
- * 到 75% 提醒、到 100% 算满。设置里默认的压缩阈值是 85%，所以这两个数只是后备。
+ * 到 75% 提醒、到阈值算满。设置里默认的压缩阈值是 85%，所以这两个数只是后备。
  */
 const WARN_AT = 0.75;
 
@@ -27,13 +28,11 @@ export interface ContextRingProps {
   limit?: number;
   /** 压缩阈值（窗口 × 压缩百分比）。用来给颜色分档。 */
   threshold?: number;
-  /** 正在压缩时转起来、并且不可重复点。 */
-  busy?: boolean;
   /** 点圆环：请求手动压缩。 */
   onCompact: () => void;
 }
 
-export function ContextRing({ tokens, limit, threshold, busy, onCompact }: ContextRingProps) {
+export function ContextRing({ tokens, limit, threshold, onCompact }: ContextRingProps) {
   const [hover, setHover] = useState(false);
   const known = typeof tokens === 'number' && typeof limit === 'number' && limit > 0;
   /*
@@ -60,21 +59,25 @@ export function ContextRing({ tokens, limit, threshold, busy, onCompact }: Conte
 
   return (
     <span
-      className={'ygg-ctx' + (busy ? ' is-busy' : '')}
+      className={'ygg-ctx' + (hover ? ' is-hover' : '')}
       role="button"
       tabIndex={0}
       title={tip}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={busy ? undefined : onCompact}
+      onClick={onCompact}
       onKeyDown={(e) => {
-        if (busy) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onCompact();
         }
       }}
     >
+      {/*
+        百分比在**左边**。写在这里而不是右边，是因为右边紧挨着那串用量文字 ——
+        放在左边时 hover 展开只会把后面的东西往右推，不会盖住数字。
+      */}
+      <span className="ygg-ctx-num">{known ? percent + '%' : ''}</span>
       <svg width={SIZE} height={SIZE} viewBox={'0 0 ' + SIZE + ' ' + SIZE}>
         {/* 轨道：永远画满一圈，这样"没有数据"和"0%"能区分开（前者没有进度弧）。 */}
         <circle
@@ -105,11 +108,6 @@ export function ContextRing({ tokens, limit, threshold, busy, onCompact }: Conte
           />
         ) : null}
       </svg>
-      {/*
-        悬浮时把百分比**写在圆环旁边**而不是再用一个 title ——
-        用户要求的就是"hover 显示当前使用百分比"，而那是个必须立刻看到的数字。
-      */}
-      {hover && known ? <span className="ygg-ctx-num">{percent}%</span> : null}
     </span>
   );
 }

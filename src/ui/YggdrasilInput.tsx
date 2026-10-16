@@ -358,6 +358,22 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           值都是这个会话的整体值：命中率 / 整体 tok/s / token 总和。
         */}
         <span ref={metricsRef} className="ygg-metrics-wrap">
+        {/*
+          上下文圆环。**放在数字左边** —— 它是个"状态指示 + 按钮"，
+          读的时候先看状态再看数字，与这一行从左到右的语序一致。
+
+          与数字**同进同出**：没跑过（没有用量数据）时整块都不渲染。
+          它曾经是常显示的，但那样输入框右下角永远挂着一个小圆环，
+          而这行字本来是"没数据时整块不渲染"的 —— 两种规则混在一起就说不清了。
+        */}
+        {metricsText(metrics) ? (
+          <ContextRing
+            tokens={status.contextTokens}
+            limit={status.contextLimit ?? useDesktopStore.getState().settings.contextWindow}
+            threshold={status.contextThreshold}
+            onCompact={() => void compactNow()}
+          />
+        ) : null}
         {metricsText(metrics) ? (
           <span
             className="ygg-metrics"
@@ -382,17 +398,6 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
             {metricsText(metrics)}
           </span>
         ) : null}
-        {/*
-          上下文圆环。**没跑过也显示**（那就是"还没用过上下文"），
-          与三个数字不同 —— 它是个可点的控件，藏起来用户就找不到它。
-        */}
-        <ContextRing
-          tokens={status.contextTokens}
-          limit={status.contextLimit ?? useDesktopStore.getState().settings.contextWindow}
-          threshold={status.contextThreshold}
-          busy={busy}
-          onCompact={() => void compactNow()}
-        />
         </span>
         {/*
           被弹窗拦截的页面：网页只能在"用户手势"里开新窗口，所以这里由用户点一下。
