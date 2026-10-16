@@ -18,12 +18,45 @@ export function isScreenshotMessage(m: { content?: unknown; images?: unknown }):
 }
 
 /**
+ * 传给 `getDisplayMedia` 的**选择器提示**。
+ *
+ * 浏览器**不允许**网页记住上次的选择，所以每次都一定会弹那个"选择要共享的内容"。
+ * 我们能做的只有"把最可能想选的那个摆在最显眼处"，这里用的就是这几个非标准/实验性提示：
+ *
+ * - `preferCurrentTab`：把**当前标签页**作为最突出的捕获源（选择器里会多一个"此标签页"）。
+ *   对这个应用来说这几乎总是想要的：抓的就是自己这一页的真实像素。
+ * - `selfBrowserSurface: 'include'`：允许选当前标签页。**必须显式 include** ——
+ *   有些浏览器（Chrome 的默认可不是 include）为了防"无限镜厅"会把它排除掉，
+ *   那样 `preferCurrentTab` 就没有意义了。
+ * - `monitorTypeSurfaces: 'exclude'`：**不提供"整个屏幕"**。理由是隐私与观感：
+ *   截桌面会把其它应用、通知、私人窗口一起拍进去，而这个应用要的只是自己的界面。
+ * - `surfaceSwitching: 'exclude'`：不显示"切换共享内容"控件（我们一次只要一帧，不需要它）。
+ *
+ * 这些参数**全是提示**：浏览器不认识就忽略，用户仍然可以选别的东西 ——
+ * 所以它们是纯改善，不会让截图失败。类型上它们还没进 TS 的标准库
+ * （`selfBrowserSurface` 等连 lib.dom.d.ts 都没有），所以这里显式声明形状再传。
+ */
+interface DisplayCaptureHints {
+  preferCurrentTab?: boolean;
+  selfBrowserSurface?: 'include' | 'exclude';
+  monitorTypeSurfaces?: 'include' | 'exclude';
+  surfaceSwitching?: 'include' | 'exclude';
+}
+
+export const CAPTURE_HINTS: DisplayCaptureHints = {
+  preferCurrentTab: true,
+  selfBrowserSurface: 'include',
+  monitorTypeSurfaces: 'exclude',
+  surfaceSwitching: 'exclude',
+};
+
+/**
  * 抓一张**当前页面的真实截图**。
  *
  * 为什么必须由用户点一下：
  * 浏览器只在**用户手势**里允许 `getDisplayMedia` —— 这是浏览器的硬规定，
  * 不是这里偷懒。Agent 是异步跑的，它的调用本身不构成手势，所以只能：
- * Agent 提出请求 → 输入框上出现一个按钮 → 用户点一下 → 这时才有手势 → 抓图成功。
+ * Agent 提出请求 → 弹出一个确认框 → 用户点一下 → 这时才有手势 → 抓图成功。
  *
  * 抓的是"用户选中的那个画面"（选当前标签页就是本应用的真实像素：
  * 连 WebGL 背景、canvas、跨域图片都在内 —— 这是它比"把 DOM 重画一遍"强的地方）。
@@ -35,7 +68,15 @@ export async function captureScreen(): Promise<ShotResult> {
   }
   let stream: MediaStream | null = null;
   try {
-    stream = await media.getDisplayMedia({ video: true, audio: false });
+    /*
+     * `video: true` 是标准形状；那几个提示参数不在 TS 的 DisplayMediaStreamOptions 里，
+     * 所以合并后**显式断言**成参数类型 —— 否则 strict 模式会报"多余属性"。
+     */
+    stream = await media.getDisplayMedia({
+      video: true,
+      audio: false,
+      ...CAPTURE_HINTS,
+    } as DisplayMediaStreamOptions);
     const track = stream.getVideoTracks()[0];
     const video = document.createElement('video');
     video.srcObject = stream;
