@@ -13,7 +13,14 @@ import { estimateTokens } from '../llm/client';
  * 纯函数都在这里（可单测）；真正调用模型、改写记忆的编排在 agentRuntime。
  */
 export const DEFAULT_COMPACT_AT = 85;
-/** 最近几条永远不压：刚说的话、带图的消息，压掉最容易出错。 */
+/**
+ * 最近几条永远不压：刚说的话、带图的消息，压掉最容易出错。
+ *
+ * **它只决定"留几条"，不再决定"能不能压"。**
+ * 以前它同时当门槛用（`memory.length <= keepRecent + 1` 就返回空 head、报"没有可压缩的历史"），
+ * 而触发压缩看的是**总 token**——两套判据不一致，于是"条数还少、token 已经爆了"这个
+ * 最需要压缩的区间里，压缩永远不生效，反过来还报一句"没有可压缩的历史"（§5.146）。
+ */
 export const KEEP_RECENT = 4;
 /** 摘要消息的标记。模型在提示词里被告知"这是你自己的压缩记忆"，不要当成新请求。 */
 export const SUMMARY_TAG = '[EARLIER CONVERSATION — COMPRESSED]';
@@ -79,15 +86,40 @@ export function estimateTokensOf(messages: ChatMessage[]): number {
   return estimateTokens('x'.repeat(total));
 }
 
-/** 要压的那一段 / 保留的那一段。头部为空表示"没什么可压的"。 */
+/** 要压的那一段 / 保留的那一段。 */
 export interface SplitPlan {
   head: Message[];
   tail: Message[];
 }
 
+/**
+ * 把记忆切成"要压的"和"留着的"。
+ *
+ * **只要有任何一条就能压**（用户要求："不要限制压缩条件，只要有任何一条 agent 操作，就能压缩"）。
+ *
+ * 实现上就一句话：**总是至少把第一条切给 head。** 然后 keepRecent 只影响"还能留几条"：
+ *
+ *     条数 1..4  →  head = 1 条（第一条），   tail = 剩下的 0..3 条
+ *     条数 5     →  head = 1 条，             tail = 4 条
+ *     条数 6     →  head = 2 条，             tail = 4 条
+ *     条数 30    →  head = 26 条，            tail = 4 条
+ *
+ * 为什么"至少一条"必须成立：以前 head 为空会报"没有可压缩的历史"，
+ * 而触发条件看的是**总 token** —— 条数少但 token 爆了的时候，压缩明明该做却报没得压，
+ * 然后退回"丢最老的历史"（那就是 §5.146 的成因）。
+ * 现在 head 为空**只剩一种情况：记忆本身是空的**（真的没有内容可压）。
+ *
+ * 摘要本身（`isSummary` 那条）允许被再次压进去：连着压两次的结果是"把上一个摘要与新的
+ * 旧历史合成一个新摘要"，不是丢失。
+ */
 export function splitForCompaction(memory: Message[], keepRecent = KEEP_RECENT): SplitPlan {
-  if (memory.length <= keepRecent + 1) return { head: [], tail: memory.slice() };
-  const cut = memory.length - keepRecent;
+  if (memory.length === 0) return { head: [], tail: [] };
+  /*
+   * 留下的最多 keepRecent 条，**且至少切一条给 head** ——
+   * 于是 head 永不为空（只要记忆里有东西）。
+   */
+  const keep = Math.max(0, Math.min(keepRecent, memory.length - 1));
+  const cut = memory.length - keep;
   return { head: memory.slice(0, cut), tail: memory.slice(cut) };
 }
 

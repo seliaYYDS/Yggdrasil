@@ -118,7 +118,14 @@ async function compactMemory(
   const memory = sessionMemory(originId, sessionId);
   const before = memory.length;
   const { head, tail } = splitForCompaction(memory);
-  if (head.length === 0) return { compacted: false, before, after: before, error: '没有可压缩的历史' };
+  /*
+   * head 只在**记忆本身是空的**时候为空 —— 不再有"条数太少"这一条。
+   *
+   * 以前这里同时兜着"前 5 条不压"，而那会与触发条件（看 token）打架：
+   * 条数少但 token 已经爆了的时候，压缩明明该做，却报一句"没有可压缩的历史"，
+   * 然后退回"丢最老的历史"（§5.146）。
+   */
+  if (head.length === 0) return { compacted: false, before, after: before, error: '这个会话还没有任何内容，没有可压缩的历史' };
   /*
    * 被压缩的那一段要**按请求里的样子**重放：同一个 userContent、同一套多模态形状、同样的顺序。
    * 它正好是刚发出那次请求的开头（历史排在最前），所以这是一次"前缀扩展"而不是一次新请求。
