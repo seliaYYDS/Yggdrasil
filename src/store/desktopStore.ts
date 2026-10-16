@@ -859,6 +859,17 @@ interface DesktopState {
    * 不进持久化：进度和排队项都是瞬态的。
    */
   agentRuns: Record<NodeId, RunSlice>;
+  /**
+   * 正在**手动压缩上下文**的会话 id。
+   *
+   * 单独一个字段而不是塞进 session.status：压缩不是一次"运行"（它不改 round/runId），
+   * 但界面确实需要知道"这个会话此刻在忙" —— 输入框据此显示 spinner、
+   * 把发送键变停止、并让提交进队列。
+   *
+   * 放 store 而不是 scheduler 的内部 Set，是为了**响应式**：调度器是个普通模块，
+   * 改内部 Set 不会触发 React 重渲染。
+   */
+  compactingSessions: string[];
   feedback: RunFeedback | null;
   traceOpen: boolean;
   /**
@@ -1025,6 +1036,14 @@ interface DesktopState {
   hasSession: (id: string) => boolean;
   /** 读运行状态（只读，给组件订阅用）。 */
   runOf: (id: string) => RunSlice;
+
+  /**
+   * 登记 / 注销"这个会话正在手动压缩"。
+   *
+   * 由 scheduler 的 submitCompaction 调用（它是唯一发起手动压缩的地方）——
+   * 放 store 里是为了让输入框能响应式地跟着变（见 compactingSessions 的注释）。
+   */
+  setCompacting: (sessionId: string, on: boolean) => void;
 
   setSettings: (patch: Partial<LlmSettings>) => void;
   setSettingsOpen: (open: boolean) => void;
@@ -1525,6 +1544,7 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   logs: [],
   sessions: [makeSession(1, resolveInputRect(window.innerWidth, window.innerHeight), window.innerWidth, window.innerHeight)],
   agentRuns: {},
+  compactingSessions: [],
   pluginPageRects: {},
   pluginPageOpen: {},
   favorites: [],
@@ -2061,6 +2081,18 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
         };
       }),
     );
+  },
+
+  setCompacting: (sessionId, on) => {
+    set((s) => {
+      const has = s.compactingSessions.includes(sessionId);
+      if (on === has) return s;
+      return {
+        compactingSessions: on
+          ? [...s.compactingSessions, sessionId]
+          : s.compactingSessions.filter((x) => x !== sessionId),
+      };
+    });
   },
 
   setSettings: (patch) => {

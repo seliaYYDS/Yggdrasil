@@ -1034,6 +1034,10 @@ button:focus:not(:focus-visible) { outline: none; }
   color: var(--ygg-accent-hi);
   background: color-mix(in srgb, var(--ygg-accent) 16%, transparent);
 }
+/* 压缩中：圆环转起来 —— 这是"它在做事"最直接的表达，也是用户点下去之后的唯一反馈。 */
+.ygg-ctx.is-compacting { cursor: default; }
+.ygg-ctx.is-compacting svg { animation: ygg-ctx-spin 900ms linear infinite; }
+@keyframes ygg-ctx-spin { to { transform: rotate(360deg); } }
 .ygg-ctx-track { stroke: var(--ygg-accent-dim); opacity: .8; }
 .ygg-ctx-arc { transition: stroke-dashoffset var(--ygg-t) var(--ygg-ease); }
 .ygg-ctx-arc.is-ok { stroke: var(--ygg-accent); }

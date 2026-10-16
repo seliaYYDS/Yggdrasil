@@ -841,25 +841,46 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         let messages = buildMessages(thresholdTokens > 0 ? 0 : undefined);
         publishContext(messages);
         if (thresholdTokens > 0 && estimateTokensOf(messages) > thresholdTokens) {
-          const res = await compactMemory(originId, sessionId, store.settings, systemPrompt, signal);
-          // 压成功 → 记忆短了，重拼；压不成 → 重拼时给历史一个预算兜底。
-          messages = buildMessages(res.compacted ? 0 : historyBudget());
-          publishContext(messages);
-          pushStep({
+          /*
+           * **先落一条 running 步骤，再去要摘要。**
+           *
+           * 以前是先 `await compactMemory(...)`、拿到结果才 pushStep —— 于是那一两秒
+           * （长历史更久）界面上什么指示都没有：轨迹里没有这条，状态行显示的还是这一轮的
+           * "模型思考中"。用户看到的就是"点了压缩毫无动静"（§5.148）。
+           *
+           * 现在这条步骤从开始就在，status='running' 会在轨迹里画一个转圈的标记；
+           * 压完就地改成 ok/fail，不新增第二条。
+           */
+          const compactStep: TraceStep = {
             id: newId(),
             runId,
             round,
             index: -4,
             kind: 'compact',
             label: '压缩上下文',
+            summary: '旧历史正在压成摘要',
+            status: 'running',
+            message: '正在把旧历史压成摘要…',
+            startedAt: Date.now(),
+          };
+          pushStep(compactStep);
+          setRunStatus({ phase: '压缩上下文中', detail: '' });
+          const res = await compactMemory(originId, sessionId, store.settings, systemPrompt, signal);
+          // 压成功 → 记忆短了，重拼；压不成 → 重拼时给历史一个预算兜底。
+          messages = buildMessages(res.compacted ? 0 : historyBudget());
+          publishContext(messages);
+          // 就地改成最终状态（同一个 id，upsert 会替换）。
+          pushStep({
+            ...compactStep,
             summary: res.compacted ? '旧历史已压成摘要' : '压缩失败，退回丢弃最老的历史',
             status: res.compacted ? 'ok' : 'fail',
             message: res.compacted
               ? res.before + ' 条 → ' + res.after + ' 条；请求约 ' + estimateTokensOf(messages) + ' token'
               : res.error ?? '未知原因',
-            startedAt: Date.now(),
             endedAt: Date.now(),
           });
+          // 状态行还给这一轮（下一句就会把它设成"模型思考中"）。
+          setRunStatus({ phase: '模型思考中', detail: '' });
           store.log(res.compacted ? 'info' : 'warn', res.compacted ? 'compact ' + res.before + ' → ' + res.after + ' 条' : 'compact ✕ ' + (res.error ?? '未知'));
         }
         /*
@@ -1283,6 +1304,8 @@ export function contextUsageOf(originId: NodeId, sessionId: string): number {
 export async function compactSessionNow(
   originId: NodeId,
   sessionId: string,
+  /** 用户按"停止"时会被 abort —— 与正常请求同一条路，中止不是故障。 */
+  signal?: AbortSignal,
 ): Promise<{ ok: boolean; before: number; after: number; error?: string }> {
   const store = useDesktopStore.getState();
   const origin = store.nodes[originId];
@@ -1302,23 +1325,38 @@ export async function compactSessionNow(
     startedAt: Date.now(),
   };
   store.upsertSessionStep(sessionId, step);
-  store.setSessionStatus(sessionId, { phase: '压缩上下文中', detail: '' });
+  /*
+   * **running: true 是关键。**
+   *
+   * 输入框的"忙"判定是 `busy = running || queue.length > 0`，而它同时决定三件事：
+   * 显不显示 spinner、走不走"忙"那半个状态行（phase 只在那里渲染）、发送键变不变"停止"。
+   * 以前这里只设了 phase —— 于是 `压缩上下文中` 挂在一个永不渲染的分支里：
+   * 用户看到的是"什么都没发生"，而且这期间还能继续发消息（§5.148）。
+   */
+  store.setSessionStatus(sessionId, { running: true, phase: '压缩上下文中', detail: '' });
 
   const systemPrompt = buildSystemPrompt(promptInputFor(originId, origin));
-  const res = await compactMemory(originId, sessionId, store.settings, systemPrompt);
+  const res = await compactMemory(originId, sessionId, store.settings, systemPrompt, signal);
 
   // 压完立刻刷新圆环：这是用户按下去的**唯一可见结果**，不刷新等于没反馈。
   const after = contextUsageOf(originId, sessionId);
+  const stopped = signal?.aborted === true;
   store.upsertSessionStep(sessionId, {
     ...step,
     status: res.compacted ? 'ok' : 'fail',
-    summary: res.compacted ? res.before + ' 条 → ' + res.after + ' 条' : '没有压缩',
+    // 中止不算失败：它是用户意图，说清楚就行（与模型请求那边同一套口径）。
+    label: stopped ? '压缩已停止' : step.label,
+    summary: res.compacted
+      ? res.before + ' 条 → ' + res.after + ' 条'
+      : (stopped ? '已按停止' : '没有压缩'),
     message: res.compacted
       ? '旧历史已压成摘要；上下文约 ' + after + ' token'
-      : (res.error ?? '没有可压缩的历史'),
+      : (stopped ? '已停止。' : (res.error ?? '没有可压缩的历史')),
     endedAt: Date.now(),
   });
   store.setSessionStatus(sessionId, {
+    // 收工时**必须把 running 放掉** —— 否则输入框会永远停在"压缩中"，发送键再也回不来。
+    running: false,
     phase: '',
     detail: '',
     contextTokens: after,

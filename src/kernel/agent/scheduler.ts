@@ -1,7 +1,7 @@
 import { newId } from '../ids';
 import type { NodeId } from '../types';
 import { MAIN_SESSION, useDesktopStore } from '../../store/desktopStore';
-import { runDerivation } from './agentRuntime';
+import { compactSessionNow, runDerivation } from './agentRuntime';
 
 /**
  * 输入调度器。
@@ -60,6 +60,72 @@ export function anyBusy(): boolean {
   return busy.size > 0;
 }
 
+/**
+ * 会话 id -> 是不是正在**手动压缩上下文**。
+ *
+ * 为什么需要单独一个集合：手动压缩不经过 drain（它不是一次派生运行），
+ * 但它确实是"这个会话此刻在忙"。不登记的话会有两个后果：
+ *
+ * 1. **提交会并发开跑**。压缩期间 submitInput 看到 busy 里没有这个会话，就直接调 drain()
+ *    —— 于是"压缩改写记忆"和"一轮派生写记忆"同时进行，互相覆盖（这是真会坏数据的那种）；
+ * 2. **"停止"按不动**。输入框在 running=true 时会把发送键变成停止，而 stopRun 是从
+ *    running 表里取控制器的 —— 手动压缩没登记就取不到，用户点了没反应。
+ */
+const compacting = new Set<string>();
+
+/** 这个会话是不是正在手动压缩（UI 与 submitInput 都要看它）。 */
+export function isCompacting(sessionId: string = MAIN_SESSION): boolean {
+  return compacting.has(sessionId);
+}
+
+/**
+ * 发起一次**手动压缩**（用户点输入框右下角的圆环）。
+ *
+ * 走这里而不是让 UI 直接调 compactSessionNow，是为了把"这个会话在忙"登记下来：
+ * 提交会因此排队、停止也能真的打断那次摘要请求。返回值表示**是否真的开始了**
+ * （已经在跑 / 已经在压 → false，界面据此不重复触发）。
+ */
+export function submitCompaction(originId: NodeId, sessionId: string = MAIN_SESSION): boolean {
+  if (compacting.has(sessionId) || busy.has(sessionId)) return false;
+  compacting.add(sessionId);
+  // 同时写进 store：输入框是**响应式**读它的（这个模块内部的 Set 不触发 React 重渲染）。
+  useDesktopStore.getState().setCompacting(sessionId, true);
+  // 复用同一张控制器表：于是输入框的"停止"按钮对它同样有效。
+  const ctl = new AbortController();
+  running.set(sessionId, ctl);
+  void (async () => {
+    try {
+      await compactSessionNow(originId, sessionId, ctl.signal);
+    } catch (e) {
+      useDesktopStore.getState().log('warn', 'compact ✕ ' + ((e as Error)?.message ?? String(e)).slice(0, 120));
+    } finally {
+      compacting.delete(sessionId);
+      useDesktopStore.getState().setCompacting(sessionId, false);
+      if (running.get(sessionId) === ctl) running.delete(sessionId);
+      /*
+       * **压缩期间排队的输入要在这里接上。**
+       *
+       * 上面把压缩期的提交都塞进了队列（避免与压缩并发改记忆），但压缩不在 drain 的循环里 ——
+       * 没人接的话那些输入会永远躺着：用户看到"排队 N 条"再也不会动。
+       *
+       * 被停止时不接：stopRun 已经把队列清空了，语义就是"停下来"。
+       */
+      if (!ctl.signal.aborted) {
+        const next = useDesktopStore.getState().shiftQueued(sessionId);
+        if (next && useDesktopStore.getState().nodes[next.originId]) {
+          void drain(sessionId, next.text, next.originId, next.files ?? []);
+        } else if (next) {
+          // 目标已被删：丢掉这条，再把剩下的也接上（与 drain 里的处理一致）。
+          useDesktopStore.getState().log('warn', 'queue ✕ 目标已删除，丢弃一条排队输入');
+          const after = useDesktopStore.getState().shiftQueued(sessionId);
+          if (after) void drain(sessionId, after.text, after.originId, after.files ?? []);
+        }
+      }
+    }
+  })();
+  return true;
+}
+
 /** 队列长度。 */
 export function queueLength(sessionId: string = MAIN_SESSION): number {
   const ses = useDesktopStore.getState().sessions.find((x) => x.id === sessionId);
@@ -87,7 +153,11 @@ export function submitInput(
   if (!store.hasSession(sessionId)) return false;
   const target = options.originId && store.nodes[options.originId] ? options.originId : store.rootId;
 
-  if (busy.has(sessionId)) {
+  /*
+   * 忙**或正在压缩**都进队列 —— 不并发开跑。
+   * 见 compacting 的注释：压缩与派生会同时改同一份记忆。
+   */
+  if (busy.has(sessionId) || compacting.has(sessionId)) {
     store.enqueue(sessionId, {
       id: newId(),
       text: value,

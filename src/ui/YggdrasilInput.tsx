@@ -10,8 +10,8 @@ import {
   type SessionMetrics,
 } from '../store/desktopStore';
 import { formatExactTokens } from '../kernel/agent/usage';
-import { stopRun, submitInput } from '../kernel/agent/scheduler';
-import { compactSessionNow, contextUsageOf } from '../kernel/agent/agentRuntime';
+import { stopRun, submitCompaction, submitInput } from '../kernel/agent/scheduler';
+import { contextUsageOf } from '../kernel/agent/agentRuntime';
 import { compactThresholdTokens } from '../kernel/agent/compact';
 import { ContextRing } from './ContextRing';
 import { QueueIcon, SendIcon, StopIcon } from './icons';
@@ -173,7 +173,15 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   );
 
   // 正在跑、或者还有排队项没消化完，都算"忙"：此时提交进入队列而不是被拒。
-  const busy = running || queue.length > 0;
+  /*
+   * 忙 = 正在跑 / 有排队 / **正在手动压缩**。
+   *
+   * 第三条是后加的：手动压缩走的是调度器里另一条路（不经过 drain），
+   * 所以它的 running 得从 isCompacting() 读。少了它，压缩期间既没有 spinner，
+   * 也不会把发送键变成"停止"。
+   */
+  const compactingNow = useDesktopStore((s) => s.compactingSessions.includes(session.id));
+  const busy = running || queue.length > 0 || compactingNow;
 
   /**
    * 提交。**文件是在这里才真正写进工作区的**。
@@ -291,16 +299,16 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
     });
   }, [session.id, running]);
 
-  const compacting = useRef(false);
-  const compactNow = async () => {
-    if (compacting.current || busy) return;
-    compacting.current = true;
-    try {
-      // 输入框的 agent 就是基底，所以 originId 是根节点（与 submitInput 的默认一致）。
-      await compactSessionNow(useDesktopStore.getState().rootId, session.id);
-    } finally {
-      compacting.current = false;
-    }
+  /**
+   * 手动压缩：交给调度器发起。
+   *
+   * **不在 UI 里直接调 compactSessionNow** —— 那会让「这个会话正在忙」没人知道，
+   * 于是提交会并发开跑（两个东西同时改同一份记忆）、「停止」也按不动（§5.148）。
+   * 这里只负责「点下去」这一个动作，重复点由调度器按 compacting 挡掉。
+   */
+  const compactNow = () => {
+    // 输入框的 agent 就是基底，所以 originId 是根节点（与 submitInput 的默认一致）。
+    submitCompaction(useDesktopStore.getState().rootId, session.id);
   };
 
   const needed = inputMinHeight(areaH, queue.length, pendingOpen.length, pending.length);
@@ -371,7 +379,8 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
             tokens={status.contextTokens}
             limit={status.contextLimit ?? useDesktopStore.getState().settings.contextWindow}
             threshold={status.contextThreshold}
-            onCompact={() => void compactNow()}
+            compacting={compactingNow}
+            onCompact={compactNow}
           />
         ) : null}
         {metricsText(metrics) ? (

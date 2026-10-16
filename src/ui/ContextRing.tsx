@@ -28,11 +28,18 @@ export interface ContextRingProps {
   limit?: number;
   /** 压缩阈值（窗口 × 压缩百分比）。用来给颜色分档。 */
   threshold?: number;
+  /**
+   * 正在压缩。
+   *
+   * 这时圆环**转起来**（"它在做事"），并且不再接受点击 —— 重复点没有意义，
+   * 调度器也会挡掉，但界面上先给出反馈更诚实。
+   */
+  compacting?: boolean;
   /** 点圆环：请求手动压缩。 */
   onCompact: () => void;
 }
 
-export function ContextRing({ tokens, limit, threshold, onCompact }: ContextRingProps) {
+export function ContextRing({ tokens, limit, threshold, compacting, onCompact }: ContextRingProps) {
   const [hover, setHover] = useState(false);
   const known = typeof tokens === 'number' && typeof limit === 'number' && limit > 0;
   /*
@@ -59,14 +66,15 @@ export function ContextRing({ tokens, limit, threshold, onCompact }: ContextRing
 
   return (
     <span
-      className={'ygg-ctx' + (hover ? ' is-hover' : '')}
+      className={'ygg-ctx' + (hover ? ' is-hover' : '') + (compacting ? ' is-compacting' : '')}
       role="button"
       tabIndex={0}
-      title={tip}
+      title={compacting ? '正在压缩上下文…' : tip}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={onCompact}
+      onClick={compacting ? undefined : onCompact}
       onKeyDown={(e) => {
+        if (compacting) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           onCompact();
