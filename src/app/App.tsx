@@ -6,6 +6,7 @@ import { TopBar } from '../ui/TopBar';
 import { ResetDialog } from '../ui/ResetDialog';
 import { StructChangeDialog } from '../ui/StructChangeDialog';
 import { ConsoleErrorPrompt } from '../ui/ConsoleErrorPrompt';
+import { ScreenshotPrompt } from '../ui/ScreenshotPrompt';
 import { SeedDialog } from '../ui/SeedDialog';
 import { IntroOverlay } from '../ui/IntroOverlay';
 import { installConsoleErrorHooks, subscribeConsoleErrors } from '../host/consoleErrors';
@@ -71,6 +72,8 @@ export function App() {
       <ResetDialog />
       <StructChangeDialog />
       <ConsoleErrorPrompt />
+      {/* 截图确认：Agent 请求截图时弹出来（浏览器只允许在用户手势里抓屏）。 */}
+      <ScreenshotPrompt />
       <SeedDialog />
       <Feedback />
       {/*

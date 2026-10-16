@@ -34,6 +34,7 @@ import { hasPluginContent } from '../kernel/plugin/package';
 import { buildSeed, seedStorageEntries, type SeedFile, type SeedPart } from './seed';
 import { syncPluginRuntime } from '../kernel/plugin/runtime';
 import { policyFor } from '../kernel/security';
+import { isScreenshotMessage } from '../host/screen';
 import type { InstalledPlugin, PluginPackage } from '../kernel/plugin/types';
 
 /**
@@ -942,7 +943,13 @@ interface DesktopState {
    * 浏览器只在**用户手势**里允许屏幕捕获，所以 Agent 的调用只能"登记请求"，
    * 由输入框显示一个按钮等用户点。记住是哪个会话要的，图才能进对上下文。
    */
-  pendingShot: { sessionId: string } | null;
+  /**
+   * 待处理的截图请求。
+   *
+   * `id` 是**每次请求的序号**：界面上"又请求了一次"与"还是上一次那个请求"必须能区分 ——
+   * 没有它，第二次请求看起来和第一次一模一样（§5.149）。
+   */
+  pendingShot: { sessionId: string; id: string; at: number } | null;
 
   hydrate: () => Promise<void>;
   addNode: (node: YggNode) => void;
@@ -1029,6 +1036,8 @@ interface DesktopState {
   replaceSessionMessages: (id: string, messages: Message[]) => void;
   /** 清空这个会话的记忆。 */
   clearSessionMessages: (id: string) => void;
+  /** 丢掉已经用过的截图消息（见实现处的注释：留着会让模型拿旧图当这次）。 */
+  dropScreenshotMessages: (id: string) => void;
   /**
    * 这个会话 id 现在有效吗。
    * 输入框会话要求输入框存在；agent 会话要求目标组件还在（且带能力）。
@@ -2345,8 +2354,31 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     schedulePersist();
   },
 
-  requestShot: (sessionId) => set({ pendingShot: { sessionId } }),
+  requestShot: (sessionId) =>
+    set({ pendingShot: { sessionId, id: newNodeId(), at: Date.now() } }),
   clearPendingShot: () => set({ pendingShot: null }),
+
+  /**
+   * 丢掉这个会话里**已经用过**的截图消息。
+   *
+   * 为什么必须丢：截图是**某一刻的快照**，不是对话内容。留着它会有两个后果：
+   * 1. 下一次请求截图时，历史里那张旧图还在 —— 模型看到"已经有一张截图了"，
+   *    于是**跳过新请求、直接拿旧图当这次的画面**（用户报的正是这个）；
+   * 2. 每一轮请求都把历史里所有 base64 截图重发一遍（贵且慢）。
+   *
+   * 判据是消息里的截图标记（见 SCREENSHOT_TAG），只删带图且带标记的那种，
+   * 用户自己粘贴的图片不受影响。
+   */
+  dropScreenshotMessages: (id: string) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) =>
+        ses.id === id
+          ? { ...ses, messages: ses.messages.filter((m) => !isScreenshotMessage(m)) }
+          : ses,
+      ),
+    }));
+    schedulePersist();
+  },
 
   showConsolePrompt: (text) => set({ consolePrompt: { id: newNodeId(), text } }),
 

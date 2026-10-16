@@ -1542,6 +1542,8 @@ button:focus:not(:focus-visible) { outline: none; }
   animation: ygg-window-in var(--ygg-t-slow) var(--ygg-ease-out) both;
 }
 .ygg-confirm-text { font-size: 12px; line-height: 1.7; color: var(--ygg-fg); }
+/* 截图弹窗里的失败原因（用户取消等）：留一行字，让他能直接再点一次。 */
+.ygg-shot-error { margin: 8px 0 0; color: var(--ygg-danger); }
 /* 弹窗里的报错原文：等宽、可滚、限高，别把弹窗撑到屏幕外 */
 .ygg-error-text {
   max-height: 190px;

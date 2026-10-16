@@ -2,6 +2,22 @@
 export type ShotResult = { ok: true; dataUrl: string } | { ok: false; error: string };
 
 /**
+ * 截图消息的标记（写进消息正文的开头）。
+ *
+ * 用它把"截图"与"用户自己粘贴的图"区分开：只有带这个标记的消息才会在
+ * 下一次截图前被丢掉（见 store 的 dropScreenshotMessages）。
+ * 判据必须与写入处一致，所以两处都用这个常量，不各写一遍字符串。
+ */
+export const SCREENSHOT_TAG = '[截图]';
+
+/** 这条消息是不是一张截图（带标记 + 真的带图）。 */
+export function isScreenshotMessage(m: { content?: unknown; images?: unknown }): boolean {
+  const hasTag = typeof m.content === 'string' && m.content.startsWith(SCREENSHOT_TAG);
+  const hasImage = Array.isArray(m.images) && m.images.length > 0;
+  return hasTag && hasImage;
+}
+
+/**
  * 抓一张**当前页面的真实截图**。
  *
  * 为什么必须由用户点一下：

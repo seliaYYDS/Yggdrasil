@@ -15,7 +15,6 @@ import { contextUsageOf } from '../kernel/agent/agentRuntime';
 import { compactThresholdTokens } from '../kernel/agent/compact';
 import { ContextRing } from './ContextRing';
 import { QueueIcon, SendIcon, StopIcon } from './icons';
-import { captureScreen } from '../host/screen';
 import { Surface } from '../host/Surface';
 import { WindowFrame } from '../host/WindowFrame';
 import { formatBytes } from '../kernel/workspace/store';
@@ -149,9 +148,6 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   const detail = status.detail;
   const removeQueued = useDesktopStore((s) => s.removeQueued);
   const pendingOpen = useDesktopStore((s) => s.pendingOpen);
-  const pendingShot = useDesktopStore((s) => s.pendingShot);
-  const clearPendingShot = useDesktopStore((s) => s.clearPendingShot);
-  const shotMine = pendingShot?.sessionId === session.id;
   const clearPendingOpen = useDesktopStore((s) => s.clearPendingOpen);
   const setSessionRect = useDesktopStore((s) => s.setSessionRect);
   const requestCloseSession = useDesktopStore((s) => s.requestClose);
@@ -412,41 +408,6 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           被弹窗拦截的页面：网页只能在"用户手势"里开新窗口，所以这里由用户点一下。
           点这个按钮就是真正的手势，window.open 不会被拦。
         */}
-        {/*
-          截图请求：浏览器只允许在"用户手势"里抓屏，所以 Agent 只能登记请求，
-          由用户点这一下 —— 点了才有手势，才抓得到真实的当前画面。
-        */}
-        {shotMine ? (
-          <button
-            className="ygg-pending"
-            title="点击后截取当前画面"
-            onClick={() => {
-              clearPendingShot();
-              void (async () => {
-                const r = await captureScreen();
-                const store = useDesktopStore.getState();
-                if (!r.ok) {
-                  store.log('warn', '截图 ✕ ' + r.error);
-                  return;
-                }
-                // 图进"要它的那个会话"的上下文：下一轮它就看得见。
-                store.appendSessionMessage(session.id, {
-                  role: 'user',
-                  content: '[截图] 这是当前页面的真实截图。',
-                  images: [r.dataUrl],
-                });
-                store.log('op', '截图已进入上下文', session.id);
-                // 自动追问一句，否则 Agent 要等用户下次说话才看得到这张图。
-                submitInput('[截图] 当前页面的截图已经附上，请查看并据此判断是否符合预期。', {
-                  sessionId: session.id,
-                });
-              })();
-            }}
-          >
-            <span className="ygg-pending-dot" />
-            截图给 Agent
-          </button>
-        ) : null}
 
         {pendingOpen.length > 0 ? (
           <button

@@ -188,7 +188,7 @@ export function registerBrowserInterfaces(): void {
     kind: 'capture_screen',
     label: '抓取页面截图',
     description:
-      '**Ask for a real screenshot of the current page** (it lands in your context; you see it next round) to check overlap / overflow / colours of what you built. ⚠ Capture is only allowed inside a **user gesture**, so this registers a request: a button appears on the input box and **the user clicks it**. End your turn after calling it.',
+      '**Ask for a real screenshot of the current page** (it lands in your context; you see it next round) to check overlap / overflow / colours of what you built. ⚠ Capture is only allowed inside a **user gesture**, so this raises a confirm dialog and **the user clicks it**. Each new screenshot **replaces** the previous one. End your turn after calling it.',
     example: { kind: 'capture_screen' },
     cap: 'browser',
     handler: (_op, ctx) => {
@@ -198,10 +198,10 @@ export function registerBrowserInterfaces(): void {
       }
       store.requestShot(ctx.sessionId);
       store.log('op', 'screenshot requested', ctx.sessionId);
-      return ok('Screenshot requested: ask the user to click "screenshot for the agent" on the input box; the image then enters your context.', {
+      return ok('Screenshot requested: a confirm dialog is up; the user takes the shot and the image then enters your context.', {
         observation:
-          'Screen capture needs a user gesture, so the request is pending. **End your turn here** and do not call it again;' +
-          'once the image arrives you will get a new message carrying it.',
+          'Screen capture needs a user gesture, so a confirm dialog is waiting for the user. **End your turn here** and do not' +
+          ' call it again; once the image arrives you will get a new message carrying it. Each new screenshot replaces the previous one.',
       });
     },
   });
