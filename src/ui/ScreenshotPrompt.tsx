@@ -21,12 +21,54 @@ import { captureScreen, SCREENSHOT_TAG } from '../host/screen';
 /** 多等一会儿就自动关掉：Agent 可能已经跑完了，窗口不该一直挂着。 */
 export const SHOT_PROMPT_MS = 30000;
 
+/**
+ * 等浏览器**真的画过一帧**。
+ *
+ * 抓图之前必须让弹窗"已经从画面上消失"，而不能只是"React 状态改了" ——
+ * 状态到像素之间还隔着一次提交与一次合成。两次 rAF 正好覆盖这两个阶段：
+ * 第一次 rAF 回调时上一次提交已经上屏了，第二次再等一帧最稳妥。
+ *
+ * **但不能只靠 rAF**：后台标签页里 rAF 会被节流、甚至完全不触发，
+ * 那样这个 Promise 永远不 resolve，截图就卡死了。所以再挂一个定时器兜底
+ * （谁先到用谁）—— 正常情况下 rAF 快得多（约两帧），定时器只是保险。
+ *
+ * **导出是为了能被断言**：这条"有界的等待"是防卡死的关键（rAF 在后台标签页里不触发），
+ * 而这种边界单靠读代码看不出来。
+ */
+export function nextPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    // 没有 rAF 的环境（很老的浏览器 / 某些测试宿主）直接用定时器。
+    if (typeof window.requestAnimationFrame !== 'function') {
+      window.setTimeout(finish, 32);
+      return;
+    }
+    window.requestAnimationFrame(() => window.requestAnimationFrame(finish));
+    window.setTimeout(finish, 120);
+  });
+}
+
 export function ScreenshotPrompt() {
   const pending = useDesktopStore((s) => s.pendingShot);
   const clear = useDesktopStore((s) => s.clearPendingShot);
   const rootId = useDesktopStore((s) => s.rootId);
   /** 正在抓取（浏览器权限弹窗期间）—— 此时不能再点第二次。 */
   const [busy, setBusy] = useState(false);
+  /**
+   * 抓取期间**把自己整个从画面上撤掉**。
+   *
+   * 不撤的话弹窗会被截进去：浏览器抓的是"用户选中的那个画面"，而这个弹窗正好盖在最上面、
+   * 还在屏幕正中 —— 截出来就是一张"弹窗照自己"（用户报的正是这个）。
+   *
+   * 用**整个卸载**而不是透明度动画：淡出一半的时候照样会被截到，
+   * 瞬时消失才干净。卸载的只是这一层（position:fixed），桌面不会因此重排。
+   */
+  const [hiding, setHiding] = useState(false);
   /** 上一次抓取失败的原因（用户取消等）。留着弹窗让他能再点一次。 */
   const [error, setError] = useState('');
   const [left, setLeft] = useState(Math.round(SHOT_PROMPT_MS / 1000));
@@ -40,6 +82,11 @@ export function ScreenshotPrompt() {
    */
   useEffect(() => {
     if (!id) return;
+    /*
+     * **抓取期间不倒数、也不自动关**：用户此刻可能正在浏览器那个选择器里挑画面，
+     * 挑多久都不该被我们这边的倒计时打断。
+     */
+    if (hiding) return;
     // 新的请求：把上一次的错误清掉，否则新弹窗一出来就带着旧报错。
     setError('');
     setLeft(Math.round(SHOT_PROMPT_MS / 1000));
@@ -49,20 +96,28 @@ export function ScreenshotPrompt() {
       window.clearInterval(tick);
       window.clearTimeout(timer);
     };
-  }, [id, clear]);
+  }, [id, clear, hiding]);
 
-  if (!pending || !sessionId) return null;
+  // hiding 时不渲染 —— 这就是"从画面上撤掉"。
+  if (!pending || !sessionId || hiding) return null;
 
   /**
    * 抓一张图并交给 Agent。
    *
-   * 顺序是刻意的：**先在弹窗里抓、抓到了才关弹窗、才把图写进记忆**。
-   * 失败（用户取消）时弹窗留着，用户可以直接再点一次 —— 不用等 Agent 重新请求。
+   * 顺序是刻意的，**两步都不能省**：
+   * 1. 先把自己从画面上撤掉（setHiding → 等真的画过一帧）；
+   * 2. 再抓。
+   *
+   * 只做第 1 步不等，抓到的很可能仍是"包含弹窗"的那一帧：状态改了、画面上还没变。
+   * 失败（用户取消）时把弹窗放回来，用户可以直接再点一次 —— 不用等 Agent 重新请求。
    */
   const shoot = async () => {
     if (busy) return;
     setBusy(true);
+    setHiding(true);
     try {
+      // 等浏览器把"弹窗没了"这件事真的画出来，再去抓。
+      await nextPaint();
       const r = await captureScreen();
       const store = useDesktopStore.getState();
       if (!r.ok) {
@@ -91,7 +146,9 @@ export function ScreenshotPrompt() {
         originId: rootId,
       });
     } finally {
+      // 成功时 pending 已经清了（上面那句 clear），这里只是把失败的情况放回来。
       setBusy(false);
+      setHiding(false);
     }
   };
 
