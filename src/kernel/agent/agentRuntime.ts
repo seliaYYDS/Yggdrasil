@@ -736,25 +736,7 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
          *
          * 顺序也有讲究：**稳定的进系统消息，逐轮会变的进最后那条消息**（见下面的 messages）。
          */
-        const promptInput: SystemPromptInput = {
-          nodes: deskNodes(),
-          rootId: desktop().rootId,
-          viewW: desktop().viewW,
-          viewH: desktop().viewH,
-          tokens: desktop().tokens,
-          tools: agentTools(origin),
-          originName: origin.name,
-          hostId: originId,
-          rolePrompt: isAgentic(origin) ? origin.agent.systemPrompt : '',
-          ledger: currentLedger(originId),
-          scope: isAgentic(origin) ? origin.agent.scope : undefined,
-          // 能力开关：没开的接口不会出现在接口目录里，提示词也少一大截。
-          caps: isAgentic(origin) ? origin.agent.caps : undefined,
-          adultMode: store.settings.adultMode === true,
-          // 精简模式：固定提示词压到最简（内容与能力开关无关，只影响"讲多少"）。
-          terse: store.settings.terse === true,
-          defaultWindows: defaultWindowsText(defaultWindows(desktop())),
-        };
+        const promptInput: SystemPromptInput = promptInputFor(originId, origin);
         const systemPrompt = buildSystemPrompt(promptInput);
         const snapshotPrompt = buildSnapshotPrompt(promptInput);
 
@@ -794,12 +776,22 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
          * 顺序反了的话，"按预算削历史"会抢在压缩前面动手 —— 那就又变回了截断。
          */
         const thresholdTokens = compactThresholdTokens(store.settings.contextWindow, store.settings.compactAt);
+        /** 把这次请求的估算长度与窗口记进运行状态 —— 输入框右下角的圆环读它们。 */
+        const publishContext = (msgs: ChatMessage[]): void => {
+          setRunStatus({
+            contextTokens: estimateTokensOf(msgs),
+            contextLimit: store.settings.contextWindow ?? 0,
+            contextThreshold: thresholdTokens,
+          });
+        };
         // 窗口未知（threshold 0）→ 0 会变成"不设上限"，那是错的，要传 undefined 走保守分支。
         let messages = buildMessages(thresholdTokens > 0 ? 0 : undefined);
+        publishContext(messages);
         if (thresholdTokens > 0 && estimateTokensOf(messages) > thresholdTokens) {
           const res = await compactMemory(originId, sessionId, store.settings, systemPrompt, signal);
           // 压成功 → 记忆短了，重拼；压不成 → 重拼时给历史一个预算兜底。
           messages = buildMessages(res.compacted ? 0 : historyBudget());
+          publishContext(messages);
           pushStep({
             id: newId(),
             runId,
@@ -1144,6 +1136,119 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
 
 function deskNodes(): Record<string, YggNode> {
   return desktop().nodes;
+}
+
+/**
+ * 组装一份 promptInput。
+ *
+ * **抽成一处**：系统提示、快照、以及手动压缩都要看到同一个世界。
+ * 以前它内联在 runDerivation 的循环里，于是"手动压缩"想复用它只能重写一遍 ——
+ * 那两份迟早会走偏（漏一个字段就等于压缩时看到的世界和真实请求不一样，
+ * 而复用缓存恰恰要求前缀逐字节相同）。
+ */
+function promptInputFor(originId: NodeId, origin: YggNode): SystemPromptInput {
+  const store = useDesktopStore.getState();
+  const desk = desktop();
+  return {
+    nodes: deskNodes(),
+    rootId: desk.rootId,
+    viewW: desk.viewW,
+    viewH: desk.viewH,
+    tokens: desk.tokens,
+    tools: agentTools(origin),
+    originName: origin.name,
+    hostId: originId,
+    rolePrompt: isAgentic(origin) ? origin.agent.systemPrompt : '',
+    ledger: currentLedger(originId),
+    scope: isAgentic(origin) ? origin.agent.scope : undefined,
+    // 能力开关：没开的接口不会出现在接口目录里，提示词也少一大截。
+    caps: isAgentic(origin) ? origin.agent.caps : undefined,
+    adultMode: store.settings.adultMode === true,
+    // 精简模式：固定提示词压到最简（内容与能力开关无关，只影响"讲多少"）。
+    terse: store.settings.terse === true,
+    defaultWindows: defaultWindowsText(defaultWindows(desk)),
+  };
+}
+
+/**
+ * 这个会话现在"大概占了多少上下文"（估算 token）。
+ *
+ * 与真正发出去的那份**同一套拼法**（同一个系统提示、同一份快照、同一份记忆），
+ * 只是用"当前完整记忆"而不是某一轮的历史切片 —— 圆环要回答的是
+ * "现在大概多少"，不需要精确到某一轮。**只用于展示与手动压缩后的刷新。**
+ */
+export function contextUsageOf(originId: NodeId, sessionId: string): number {
+  const store = useDesktopStore.getState();
+  const origin = store.nodes[originId];
+  if (!origin || origin.kind !== 'component') return 0;
+  const input = promptInputFor(originId, origin);
+  const system = buildSystemPrompt(input);
+  const memory = sessionMemory(originId, sessionId)
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({ role: m.role, content: userContent(m.content, m.images, store.settings.vision !== false) }));
+  return estimateTokensOf([
+    { role: 'system', content: system },
+    ...memory,
+    { role: 'user', content: buildSnapshotPrompt(input) },
+  ]);
+}
+
+/**
+ * **手动压缩**：用户点输入框右下角那个圆环时调用。
+ *
+ * 与自动压缩走同一个 compactMemory、同样的参数 —— 区别只是触发者。
+ * 有意不复制一份实现：手动压缩唯一的价值就是"我现在就想压"，
+ * 如果它的行为与自动压缩不同，用户按下去得到的就不是他预期的那件事。
+ */
+export async function compactSessionNow(
+  originId: NodeId,
+  sessionId: string,
+): Promise<{ ok: boolean; before: number; after: number; error?: string }> {
+  const store = useDesktopStore.getState();
+  const origin = store.nodes[originId];
+  if (!origin || origin.kind !== 'component') {
+    return { ok: false, before: 0, after: 0, error: '发起节点不存在。' };
+  }
+  const step: TraceStep = {
+    id: newId(),
+    runId: 'manual-compact',
+    round: 0,
+    index: -5,
+    kind: 'compact',
+    label: '手动压缩上下文',
+    summary: '用户点了上下文圆环',
+    status: 'running',
+    message: '正在把旧历史压成摘要…',
+    startedAt: Date.now(),
+  };
+  store.upsertSessionStep(sessionId, step);
+  store.setSessionStatus(sessionId, { phase: '压缩上下文中', detail: '' });
+
+  const systemPrompt = buildSystemPrompt(promptInputFor(originId, origin));
+  const res = await compactMemory(originId, sessionId, store.settings, systemPrompt);
+
+  // 压完立刻刷新圆环：这是用户按下去的**唯一可见结果**，不刷新等于没反馈。
+  const after = contextUsageOf(originId, sessionId);
+  store.upsertSessionStep(sessionId, {
+    ...step,
+    status: res.compacted ? 'ok' : 'fail',
+    summary: res.compacted ? res.before + ' 条 → ' + res.after + ' 条' : '没有压缩',
+    message: res.compacted
+      ? '旧历史已压成摘要；上下文约 ' + after + ' token'
+      : (res.error ?? '没有可压缩的历史'),
+    endedAt: Date.now(),
+  });
+  store.setSessionStatus(sessionId, {
+    phase: '',
+    detail: '',
+    contextTokens: after,
+    contextLimit: store.settings.contextWindow ?? 0,
+    contextThreshold: compactThresholdTokens(store.settings.contextWindow, store.settings.compactAt),
+  });
+  store.log(res.compacted ? 'info' : 'warn', res.compacted
+    ? 'compact (manual) ' + res.before + ' → ' + res.after + ' 条'
+    : 'compact (manual) ✕ ' + (res.error ?? '未知'));
+  return { ok: res.compacted, before: res.before, after: res.after, error: res.error };
 }
 
 /** 取该 Agent 的 ledger。 */

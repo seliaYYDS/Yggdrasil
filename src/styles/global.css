@@ -980,18 +980,63 @@ button:focus:not(:focus-visible) { outline: none; }
  * 而且没数据时整块不渲染（所以不会留下空占位）。
  * 它不参与布局，所以状态行要自己留出避让的右边距（见 .ygg-compose-state）。
  */
-.ygg-metrics {
+/*
+ * 右下角那一块：三个数字 + 上下文圆环。
+ *
+ * **定位在外层**，数字在内层 —— 圆环要能点，而指标那串文字是 pointer-events:none。
+ * 分成两层就不用为了"圆环可点"把整块都变成可点的热区。
+ */
+.ygg-metrics-wrap {
   position: absolute;
   right: 10px;
   bottom: 7px;
   z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   white-space: nowrap;
+}
+.ygg-metrics {
   font-family: var(--ygg-font-mono);
   font-size: 10px;
   color: var(--ygg-fg-muted);
   letter-spacing: -.01em;
   cursor: default;
   pointer-events: none;
+}
+
+/*
+ * 上下文占用圆环：**可点**（手动压缩），所以它自己这一小块要收回指针事件。
+ *
+ * 尺寸 15px 与 ContextRing.tsx 里的 SIZE 一致：两处都改才对齐。
+ * 颜色只有三档（常规 / 接近阈值 / 到阈值），不用渐变 —— 与界面的扁平规则一致。
+ */
+.ygg-ctx {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  pointer-events: auto;
+  color: var(--ygg-fg-muted);
+}
+.ygg-ctx:hover { color: var(--ygg-accent-hi); }
+.ygg-ctx-track { stroke: var(--ygg-accent-dim); opacity: .8; }
+.ygg-ctx-arc { transition: stroke-dashoffset var(--ygg-t) var(--ygg-ease); }
+.ygg-ctx-arc.is-ok { stroke: var(--ygg-accent); }
+.ygg-ctx-arc.is-warn { stroke: var(--ygg-accent-hi); }
+.ygg-ctx-arc.is-full { stroke: var(--ygg-accent-hi); }
+/* 压缩中：整圈转起来，明确"正在做事"。 */
+.ygg-ctx.is-busy { cursor: default; }
+.ygg-ctx.is-busy svg { animation: ygg-ctx-spin 900ms linear infinite; }
+@keyframes ygg-ctx-spin {
+  to { transform: rotate(360deg); }
+}
+/* hover 时出现的百分比：紧贴在圆环右边。 */
+.ygg-ctx-num {
+  font-family: var(--ygg-font-mono);
+  font-size: 10px;
+  color: var(--ygg-accent-hi);
+  letter-spacing: -.01em;
 }
 
 .ygg-compose-hint { opacity: .85; }

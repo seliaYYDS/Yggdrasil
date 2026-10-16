@@ -4,6 +4,7 @@ import {
   kindOf,
   putEntry,
   validName,
+  workspaceLimits,
   type WorkspaceEntry,
   type WorkspaceKind,
 } from './store';
@@ -23,8 +24,11 @@ import {
  * - **图片之外的文件终于有地方去**。以前只有图片能被粘贴，其它文件无处可放。
  */
 
-/** 单个上传文件的上限（与工作区其它入口一致）。 */
-export const MAX_UPLOAD_BYTES = 16 * 1024 * 1024;
+/*
+ * 单个上传文件的上限**来自设置**（设置 → 常规 → 工作区 → 单文件上限），
+ * 与 ws_write / ws_run 共用同一个 workspaceLimits()。
+ * 这里不再导出常量：上限是运行期可变的，导出快照只会让调用方拿到过期的数。
+ */
 /** 一次最多上传几个 —— 这是给人用的入口，不是批量导入。 */
 export const MAX_UPLOAD_FILES = 8;
 
@@ -118,8 +122,9 @@ export async function uploadFiles(files: File[]): Promise<UploadResult> {
         reject(file, '是空文件，跳过了。');
         continue;
       }
-      if (file.size > MAX_UPLOAD_BYTES) {
-        reject(file, formatBytes(file.size) + ' 超过单文件上限 ' + formatBytes(MAX_UPLOAD_BYTES) + '。');
+      const { file: maxFile } = await workspaceLimits();
+      if (file.size > maxFile) {
+        reject(file, formatBytes(file.size) + ' 超过单文件上限 ' + formatBytes(maxFile) + '。');
         continue;
       }
       const wanted = sanitizeFileName(original);
@@ -164,10 +169,11 @@ export async function uploadFiles(files: File[]): Promise<UploadResult> {
  * 输入框需要在用户还没发送时就能显示"这个文件收不了"（太大/空的），
  * 而不是等到发送那一刻才说 —— 那时用户已经在等结果了。
  */
-export function checkFileLocally(file: File): string | null {
+export async function checkFileLocally(file: File): Promise<string | null> {
   if (file.size === 0) return '是空文件。';
-  if (file.size > MAX_UPLOAD_BYTES) {
-    return formatBytes(file.size) + ' 超过单文件上限 ' + formatBytes(MAX_UPLOAD_BYTES) + '。';
+  const { file: maxFile } = await workspaceLimits();
+  if (file.size > maxFile) {
+    return formatBytes(file.size) + ' 超过单文件上限 ' + formatBytes(maxFile) + '。';
   }
   return null;
 }

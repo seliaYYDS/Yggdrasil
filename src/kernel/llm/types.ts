@@ -76,6 +76,27 @@ export interface LlmSettings {
    * 代价是它需要自己 inspect 去补细节（提示词里会这么告诉它）。
    */
   terse?: boolean;
+  /**
+   * 工作区（Agent 的加工台）**总容量上限**，字节。**未填 = 默认 32 MB**。
+   *
+   * 它不是浏览器的真实配额，而是我们自己的软上限 —— 目的是"到点给出人能看懂的错误"，
+   * 而不是让 IndexedDB 抛 QuotaExceededError 进回读。上限硬顶 1 GB
+   * （见 clampWorkspaceTotal / WORKSPACE_TOTAL_MAX）。
+   */
+  workspaceTotalBytes?: number;
+  /**
+   * 工作区**单文件**上限，字节。**未填 = 默认 16 MB**。硬顶 512 MB。
+   */
+  workspaceFileBytes?: number;
+  /**
+   * 按**入口（Base 地址）**分开保存的 Key。
+   *
+   * 键是归一化后的 Base 地址（去尾斜杠），值是 Key。
+   * `apiKey` 始终是"当前入口正在用的那个" —— 它必须留着，
+   * 因为请求、seed、以及所有读 `settings.apiKey` 的地方都只看它；
+   * 这份表只是"切换入口时把 Key 也换回来"的记忆。
+   */
+  apiKeys?: Record<string, string>;
 }
 
 export const DEFAULT_SETTINGS: LlmSettings = {
@@ -93,7 +114,29 @@ export const DEFAULT_SETTINGS: LlmSettings = {
   vision: true,
   compactAt: 85,
   terse: false,
+  // 工作区上限留空 = 用默认值（32 MB / 16 MB），与以前完全一致。
+  apiKeys: {},
 };
+
+/** 工作区总容量上限的默认与硬顶。 */
+export const WORKSPACE_TOTAL_DEFAULT = 32 * 1024 * 1024;
+export const WORKSPACE_TOTAL_MAX = 1024 * 1024 * 1024; // 1 GB
+/** 工作区单文件上限的默认与硬顶。 */
+export const WORKSPACE_FILE_DEFAULT = 16 * 1024 * 1024;
+export const WORKSPACE_FILE_MAX = 512 * 1024 * 1024; // 512 MB
+
+/** 把一个上限夹进 [下限, 硬顶]；非法值（0 / 负数 / NaN）返回 undefined = 用默认。 */
+export function clampWorkspaceTotal(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(Math.round(n), WORKSPACE_TOTAL_MAX);
+}
+
+export function clampWorkspaceFile(v: unknown): number | undefined {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(Math.round(n), WORKSPACE_FILE_MAX);
+}
 
 /** 多模态消息的内容块（OpenAI 兼容格式）。 */
 export type ContentPart =

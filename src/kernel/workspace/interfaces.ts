@@ -16,7 +16,7 @@ import {
   textOf,
   usageBytes,
   validName,
-  WORKSPACE_SOFT_LIMIT,
+  workspaceLimits,
   type WorkspaceEntry,
 } from '../workspace/store';
 import { MAX_HIDDEN, hiddenPiece } from '../workspace/hide';
@@ -33,22 +33,23 @@ import { MAX_HIDDEN, hiddenPiece } from '../workspace/hide';
  * 所以没有 net 的 Agent 看不到、也调不动。
  */
 
-/** 上传体积上限：单次请求/单文件。 */
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
+/*
+ * 单文件与总容量上限**都来自设置**（设置 → 常规 → 工作区），不再是写死的常量。
+ * 每次调用现读一次：用户改了上限应当立刻生效，而不是等下次刷新。
+ */
 
-function limitsText(): string {
-  return (
-    'soft limit ' + formatBytes(WORKSPACE_SOFT_LIMIT) + ' in total, ' +
-    formatBytes(MAX_FILE_BYTES) + ' per file'
-  );
+async function limitsText(): Promise<string> {
+  const { total, file } = await workspaceLimits();
+  return 'soft limit ' + formatBytes(total) + ' in total, ' + formatBytes(file) + ' per file';
 }
 
 async function guardSpace(adding: number, replacing: number): Promise<string | null> {
+  const { total } = await workspaceLimits();
   const used = await usageBytes();
-  if (used - replacing + adding > WORKSPACE_SOFT_LIMIT) {
+  if (used - replacing + adding > total) {
     return (
       '工作区装不下了：已用 ' + formatBytes(used) + '，这次要再加 ' + formatBytes(adding) +
-      '，上限 ' + formatBytes(WORKSPACE_SOFT_LIMIT) + '。先删掉一些不再需要的文件（ws_list 看清单、ws_delete 删）。'
+      '，上限 ' + formatBytes(total) + '。先删掉一些不再需要的文件（ws_list 看清单、ws_delete 删）。'
     );
   }
   return null;
@@ -83,8 +84,9 @@ export function registerWorkspaceInterfaces(): void {
       if (hasText) {
         const text = String(op.text);
         const size = bytesOfText(text);
-        if (size > MAX_FILE_BYTES) {
-          return fail('这个文本太大了（' + formatBytes(size) + '），单文件上限 ' + formatBytes(MAX_FILE_BYTES) + '。');
+        const { file: maxFile } = await workspaceLimits();
+        if (size > maxFile) {
+          return fail('这个文本太大了（' + formatBytes(size) + '），单文件上限 ' + formatBytes(maxFile) + '。');
         }
         const room = await guardSpace(size, replacing);
         if (room) return fail(room);
@@ -108,8 +110,9 @@ export function registerWorkspaceInterfaces(): void {
           return fail('取 ' + url + ' 失败：' + (e as Error).message);
         }
         const size = data.blob.size;
-        if (size > MAX_FILE_BYTES) {
-          return fail('这个文件太大了（' + formatBytes(size) + '），单文件上限 ' + formatBytes(MAX_FILE_BYTES) + '。');
+        const { file: maxFile } = await workspaceLimits();
+        if (size > maxFile) {
+          return fail('这个文件太大了（' + formatBytes(size) + '），单文件上限 ' + formatBytes(maxFile) + '。');
         }
         const room = await guardSpace(size, replacing);
         if (room) return fail(room);
@@ -127,13 +130,14 @@ export function registerWorkspaceInterfaces(): void {
 
       await putEntry(entry);
       const used = await usageBytes();
+      const { total: maxTotal } = await workspaceLimits();
       return ok(
         'Wrote ' + name + ' (' + entry.kind + ', ' + formatBytes(entry.size) + ')',
         {
           observation:
             name + ' 已写入工作区：' + entry.kind + '，' + formatBytes(entry.size) + '，' +
             (existing ? '覆盖了原来的同名文件。' : '新建。') +
-            '\n工作区已用 ' + formatBytes(used) + ' / ' + formatBytes(WORKSPACE_SOFT_LIMIT) + '。' +
+            '\n工作区已用 ' + formatBytes(used) + ' / ' + formatBytes(maxTotal) + '。' +
             (entry.kind === 'text'
               ? '\n要嵌入组件就在源码里写 "' + '@ws/' + name + '"，写入时会**复制**内容进去（之后改工作区不影响组件）。'
               : '\n要嵌入组件就在源码里写 "' + '@ws/' + name + '"，宿主会把它转成 data URL 复制进去。' +
@@ -153,9 +157,10 @@ export function registerWorkspaceInterfaces(): void {
     handler: async () => {
       const files = await listWorkspace();
       const used = files.reduce((n, f) => n + f.size, 0);
+      const { total: maxTotal } = await workspaceLimits();
       if (files.length === 0) {
         return ok('Workspace is empty.', {
-          observation: '工作区是空的。（上限 ' + formatBytes(WORKSPACE_SOFT_LIMIT) + '，当前 0 B）',
+          observation: '工作区是空的。（上限 ' + formatBytes(maxTotal) + '，当前 0 B）',
         });
       }
       const lines = files.map(
@@ -165,7 +170,7 @@ export function registerWorkspaceInterfaces(): void {
       return ok(files.length + ' file(s) in the workspace', {
         observation:
           '工作区里有 ' + files.length + ' 个文件（已用 ' + formatBytes(used) + ' / ' +
-          formatBytes(WORKSPACE_SOFT_LIMIT) + '）：\n' + lines.join('\n') +
+          formatBytes(maxTotal) + '）：\n' + lines.join('\n') +
           '\n在组件源码里写 "@ws/名字" 就能把内容嵌进去（写入时复制，之后改工作区不影响组件）。',
       });
     },
@@ -254,10 +259,11 @@ export function registerWorkspaceInterfaces(): void {
     handler: async () => {
       const files = await listWorkspace();
       const used = files.reduce((n, f) => n + f.size, 0);
+      const { total: maxTotal } = await workspaceLimits();
       return ok('Workspace usage', {
         observation:
-          '已用 ' + formatBytes(used) + ' / ' + formatBytes(WORKSPACE_SOFT_LIMIT) +
-          '（' + files.length + ' 个文件）。' + limitsText(),
+          '已用 ' + formatBytes(used) + ' / ' + formatBytes(maxTotal) +
+          '（' + files.length + ' 个文件）。' + (await limitsText()),
       });
     },
   });

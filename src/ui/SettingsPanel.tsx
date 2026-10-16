@@ -5,10 +5,50 @@ import { PanelWindow } from './PanelWindow';
 import { SECURITY_LEVELS, describePolicy, policyFor, type SecurityLevel } from '../kernel/security';
 import { Switch } from './Switch';
 import { readPercent } from '../kernel/agent/compact';
+import {
+  clampWorkspaceFile,
+  clampWorkspaceTotal,
+  WORKSPACE_FILE_DEFAULT,
+  WORKSPACE_FILE_MAX,
+  WORKSPACE_TOTAL_DEFAULT,
+  WORKSPACE_TOTAL_MAX,
+} from '../kernel/llm/types';
 import { listModels } from '../kernel/llm/client';
-import { PROVIDER_PRESETS, formatTokens, providerFor, readTokenCount, type RemoteModel } from '../kernel/llm/presets';
+import {
+  PROVIDER_PRESETS,
+  formatTokens,
+  providerFor,
+  providerKeyFor,
+  readTokenCount,
+  type RemoteModel,
+} from '../kernel/llm/presets';
 
 type Section = 'general' | 'llm';
+
+/**
+ * MB 文本框 → 字节。
+ *
+ * **空串 = 清掉这个设置**（返回 undefined，回落到默认值）—— 与"最大输出"那一栏同一套规矩：
+ * 留空不是"设成 0"，而是"不设"。
+ *
+ * 输入非法（非数字、负数）时也返回 undefined，而不是悄悄写成 NaN：
+ * 那样存进设置里会变成一个谁都不认识的数。
+ */
+function mbToBytes(text: string, hardMax: number): number | undefined {
+  const t = text.trim();
+  if (!t) return undefined;
+  const mb = Number(t);
+  if (!Number.isFinite(mb) || mb <= 0) return undefined;
+  const bytes = Math.round(mb * 1024 * 1024);
+  return Math.min(bytes, hardMax);
+}
+
+/** 字节 → 文本框里显示的 MB（只用于回填，不参与校验）。留空表示"用默认值"。 */
+function bytesToMb(bytes: number | undefined): string {
+  const b = bytes && bytes > 0 ? bytes : 0;
+  if (!b) return '';
+  return String(Math.round((b / 1024 / 1024) * 100) / 100);
+}
 
 /**
  * 设置面板。
@@ -34,9 +74,31 @@ export function SettingsPanel() {
 
   const adultOn = settings.adultMode === true;
   const terseOn = settings.terse === true;
+  // 工作区上限：空白 = 用默认值，所以 placeholder 里写的是默认值。
+  const totalMb = bytesToMb(clampWorkspaceTotal(settings.workspaceTotalBytes));
+  const fileMb = bytesToMb(clampWorkspaceFile(settings.workspaceFileBytes));
   const visionOn = settings.vision !== false;
   const level: SecurityLevel = (settings.securityLevel ?? 'normal') as SecurityLevel;
   const policy = policyFor(level);
+
+  /**
+   * 换入口：地址与 Key **必须一起写**，否则 Key 会留成上一个入口的。
+   *
+   * 两种入口的差别是 clearIfMissing：
+   * - **从下拉里选**（明确的"我换一家"）→ 没存过就清空。留着上一个入口的 Key 发出去
+   *   只会得到 401，而用户会以为是新入口的问题；空着至少一眼看出"这个入口还没配"。
+   * - **手打地址**（clearIfMissing: false）→ 没存过就**不动 Key**。因为那是逐字符输入，
+   *   每敲一下都清空的话，用户改一个字符就把 Key 弄没了。
+   *   顺手把"存过的地址"回填仍然是好的：手打一个用过的地址，Key 自动回来。
+   */
+  const applyEndpoint = (nextUrl: string, clearIfMissing: boolean): void => {
+    const saved = (settings.apiKeys ?? {})[providerKeyFor(nextUrl)];
+    if (saved === undefined && !clearIfMissing) {
+      setSettings({ baseUrl: nextUrl });
+      return;
+    }
+    setSettings({ baseUrl: nextUrl, apiKey: saved ?? '' });
+  };
 
   /**
    * 选中一个模型：写进 Model，并把它的三个参数一起填上。
@@ -154,6 +216,45 @@ export function SettingsPanel() {
               </div>
               <div className="ygg-hint">重新看一遍界面与模型配置的说明。</div>
             </div>
+            {/*
+              工作区上限：给的是"字节"，但填起来太费劲，所以界面上用 MB 输入。
+              留空 = 用默认值（32 MB / 16 MB），与以前的行为完全一致。
+            */}
+            <div className="ygg-field">
+              <label className="ygg-label">工作区容量上限</label>
+              <div className="ygg-row-gap">
+                <input
+                  className="ygg-input"
+                  inputMode="numeric"
+                  style={{ flex: 1, minWidth: 0 }}
+                  placeholder={'默认 ' + WORKSPACE_TOTAL_DEFAULT / 1024 / 1024 + ' MB'}
+                  value={totalMb}
+                  onChange={(e) =>
+                    setSettings({ workspaceTotalBytes: mbToBytes(e.target.value, WORKSPACE_TOTAL_MAX) })
+                  }
+                  spellCheck={false}
+                />
+                <span className="ygg-hint" style={{ marginTop: 0 }}>MB</span>
+              </div>
+              <div className="ygg-row-gap" style={{ marginTop: 6 }}>
+                <input
+                  className="ygg-input"
+                  inputMode="numeric"
+                  style={{ flex: 1, minWidth: 0 }}
+                  placeholder={'默认 ' + WORKSPACE_FILE_DEFAULT / 1024 / 1024 + ' MB'}
+                  value={fileMb}
+                  onChange={(e) =>
+                    setSettings({ workspaceFileBytes: mbToBytes(e.target.value, WORKSPACE_FILE_MAX) })
+                  }
+                  spellCheck={false}
+                />
+                <span className="ygg-hint" style={{ marginTop: 0 }}>MB（单文件）</span>
+              </div>
+              <div className="ygg-hint">
+                上限 {WORKSPACE_TOTAL_MAX / 1024 / 1024} MB，单文件 {WORKSPACE_FILE_MAX / 1024 / 1024} MB。
+                留空 = 默认。它是我们自己的软上限，不是浏览器配额。
+              </div>
+            </div>
             <div className="ygg-field">
               <label className="ygg-label">图片中转（可选）</label>
               <input
@@ -179,7 +280,7 @@ export function SettingsPanel() {
                 value={providerValue}
                 onChange={(e) => {
                   const p = PROVIDER_PRESETS.find((x) => x.id === e.target.value);
-                  if (p && p.baseUrl) setSettings({ baseUrl: p.baseUrl });
+                  if (p && p.baseUrl) applyEndpoint(p.baseUrl, true);
                 }}
               >
                 <option value="">自定义</option>
@@ -195,7 +296,11 @@ export function SettingsPanel() {
               <input
                 className="ygg-input"
                 value={settings.baseUrl}
-                onChange={(e) => setSettings({ baseUrl: e.target.value })}
+                /*
+                 * 手改地址：**只回填、不清空** —— 逐字符输入时不该把 Key 弄没
+                 * （见 applyBase 的注释）。
+                 */
+                onChange={(e) => applyEndpoint(e.target.value, false)}
                 spellCheck={false}
               />
             </div>
@@ -208,6 +313,13 @@ export function SettingsPanel() {
                 onChange={(e) => setSettings({ apiKey: e.target.value })}
                 spellCheck={false}
               />
+              {/*
+                告诉用户这里面的 Key 是"跟着入口走的" —— 否则"换了个入口，Key 变了"
+                看起来像 bug。只在确实存过别的入口时提示，避免常驻噪声。
+              */}
+              {Object.keys(settings.apiKeys ?? {}).length > 1 ? (
+                <div className="ygg-hint">每个入口的 Key 分开保存，切回来会自动填上。</div>
+              ) : null}
             </div>
             {/* 模型：始终可以手填，也可以从 /models 拉一份列表挑 */}
             <div className="ygg-field">

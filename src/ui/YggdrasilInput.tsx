@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import {
   avgTps,
@@ -11,6 +11,9 @@ import {
 } from '../store/desktopStore';
 import { formatExactTokens } from '../kernel/agent/usage';
 import { stopRun, submitInput } from '../kernel/agent/scheduler';
+import { compactSessionNow, contextUsageOf } from '../kernel/agent/agentRuntime';
+import { compactThresholdTokens } from '../kernel/agent/compact';
+import { ContextRing } from './ContextRing';
 import { QueueIcon, SendIcon, StopIcon } from './icons';
 import { captureScreen } from '../host/screen';
 import { Surface } from '../host/Surface';
@@ -220,30 +223,33 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
    */
   const holdFiles = (incoming: File[]) => {
     if (incoming.length === 0) return;
-    const notes: string[] = [];
-    const accepted: File[] = [];
-    let room = MAX_UPLOAD_FILES - pending.length;
-    for (const file of incoming) {
-      if (room <= 0) {
-        notes.push('最多 ' + MAX_UPLOAD_FILES + ' 个文件，超出的已忽略。');
-        break;
+    // 单文件上限来自设置，是异步读的 —— 整个检查放进 async 里。
+    void (async () => {
+      const notes: string[] = [];
+      const accepted: File[] = [];
+      let room = MAX_UPLOAD_FILES - pending.length;
+      for (const file of incoming) {
+        if (room <= 0) {
+          notes.push('最多 ' + MAX_UPLOAD_FILES + ' 个文件，超出的已忽略。');
+          break;
+        }
+        const bad = await checkFileLocally(file);
+        if (bad) {
+          notes.push((file.name || 'file') + '：' + bad);
+          continue;
+        }
+        accepted.push(file);
+        room -= 1;
       }
-      const bad = checkFileLocally(file);
-      if (bad) {
-        notes.push((file.name || 'file') + '：' + bad);
-        continue;
+      if (accepted.length > 0) {
+        setPending((prev) => [...prev, ...accepted]);
+        setUploadError(notes.join('\n'));
+      } else if (notes.length > 0) {
+        setUploadError(notes.join('\n'));
+      } else {
+        setUploadError('');
       }
-      accepted.push(file);
-      room -= 1;
-    }
-    if (accepted.length > 0) {
-      setPending((prev) => [...prev, ...accepted]);
-      setUploadError(notes.join('\n'));
-    } else if (notes.length > 0) {
-      setUploadError(notes.join('\n'));
-    } else {
-      setUploadError('');
-    }
+    })();
   };
 
   /** 输入框按内容自适应：量出内容自然高度（1~6 行），写成 min-height。 */
@@ -261,12 +267,49 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
     setAreaH(next);
   }, [text]);
 
+  /**
+   * 手动压缩。**图标那一刻就要有反馈**，所以先把状态写成"压缩中"，
+   * 再交给 agent 层去跑（那里会把结果写进轨迹，并刷新上下文数字）。
+   */
+  /*
+   * 打开时先算一次上下文占用。
+   *
+   * 不这么做的话，圆环要等到**跑过一个任务**才有数字 —— 而它显示的是"现在占了多少"，
+   * 那个答案在打开输入框的那一刻就已经存在了（历史里可能已经有很多东西）。
+   */
+  useEffect(() => {
+    if (running) return;
+    const rootId = useDesktopStore.getState().rootId;
+    const tokens = contextUsageOf(rootId, session.id);
+    useDesktopStore.getState().setSessionStatus(session.id, {
+      contextTokens: tokens,
+      contextLimit: useDesktopStore.getState().settings.contextWindow ?? 0,
+      contextThreshold: compactThresholdTokens(
+        useDesktopStore.getState().settings.contextWindow,
+        useDesktopStore.getState().settings.compactAt,
+      ),
+    });
+  }, [session.id, running]);
+
+  const compacting = useRef(false);
+  const compactNow = async () => {
+    if (compacting.current || busy) return;
+    compacting.current = true;
+    try {
+      // 输入框的 agent 就是基底，所以 originId 是根节点（与 submitInput 的默认一致）。
+      await compactSessionNow(useDesktopStore.getState().rootId, session.id);
+    } finally {
+      compacting.current = false;
+    }
+  };
+
   const needed = inputMinHeight(areaH, queue.length, pendingOpen.length, pending.length);
   /** 生成中且输入框为空 → 发送按钮变成停止。 */
   const canStop = busy && !text.trim() && pending.length === 0;
 
   /*
-   * 右下角那三个数的**实际宽度**要告诉状态行，让它留出对应的右边距。
+   * 右下角那一块（三个数 + 上下文圆环）的**实际宽度**要告诉状态行，让它留出右边距。
+   * 圆环也算在里面 —— 它跟数字在同一行，漏掉它状态行的文字会压到圆环上。
    *
    * 之前这里写死 132px：指标串一变长（比如 ~命中 100% · 123.4 tok/s · 1.2M）就压到
    * 状态行的文字上 —— 生成过程中 detail 很长时最明显，用户看到的就是"输出和指标重叠"。
@@ -314,9 +357,9 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
           用量指标：**固定在右下角**（绝对定位，不占流），而且**没数据时整块不渲染**。
           值都是这个会话的整体值：命中率 / 整体 tok/s / token 总和。
         */}
+        <span ref={metricsRef} className="ygg-metrics-wrap">
         {metricsText(metrics) ? (
           <span
-            ref={metricsRef}
             className="ygg-metrics"
             /*
              * 悬浮说明：与 DSH 的用量面板同一套字段 —— 未命中 / 命中读 / 命中写三个互斥桶，
@@ -339,6 +382,18 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
             {metricsText(metrics)}
           </span>
         ) : null}
+        {/*
+          上下文圆环。**没跑过也显示**（那就是"还没用过上下文"），
+          与三个数字不同 —— 它是个可点的控件，藏起来用户就找不到它。
+        */}
+        <ContextRing
+          tokens={status.contextTokens}
+          limit={status.contextLimit ?? useDesktopStore.getState().settings.contextWindow}
+          threshold={status.contextThreshold}
+          busy={busy}
+          onCompact={() => void compactNow()}
+        />
+        </span>
         {/*
           被弹窗拦截的页面：网页只能在"用户手势"里开新窗口，所以这里由用户点一下。
           点这个按钮就是真正的手势，window.open 不会被拦。

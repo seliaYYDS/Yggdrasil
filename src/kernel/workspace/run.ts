@@ -13,7 +13,7 @@ import {
   putEntry,
   usageBytes,
   validName,
-  WORKSPACE_SOFT_LIMIT,
+  workspaceLimits,
 } from './store';
 
 /**
@@ -44,8 +44,10 @@ import {
 /** 一次调用最多写几次文件（防止脚本刷爆工作区）。 */
 const MAX_WRITES = 20;
 
-/** 单次读写的上限（与 ws_write 保持一致）。 */
-const MAX_FILE_BYTES = 16 * 1024 * 1024;
+/*
+ * 单文件与总容量的上限**来自设置**（与 ws_write 同一个 workspaceLimits()），
+ * 不再是写死的常量 —— 两处用同一个数，才不会出现"ws_write 收得下、ws_run 收不下"。
+ */
 
 interface WsWriteData {
   /** 文本内容。 */
@@ -126,10 +128,11 @@ export function registerWorkspaceRunInterface(): void {
           case 'list': {
             const files = await listWorkspace();
             const used = files.reduce((n, f) => n + f.size, 0);
+            const { total } = await workspaceLimits();
             return {
               files: files.map((f) => ({ name: f.name, kind: f.kind, mime: f.mime, size: f.size })),
               used,
-              limit: WORKSPACE_SOFT_LIMIT,
+              limit: total,
             };
           }
           case 'read': {
@@ -155,13 +158,14 @@ export function registerWorkspaceRunInterface(): void {
             const data = await normalizeWriteData(req.data);
             const existing = await getEntry(name);
             const replacing = existing?.size ?? 0;
+            const { total: maxTotal, file: maxFile } = await workspaceLimits();
 
             let size = 0;
             let entry;
             if (typeof data.text === 'string') {
               const text = data.text;
               size = new TextEncoder().encode(text).length;
-              if (size > MAX_FILE_BYTES) throw new Error('文本太大（' + formatBytes(size) + '）。');
+              if (size > maxFile) throw new Error('文本太大（' + formatBytes(size) + '，单文件上限 ' + formatBytes(maxFile) + '）。');
               entry = {
                 name,
                 kind: 'text' as const,
@@ -189,7 +193,7 @@ export function registerWorkspaceRunInterface(): void {
               }
               size = bytes.length;
               if (size === 0) throw new Error('write 的字节是空的。');
-              if (size > MAX_FILE_BYTES) throw new Error('字节太多（' + formatBytes(size) + '）。');
+              if (size > maxFile) throw new Error('字节太多（' + formatBytes(size) + '，单文件上限 ' + formatBytes(maxFile) + '）。');
               const mime = typeof data.mime === 'string' && data.mime ? data.mime : 'application/octet-stream';
               const copy = new Uint8Array(bytes.length);
               copy.set(bytes);
@@ -205,9 +209,9 @@ export function registerWorkspaceRunInterface(): void {
             }
 
             const used = await usageBytes();
-            if (used - replacing + size > WORKSPACE_SOFT_LIMIT) {
+            if (used - replacing + size > maxTotal) {
               throw new Error(
-                '工作区装不下了（已用 ' + formatBytes(used) + '，上限 ' + formatBytes(WORKSPACE_SOFT_LIMIT) + '）。',
+                '工作区装不下了（已用 ' + formatBytes(used) + '，上限 ' + formatBytes(maxTotal) + '）。',
               );
             }
             await putEntry(entry);
@@ -269,10 +273,11 @@ export function registerWorkspaceRunInterface(): void {
 
       const files = await listWorkspace();
       const used = files.reduce((n, f) => n + f.size, 0);
+      const { total: endTotal } = await workspaceLimits();
       return ok('脚本跑完了', {
         observation:
           (written.length ? '写入了：' + written.join('、') : '删除了：' + touched.join('、')) +
-          '（工作区现在 ' + files.length + ' 个文件，' + formatBytes(used) + ' / ' + formatBytes(WORKSPACE_SOFT_LIMIT) + '）。' +
+          '（工作区现在 ' + files.length + ' 个文件，' + formatBytes(used) + ' / ' + formatBytes(endTotal) + '）。' +
           '\n' + retNote + logText +
           (written.length
             ? '\n要看结果用 ws_read；要交付就把它嵌进组件（源码里写 "@ws/' + written[written.length - 1] + '"）。'

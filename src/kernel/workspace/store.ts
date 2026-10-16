@@ -231,11 +231,37 @@ export async function usageBytes(): Promise<number> {
   return all.reduce((n, m) => n + m.size, 0);
 }
 
-/**
- * 容量上限。**不是浏览器的真实配额**，而是我们自己的软上限 ——
- * 目的是"到点给出人能看懂的错误"，而不是让 IndexedDB 抛 QuotaExceededError 进回读。
+/*
+ * 容量上限**已经可配**（设置 → 常规 → 工作区），所以这里不再有常量：
+ * 读上限的唯一入口是 workspaceLimits()。默认值与硬顶在 kernel/llm/types.ts
+ * （设置字段属于那一层，且 workspace 模块不该反过来依赖 store）。
  */
-export const WORKSPACE_SOFT_LIMIT = 32 * 1024 * 1024;
+
+/**
+ * 当前工作区上限。**注入式**读设置。
+ *
+ * 为什么不直接 import store：store 会 import 插件运行时、而插件运行时要 import
+ * 本模块（tools 的源码读 `plugin.files`），直接引就成了循环。
+ * 与 setWorkspaceBackend 同一类测试缝：默认实现是延迟 import store，
+ * 单测可以替换它，不必把整棵依赖树拖进来。
+ */
+let limitsReader: (() => { total: number; file: number }) | null = null;
+
+export function setWorkspaceLimitsReader(fn: (() => { total: number; file: number }) | null): void {
+  limitsReader = fn;
+}
+
+export async function workspaceLimits(): Promise<{ total: number; file: number }> {
+  if (limitsReader) return limitsReader();
+  // 延迟 import：只在真的要读的时候才把 store 拉进来。
+  const { useDesktopStore } = await import('../../store/desktopStore');
+  const { WORKSPACE_TOTAL_DEFAULT, WORKSPACE_FILE_DEFAULT, clampWorkspaceTotal, clampWorkspaceFile } = await import('../llm/types');
+  const s = useDesktopStore.getState().settings;
+  return {
+    total: clampWorkspaceTotal(s.workspaceTotalBytes) ?? WORKSPACE_TOTAL_DEFAULT,
+    file: clampWorkspaceFile(s.workspaceFileBytes) ?? WORKSPACE_FILE_DEFAULT,
+  };
+}
 
 export function formatBytes(n: number): string {
   if (n < 1024) return n + ' B';

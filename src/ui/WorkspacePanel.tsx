@@ -9,8 +9,9 @@ import {
   getEntry,
   listWorkspace,
   onWorkspaceChange,
+  workspaceLimits,
   textOf,
-  WORKSPACE_SOFT_LIMIT,
+
   type WorkspaceEntry,
   type WorkspaceMeta,
 } from '../kernel/workspace/store';
@@ -41,10 +42,13 @@ export function WorkspacePanel() {
   const [preview, setPreview] = useState<WorkspaceEntry | null>(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const [previewErr, setPreviewErr] = useState('');
+  /** 上限来自设置（可改），所以和文件列表一起读、一起刷新。 */
+  const [limits, setLimits] = useState({ total: 0, file: 0 });
 
   const reload = useCallback(async () => {
     try {
       setFiles(await listWorkspace());
+      setLimits(await workspaceLimits());
     } catch (e) {
       setNote((e as Error).message);
     }
@@ -167,7 +171,7 @@ export function WorkspacePanel() {
             清空
           </button>
           <span className="ygg-ws-usage">
-            {files.length} 个文件 · {formatBytes(used)} / {formatBytes(WORKSPACE_SOFT_LIMIT)}
+            {files.length} 个文件 · {formatBytes(used)} / {formatBytes(limits.total || 0)}
           </span>
         </div>
 

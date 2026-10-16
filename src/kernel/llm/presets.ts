@@ -33,6 +33,17 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   { id: 'custom', label: '自建 / 其它', baseUrl: '' },
 ];
 
+/**
+ * 一个入口的**稳定键**：归一化后的 Base 地址。
+ *
+ * 为什么用地址而不是预设 id：预设只有固定的十几家，用户完全可能自己填一个中转地址；
+ * 而"同一个地址 = 同一个入口"对两者都成立。尾斜杠与大小写不构成不同的入口
+ * （地址本身也不区分），所以归一化掉再当键 —— 否则 `.../v1` 与 `.../v1/` 会各存一份 Key。
+ */
+export function providerKeyFor(baseUrl: string): string {
+  return (baseUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+}
+
 /** 地址去尾斜杠后找预设（用于把当前入口标出来）。 */
 export function providerFor(baseUrl: string): ProviderPreset | undefined {
   const norm = (baseUrl || '').trim().replace(/\/+$/, '');

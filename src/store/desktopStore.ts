@@ -18,6 +18,7 @@ import { newNodeId } from '../kernel/ids';
 import type { StorageAdapter, StorageKind } from '../storage/adapter';
 import { initStorage } from '../storage/detect';
 import { DEFAULT_SETTINGS, type LlmSettings } from '../kernel/llm/types';
+import { providerKeyFor } from '../kernel/llm/presets';
 import {
   applyTheme,
   DEFAULT_TOKENS,
@@ -149,6 +150,18 @@ export interface RunStatus {
   detail: string;
   round: number;
   runId: string | null;
+  /**
+   * 上一次请求的**估算输入 token**（系统提示 + 历史 + 请求 + 观察 + 快照）。
+   *
+   * 与用量指标同一个"估算"口径（服务商不报输入构成时没法更准），
+   * 作用只有一个：让输入框的圆环能回答"现在占了窗口多少"。
+   * **未跑过时为 undefined** —— 那时圆环不显示数字，而不是显示一个假的 0。
+   */
+  contextTokens?: number;
+  /** 上下文窗口（token）。0 / 未填 = 未知，圆环只画轨道不画进度。 */
+  contextLimit?: number;
+  /** 压缩阈值（窗口 × 压缩百分比）。到它就该压了 —— 圆环的颜色按它分档。 */
+  contextThreshold?: number;
 }
 
 /** 一个**默认窗口**（常驻面板或输入框会话）的对外视图 —— 供 Agent 读取与修改。 */
@@ -2030,7 +2043,23 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
   },
 
   setSettings: (patch) => {
-    set((s) => ({ settings: { ...s.settings, ...patch } }));
+    set((s) => {
+      const next = { ...s.settings, ...patch };
+      /*
+       * 分入口保存 Key。
+       *
+       * 放在这里而不是设置面板里：写 apiKey 的地方只有面板一处没错，但"记住哪个 Key 属于
+       * 哪个入口"是设置本身的语义，放在状态层才不会被将来新加的入口漏掉。
+       *
+       * 只有"显式写了 apiKey"才记 —— 切入口时我们读 apiKeys 回填，那条路径不经过这里
+       * （它是直接算好 patch 的），所以不会把 A 的 Key 写到 B 的键上。
+       */
+      if (typeof patch.apiKey === 'string') {
+        const key = providerKeyFor(next.baseUrl);
+        next.apiKeys = { ...(next.apiKeys ?? {}), [key]: patch.apiKey };
+      }
+      return { settings: next };
+    });
     schedulePersist();
   },
 

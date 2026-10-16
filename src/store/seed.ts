@@ -140,6 +140,13 @@ export function buildSeed(
 
   if (picked.has('settings')) {
     const settings = clone(snap.settings);
+    /*
+     * 分入口的 Key 表**永远不导出**，即使勾了"包含 API Key"。
+     *
+     * 理由：用户勾那一下的意思是"把**当前用的**这个 key 带上"，而不是把历史上用过的
+     * 每一个入口的密钥都打包出去。那种包一旦转手，泄漏面比一个 key 大得多。
+     */
+    delete (settings as Partial<LlmSettings>).apiKeys;
     if (!includeApiKey) delete (settings as Partial<LlmSettings>).apiKey;
     data.settings = settings;
   }
