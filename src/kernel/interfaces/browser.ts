@@ -4,6 +4,7 @@ import { desktop, useDesktopStore } from '../../store/desktopStore';
 import { canCaptureScreen } from '../../host/screen';
 import { closePage, listPages, openPage, resizePage, setFullscreen, viewportInfo } from '../net/browser';
 import { newId } from '../ids';
+import { requestPause } from '../agent/pause';
 
 /** 把浏览器页面列表写成人能读、模型也能读的一段文本。 */
 function pagesText(): string {
@@ -197,6 +198,12 @@ export function registerBrowserInterfaces(): void {
         return fail('This browser does not support screen capture (getDisplayMedia is missing), so no screenshot can be taken.');
       }
       store.requestShot(ctx.sessionId);
+      /*
+       * **这一轮跑完就停**（见 kernel/agent/pause.ts）。
+       * 抓屏要等用户点，图在下一轮才进上下文：继续跑下去是在没看到图的前提下改界面，
+       * 而且用户点完截图回来时这个会话还忙着，那条带图的输入只能排队。
+       */
+      requestPause(ctx.sessionId);
       store.log('op', 'screenshot requested', ctx.sessionId);
       return ok('Screenshot requested: a confirm dialog is up; the user takes the shot and the image then enters your context.', {
         observation:

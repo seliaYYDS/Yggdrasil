@@ -14,6 +14,7 @@ import { newId } from '../ids';
 import { chatStream, estimateTokens, type LlmUsage } from '../llm/client';
 import type { ChatMessage, ContentPart, LlmSettings } from '../llm/types';
 import { looksLikeNativeCall, nativeCallsFromArgs, parsePlan, planFromNativeCalls } from './parse';
+import { clearPause, takePause } from './pause';
 import {
   buildSummaryMessages,
   compactedMemory,
@@ -638,6 +639,11 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
   }
 
   const sessionId = options.sessionId ?? MAIN_SESSION;
+  /*
+   * 上个任务留下的"跑完就停"标记对这个任务没有意义：
+   * 它只对**请求它的那次运行**成立（例如那次在等截图，后来被取消或被停止）。
+   */
+  clearPause(sessionId);
   // 用户按"停止"时 abort 它；轮次之间与模型调用中都会检查。
   const signal = options.signal;
   /*
@@ -1139,6 +1145,21 @@ export async function runDerivation(input: string, options: RunOptions = {}): Pr
         // 执行回执只进 trace 与本轮的观察通道，**不写进消息历史** ——
         // 历史里留下"已创建 X"会让后续轮次误以为 X 还存在（见 §5.19）。
         pushObservations(observations);
+
+        /*
+         * 这一轮请求了截图 → **停在这里**（见 kernel/agent/pause.ts）。
+         *
+         * 抓屏只能发生在用户手势里，图要等用户点一下才进上下文。继续跑是在
+         * **没有看到图**的前提下接着改界面；而用户点完截图回来时这个会话还忙着，
+         * 那条带图的输入只能排队 —— 用户看到的就是"点了发送，结果进了队列"。
+         */
+        if (takePause(sessionId)) {
+          store.log('info', 'pause · 等待用户截图');
+          const paused = finish({ ok: true, added: totalAdded, rounds: rounds.length, okCount, failCount });
+          // 状态写"等待截图"而不是"完成"：这一轮没失败，但任务也没结束。
+          setRunStatus({ phase: '等待截图' });
+          return paused;
+        }
 
         /*
          * 与上一轮完全一致时**不终止任务**，只提醒（待办 4）。
