@@ -32,6 +32,15 @@ export function registerBuiltinSurfaces(): void {
       'the drag test is handled by the window container: a drag starts when the press is within the top 30px of the container and not on .ygg-winbtn.',
   });
 
+  /**
+   * 默认窗口面板的**可读内置源码**。
+   *
+   * 面板的内置实现是宿主 React 代码、读不到 —— 但真实内容是通过 `children` 交给插槽的，
+   * 所以"原样透传"与内置**行为完全等价**。登记进插槽（SurfaceDef.builtinSource），
+   * patch_source 才能从一份真源码开始改：第一次改动就是 find/replace，而不是整段重写。
+   */
+  const PANEL_BUILTIN_SOURCE = 'export default function Panel(props) {\n  return props.children;\n}';
+
   /*
    * 常驻面板的**结构插槽**。
    *
@@ -39,6 +48,9 @@ export function registerBuiltinSurfaces(): void {
    * **内置内容本身**（一个 React 元素）。想"只改结构、不丢功能"就把它放进自己的布局里；
    * 想整块换掉就不渲染它。数据（节点、轨迹、文件列表……）不经过 props：
    * 它们活在宿主状态里，由面板自己读；要数据用 inspect / list_nodes / ws_list / ws_read。
+   *
+   * 既然内容本来就是通过 `children` 交出来的，"原样透传"就是与内置等价的实现 ——
+   * 这里因此同时登记 PANEL_BUILTIN_SOURCE，让 patch_source 能从一份真源码开始改。
    *
    * 这些插槽都标 defaultWindow：改完会弹一次确认，用户可以选择把结构还原。
    */
@@ -49,10 +61,12 @@ export function registerBuiltinSurfaces(): void {
       description,
       propsHint: '{ panel, title, close, children }',
       defaultWindow: true,
+      builtinSource: PANEL_BUILTIN_SOURCE,
       builtinHint:
-        'The built-in body of this panel. Its source is host code and is not readable — pass it through by rendering' +
-        ' the `children` prop inside your own structure, or drop it and draw the panel yourself (no panel data is' +
-        ' passed as props; read what you need with inspect / list_nodes / ws_list).',
+        'The built-in body of this panel. Its host implementation is not readable — but the **readable built-in' +
+        ' source** is the `children` pass-through (inspect before="surface" prints it): render `children` in your' +
+        ' own structure to change the layout without losing the function, or drop it and draw the panel yourself' +
+        ' (no panel data is passed as props; read what you need with inspect / list_nodes / ws_list).',
     });
 
   panelSlot('input', '输入框', 'The composer window body: the text field, the queue, the send button and the metrics line. Replacing it changes how the user talks to the agent.');

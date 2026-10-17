@@ -91,7 +91,9 @@ export function surfacesText(compact = false): string {
       const cur = states.get(s.id);
       const state = cur
         ? `overridden (${cur.source.length} chars) — read its current source: inspect before="surface" surface="${s.id}"`
-        : 'uses the built-in implementation (its source is not readable; see what it looks like: inspect before="surface")';
+        : s.builtinSource
+          ? `uses the built-in implementation, whose source **is readable** (patch_source edits it in place) — read it: inspect before="surface" surface="${s.id}"`
+          : 'uses the built-in implementation (its source is not readable; see what it looks like: inspect before="surface")';
       const hint = s.propsHint ? `; available props: ${s.propsHint}` : '';
       const warn = s.critical
         ? `\n    ⚠ Critical slot: it carries basic window abilities (${s.capabilityHint ?? 'unknown'}). Replacing it breaks them, so **do not touch it**.`

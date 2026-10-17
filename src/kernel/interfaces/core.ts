@@ -4,7 +4,7 @@ import { fail, ok, strOr, tokensOf } from '../bus/opContext';
 import { compileComponent, compileTool } from '../../host/compile';
 import { clearConsole, readConsole } from '../../host/consoleErrors';
 import { defaultWindows, defaultWindowsText, desktop, useDesktopStore } from '../../store/desktopStore';
-import { getTool, registerTool, toolCatalog, toolCap } from '../registry/toolRegistry';
+import { getTool, listTools, registerTool, toolCatalog, toolCap, type RuntimeTool } from '../registry/toolRegistry';
 import { sanitizeTokens } from '../../theme/engine';
 import { policyFor } from '../security';
 import {
@@ -18,10 +18,10 @@ import {
   surfacesText,
 } from '../registry/surfaceRegistry';
 import { MAX_NODES, themeText, toolCatalogText, treeText } from '../agent/prompts';
-import { capScopeConflict, capSummary, CAP_LABELS, DEFAULT_ACT_CAPS, parseCaps } from '../agent/caps';
+import { capScopeConflict, capSummary, capsAllow, CAP_LABELS, DEFAULT_ACT_CAPS, parseCaps } from '../agent/caps';
 import { newNodeId } from '../ids';
 import { isAgentNode } from '../types';
-import type { ComponentNode, DerivationOp, JsonSchema, YggNode } from '../types';
+import type { ActCap, ComponentNode, DerivationOp, JsonSchema, YggNode } from '../types';
 
 function asSchema(v: unknown): JsonSchema {
   if (v && typeof v === 'object' && !Array.isArray(v)) return v as JsonSchema;
@@ -158,6 +158,23 @@ function toolDetailText(id: string): string {
  * 而 list_surfaces 只给目录。没有这个入口，Agent 拿不到背景的现状，
  * 只能对着一个名字凭空写一份替换实现 —— 或者干脆放弃。
  */
+/**
+ * 发起操作的 Agent 的能力开关（undefined = 全开：基底 Agent 与老数据）。
+ *
+ * derivationBus 里的 capsOf 是**按 op.kind** 在执行前拦一道；
+ * 这里要拦的是"同一个 kind 换了目标"的情形：patch_source 改组件只需要 desktop，
+ * 改工具却等于在写工具代码（create_tool 要的是 tools），所以工具分支自己再查一次。
+ */
+function capsOfOrigin(originId: string): ActCap[] | undefined {
+  const node = desktop().nodes[originId];
+  return node && node.kind === 'component' ? node.agent?.caps : undefined;
+}
+
+/** 源码太长就截断 —— inspect 的输出要能进模型上下文。 */
+function clipSource(text: string): string {
+  return text.length > 30000 ? text.slice(0, 30000) + '\n... (source too long, truncated; ' + text.length + ' chars in total)' : text;
+}
+
 function surfaceDetailText(def: ReturnType<typeof getSurfaceDef> & object): string {
   const lines: string[] = [];
   lines.push('- description: ' + def.description);
@@ -169,9 +186,24 @@ function surfaceDetailText(def: ReturnType<typeof getSurfaceDef> & object): stri
 
   const cur = getSurfaceState(def.id)?.source;
   if (cur) {
-    const clipped = cur.length > 30000 ? cur.slice(0, 30000) + '\n... (source too long, truncated; ' + cur.length + ' chars in total)' : cur;
-    lines.push('', 'Current source (this is what it actually renders right now):', clipped);
+    lines.push('', 'Current source (this is what it actually renders right now):', clipSource(cur));
     lines.push('', 'To change it, patch it with patch_source and the surface argument; to replace it entirely use replace_surface.');
+  } else if (def.builtinSource) {
+    /*
+     * 默认窗口面板：内置实现读不到，但登记了一份**行为等价的可读源码**
+     * （面板的真实内容是通过 children 传进来的，所以透传即是内置）。
+     * 这条分支让 Agent 能"从一份真源码开始局部改"，而不是先整段重写一遍。
+     */
+    lines.push(
+      '',
+      'Built-in source (the readable equivalent of the built-in implementation — patch_source starts from this):',
+      clipSource(def.builtinSource),
+    );
+    lines.push(
+      '',
+      'To change part of it, call patch_source with this surface: the first edit starts from the source above and turns the' +
+        ' slot into an override (replace_surface still replaces it entirely; source: null restores the built-in).',
+    );
   } else {
     lines.push(
       '',
@@ -577,7 +609,7 @@ export function registerCoreInterfaces(): void {
     kind: 'patch_source',
     label: '局部修改源码',
     description:
-      'Make a targeted replacement inside **existing source** (fix a bug / add a feature). Choose one target: `id` edits a component, `surface` edits a slot. edits = [{ find, replace, all? }]: find is copied **verbatim** from the current source and must match **exactly once** (otherwise lengthen the anchor, or pass all:true). **All replacements are done in memory and compiled before anything is written** — on failure the whole edit is dropped and the source is unchanged.',
+      'Make a targeted replacement inside **existing source** (fix a bug / add a feature). Choose one target: `id` edits a component **or a derived tool** (by id, or by tool name), `surface` edits a slot — **default-window panels included**: their built-in `children` pass-through is readable, so the first patch starts from it. edits = [{ find, replace, all? }]: find is copied **verbatim** from the current source and must match **exactly once** (otherwise lengthen the anchor, or pass all:true). **All replacements are done in memory and compiled before anything is written** — on failure the whole edit is dropped and the source is unchanged.',
     example: {
       kind: 'patch_source',
       id: 'n_xxx',
@@ -585,10 +617,12 @@ export function registerCoreInterfaces(): void {
     },
     mutates: true,
     cap: 'desktop',
-    handler: async (op) => {
+    handler: async (op, ctx) => {
       const id = strOr(op.id, '');
       const surface = strOr(op.surface, '');
-      if (!id && !surface) return fail('patch_source needs either id (edit a component) or surface (edit a slot).');
+      if (!id && !surface) {
+        return fail('patch_source needs either id (edit a component or a derived tool) or surface (edit a slot).');
+      }
       if (id && surface) return fail('Give only one of id and surface; inspect first if you are unsure which to edit.');
 
       const rawEdits = op.edits;
@@ -611,7 +645,9 @@ export function registerCoreInterfaces(): void {
       let current = '';
       let label = '';
       let key = '';
-      let write: (next: string) => void;
+      let write: (next: string) => void = () => {};
+      /** 非空表示这次改的是工具：编译与写回都走工具那套（compileTool + 重新注册）。 */
+      let toolTarget: RuntimeTool | undefined;
       if (surface) {
         const def = getSurfaceDef(surface);
         if (!def) {
@@ -619,47 +655,110 @@ export function registerCoreInterfaces(): void {
           return fail('Slot ' + surface + ' does not exist. Available slots: ' + (ids || '(none)'));
         }
         const cur = getSurfaceState(surface)?.source;
-        if (!cur) {
+        /*
+         * 没覆写时：**默认窗口面板登记了可读的内置源码**（children 透传，见 host/surfaces.ts），
+         * 就从它开始改 —— 第一次 patch 直接成为覆写，不必先整段 replace_surface。
+         * 其余插槽（背景 / 标题栏 / 效果层）的内置实现是宿主代码、读不到，
+         * 没有起点就谈不上"局部"替换，仍然只能整段给一份。
+         */
+        const builtin = def.builtinSource;
+        if (!cur && !builtin) {
           return fail(
             'Slot ' + surface + ' is still the **built-in implementation** (host code, no readable source), so it cannot be patched.' +
               'First run `inspect before="surface" surface="' + surface + '"` to see its structure and the built-in description,' +
               'then give a **complete** implementation with replace_surface; it then becomes "overridden" and patchable with patch_source.',
           );
         }
-        current = cur;
+        current = cur ?? builtin ?? '';
         label = 'slot "' + def.label + '"';
         key = 'surface_' + surface;
         write = (next) => {
-        setSurfaceSource(surface, next);
-        if (isDefaultWindowSurface(surface)) desktop().noteStructChange(surface);
-      };
+          setSurfaceSource(surface, next);
+          if (isDefaultWindowSurface(surface)) desktop().noteStructChange(surface);
+        };
       } else {
-        const node = desktop().nodes[id];
-        if (!node || node.kind !== 'component' || node.root) {
-          const list = Object.values(desktop().nodes)
-            .filter((n) => n.kind === 'component' && !n.root)
-            .map((n) => n.name + '(' + n.id + ')')
-            .join('、');
-          return fail('Component ' + id + ' does not exist. Current windows: ' + (list || '(no windows)'));
-        }
         /*
-         * 锁定的组件不允许改源码。
-         *
-         * 插件的自带界面就是**锁定**进来的：它是插件作者的代码，
-         * 让 agent 悄悄改掉它，等于绕过了"插件代码只读"这条约定。
-         * 用户仍然可以在 Nodes 面板里解锁（那时他就是有意的）。
+         * 非插槽：`id` 指向组件**或派生工具**（工具是 Agent 用 create_tool 写的，同样有源码）。
+         * 判定顺序：节点是 tool → 工具；节点是 component → 组件；
+         * 都不是时再按**工具名**找一次 —— 工具是按名字调的（call_tool），
+         * 而组件是按节点 id 调的，名字不会与组件撞车。
          */
-        if (node.locked === true) {
-          return fail(
-            '"' + node.name + '" is **locked**, so its source cannot be rewritten. Locked components are protected' +
-              ' (plugin-shipped interfaces arrive locked). Ask the user to unlock it in the Nodes panel if the change is intended.',
-          );
+        const node = desktop().nodes[id];
+        /*
+         * 按名找**只在这个 id 不是任何节点时才做**：命中节点就按节点说（组件按 id 调，
+         * 工具名是给 call_tool 用的，两套名字不会互相冒充）。
+         */
+        /*
+         * 还要按 id 直接查一次注册表：内置工具与插件工具**没有节点**（只有注册表条目），
+         * 只按节点找会漏掉它们，于是"改内置工具"会掉进"组件不存在"的错误分支里。
+         */
+        const byName = node ? undefined : toolCatalog().find((t) => t.name === id);
+        const tool: RuntimeTool | undefined =
+          node && node.kind === 'tool' ? getTool(id) : getTool(id) ?? (byName ? getTool(byName.id) : undefined);
+        if (tool) {
+          if (tool.builtin) {
+            return fail(
+              'Tool "' + tool.name + '" (' + tool.id + ') is a **host built-in tool** and has no editable source.' +
+                'Derive your own tool with create_tool (implement the algorithm in its source) and call that one instead.',
+            );
+          }
+          if (tool.pluginId) {
+            return fail(
+              'Tool "' + tool.name + '" is shipped by plugin "' + tool.pluginId + '", so its source is **read-only**' +
+                ' (the same rule as locked components — plugin code is not agent property).' +
+                'Derive your own tool with create_tool if you need different behaviour.',
+            );
+          }
+          /*
+           * 改工具的**行为**等于写工具代码，所以这条分支要 tools 能力。
+           * 总线只按 op.kind 拦（patch_source 属于 desktop），不够 ——
+           * 同一个 kind 换了目标，权限就得跟着目标走。
+           */
+          if (!capsAllow(capsOfOrigin(ctx.originId), 'tools')) {
+            return fail(
+              'Editing a tool needs the **"derived tools" capability** (editing a component or a slot needs only' +
+                ' "desktop operations"). Ask the agent that created you to add caps: ["tools"] via set_agent_config.',
+            );
+          }
+          if (!tool.source.trim()) return fail('Tool "' + tool.name + '" has no source, so there is nothing to replace.');
+          toolTarget = tool;
+          current = tool.source;
+          label = 'tool "' + tool.name + '"';
+          key = tool.id;
+        } else {
+          if (!node || node.kind !== 'component' || node.root) {
+            const comps = Object.values(desktop().nodes)
+              .filter((n) => n.kind === 'component' && !n.root)
+              .map((n) => n.name + '(' + n.id + ')')
+              .join('、');
+            const tools = listTools()
+              .filter((t) => !t.builtin && !t.pluginId)
+              .map((t) => t.name + '(' + t.id + ')')
+              .join('、');
+            return fail(
+              'Nothing to patch at "' + id + '": it is neither a window nor a derived tool. Current windows: ' +
+                (comps || '(no windows)') + '. Derived tools you may patch: ' + (tools || '(none)') + '.',
+            );
+          }
+          /*
+           * 锁定的组件不允许改源码。
+           *
+           * 插件的自带界面就是**锁定**进来的：它是插件作者的代码，
+           * 让 agent 悄悄改掉它，等于绕过了"插件代码只读"这条约定。
+           * 用户仍然可以在 Nodes 面板里解锁（那时他就是有意的）。
+           */
+          if (node.locked === true) {
+            return fail(
+              '"' + node.name + '" is **locked**, so its source cannot be rewritten. Locked components are protected' +
+                ' (plugin-shipped interfaces arrive locked). Ask the user to unlock it in the Nodes panel if the change is intended.',
+            );
+          }
+          if (!node.source.trim()) return fail('Component "' + node.name + '" has no source, so there is nothing to replace.');
+          current = node.source;
+          label = 'component "' + node.name + '"';
+          key = id;
+          write = (next) => useDesktopStore.getState().updateNode(id, { source: next });
         }
-        if (!node.source.trim()) return fail('Component "' + node.name + '" has no source, so there is nothing to replace.');
-        current = node.source;
-        label = 'component "' + node.name + '"';
-        key = id;
-        write = (next) => useDesktopStore.getState().updateNode(id, { source: next });
       }
 
       // ---- 逐个替换（在内存里累积） ----
@@ -685,24 +784,52 @@ export function registerCoreInterfaces(): void {
         next = e.all ? next.split(e.find).join(e.replace) : next.replace(e.find, e.replace);
         notes.push('#' + (i + 1) + ' x' + hits);
       }
-      // 这次改动里可能引入 @ws/ 标记（例如把图片换成变量），统一在这里嵌入。
-      const emb = await embedMarkers(next);
-      if (emb.errors.length) return fail(emb.errors.join('\n'));
-      next = emb.source;
+      /*
+       * 这次改动里可能引入 @ws/ 标记（例如把图片换成变量），统一在这里嵌入。
+       * **工具不做这一步**：create_tool 也不嵌入，两边必须一致
+       * （标记是组件源码的约定；工具源码里出现 @ws/ 就只是一个普通字符串）。
+       */
+      if (!toolTarget) {
+        const emb = await embedMarkers(next);
+        if (emb.errors.length) return fail(emb.errors.join('\n'));
+        next = emb.source;
+      }
       if (next === current) {
         return fail('The source is unchanged after the replacement — did you write find and replace identically?');
       }
 
       // ---- 先编译，通过才写入（原子） ----
+      const dropMessage =
+        'The changed source **failed to compile, so the whole edit was dropped — not one character of the original source changed**:';
+      const dropSuffix = '\nShrink the change (edit one place at a time), or confirm the current source with inspect first.';
+
+      if (toolTarget) {
+        const compiledTool = compileTool(key, next);
+        if (!compiledTool.ok) {
+          desktop().log('error', 'tool ' + label + ' \u2715 ' + compiledTool.error);
+          return fail(dropMessage + compiledTool.error + dropSuffix);
+        }
+        /*
+         * 编译过了才动注册表：注册表里的那份是 call_tool 真正会跑的 run，
+         * 节点上的 source 是 inspect 读给人看的那份 —— 两边必须同步，不能分叉。
+         */
+        registerTool({ ...toolTarget, source: next, run: compiledTool.run });
+        useDesktopStore.getState().updateNode(toolTarget.id, { source: next });
+        desktop().log('op', 'patch ' + label + ' (' + edits.length + ')', toolTarget.id);
+        return ok('Patched ' + label + ' (' + edits.length + ' edits)', {
+          observation:
+            'Changes: ' + notes.join('; ') +
+            '. Source length ' + current.length + ' → ' + next.length +
+            '. The tool was re-registered, so the next call_tool runs the new source; inspect before="tool" id=' +
+            toolTarget.id + ' shows the current source.',
+        });
+      }
+
       const compiled = compileComponent(key, next);
       if (!compiled.ok) {
         if (surface) desktop().log('error', 'surface ' + surface + ' \u2715 ' + compiled.error);
         else desktop().log('error', 'comp ' + label + ' \u2715 ' + compiled.error);
-        return fail(
-          'The changed source **failed to compile, so the whole edit was dropped — not one character of the original source changed**:' +
-            compiled.error +
-            '\nShrink the change (edit one place at a time), or confirm the current source with inspect first.',
-        );
+        return fail(dropMessage + compiled.error + dropSuffix);
       }
 
       write(next);

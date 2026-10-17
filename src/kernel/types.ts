@@ -285,6 +285,17 @@ export interface SurfaceDef {
    * 没有这段说明，Agent 只能对着一个"使用内置实现"的字符串干猜。
    */
   builtinHint?: string;
+  /**
+   * **内置实现的可读源码**（只有默认窗口的六个面板有）。
+   *
+   * builtinHint 是"用文字描述内置实现"，这一项更进一步：它是一份**真源码**。
+   * 面板的内置实现是宿主 React 代码、读不到，但真实内容是通过 `children` 交给插槽的 ——
+   * 所以"原样透传"就是与内置**行为完全等价**的实现。
+   *
+   * 有了它，patch_source 才能从一份真源码开始改：第一次改就是 find/replace，
+   * 而不是"先整段 replace_surface 写一份完整实现，之后才能局部改"。
+   */
+  builtinSource?: string;
 }
 
 export interface SurfaceState {

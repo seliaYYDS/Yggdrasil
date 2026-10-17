@@ -131,7 +131,12 @@ function updateDefaultWindow(op: DerivationOp, ref: string): OpResult {
     s.bringToFront(win.id);
     touched.push('raised');
   }
-  if (touched.length === 0) return fail('No changeable field was given (default windows support pos/size/dx/dy/dw/dh/center/fill/align/focus only).');
+  if (touched.length === 0) {
+    return fail(
+      'No changeable field was given (default windows support pos/size/dx/dy/dw/dh/center/fill/align/focus only).' +
+        ' To change what a panel **contains**, patch its structure slot instead: patch_source surface="panel.trace" (ids in list_surfaces).',
+    );
+  }
 
   if (win.kind === 'panel') {
     const key = win.id.slice('panel-'.length) as PanelKey;
