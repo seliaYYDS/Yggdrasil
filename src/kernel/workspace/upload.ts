@@ -128,26 +128,31 @@ export async function uploadFiles(files: File[]): Promise<UploadResult> {
         continue;
       }
       const wanted = sanitizeFileName(original);
-      const name = await uniqueName(wanted);
-      const mime = file.type || '';
-      const kind = kindOf(mime, name);
-      // 文本按 text 存（这样 ws_read 直接给文字、ws_run 读到的也是字符串）；
-      // 其它一律存 blob（结构化克隆，不用 base64）。
-      const entry: WorkspaceEntry = {
-        name,
-        kind,
-        mime: mime || 'application/octet-stream',
-        size: file.size,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        ...(kind === 'text' ? { text: await file.text() } : { blob: file }),
-      };
-      // 文本用 text 字段时 size 要按实际字节算，免得与工作区用量对不上。
-      if (typeof entry.text === 'string') entry.size = new TextEncoder().encode(entry.text).length;
-      await putEntry(entry);
+      // 起名 + 写入放在同一个临界区里，见下面 writeChain 的说明。
+      const { name, entry } = await serialize(async () => {
+        const picked = await uniqueName(wanted);
+        const mime = file.type || '';
+        const kind = kindOf(mime, picked);
+        // 文本按 text 存（这样 ws_read 直接给文字、ws_run 读到的也是字符串）；
+        // 其它一律存 blob（结构化克隆，不用 base64）。
+        const made: WorkspaceEntry = {
+          name: picked,
+          kind,
+          mime: mime || 'application/octet-stream',
+          size: file.size,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          ...(kind === 'text' ? { text: await file.text() } : { blob: file }),
+        };
+        // 文本用 text 字段时 size 要按实际字节算，免得与工作区用量对不上。
+        if (typeof made.text === 'string') made.size = new TextEncoder().encode(made.text).length;
+        await putEntry(made);
+        return { name: picked, entry: made };
+      });
       ok.push({
         name,
-        originalName: name === original ? undefined : original,
+        // 占位名（image.png / blob…）不是用户起的名字，别把它当原名报出来。
+        originalName: name === original || isPlaceholderName(original) ? undefined : original,
         kind: entry.kind,
         mime: entry.mime,
         size: entry.size,
@@ -190,6 +195,88 @@ export function uploadedFilesNote(files: UploadedFile[]): string {
   );
 }
 
+/**
+ * 上传串行化：**"起名"与"写入"必须连在一起**。
+ *
+ * uniqueName 做的是"查一下这个名字空着吗"，它与随后的 putEntry 之间隔着 await。
+ * 两个上传并发时（用户连点两次发送、或两个输入框同时发），两边都会查到"空着"，
+ * 于是同一个名字写两遍 —— 轻则一份被后写的覆盖（用户直接丢文件），
+ * 重则同一张图在工作区里出现两次（看起来就是"重复上传"）。
+ * 串起来之后，第二个上传会老老实实拿到 image-2。
+ */
+let writeChain: Promise<unknown> = Promise.resolve();
+function serialize<T>(fn: () => Promise<T>): Promise<T> {
+  const run = writeChain.then(fn, fn);
+  writeChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
+
+/**
+ * 浏览器给剪贴板图片的名字是**占位名**，不是文件名。
+ *
+ * 复制一张网页图片 / 截一张图之后，剪贴板里只有像素，没有"它叫什么"。
+ * 浏览器只能现编一个：Chrome 给 `image.png`，有的平台干脆给 `image` 或 `blob`，
+ * 甚至空字符串。直接拿来用，用户就会看到三个文件都叫 image —— 既看不懂，也分不清。
+ */
+const PLACEHOLDER_STEMS = new Set([
+  '', 'image', 'imagefile', 'file', 'blob', 'clip', 'clipboard', 'paste', 'pasted', 'untitled', 'unnamed',
+]);
+
+/** 去掉最后一个扩展名后的主体（小写）。'image.PNG' -> 'image'，'a.b.png' -> 'a.b'。 */
+function stemOf(name: string): string {
+  const trimmed = (name || '').trim();
+  const dot = trimmed.lastIndexOf('.');
+  return (dot > 0 ? trimmed.slice(0, dot) : trimmed).toLowerCase();
+}
+
+/** 这个名字是不是浏览器的占位名（= 用户其实没给它起名字）。 */
+export function isPlaceholderName(name: string): boolean {
+  return PLACEHOLDER_STEMS.has(stemOf(name));
+}
+
+/** 猜一个扩展名：先看原名，再看 MIME 子类型。 */
+function extOfFile(file: File): string {
+  const dot = (file.name || '').lastIndexOf('.');
+  if (dot > 0) {
+    const fromName = file.name.slice(dot + 1).toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (fromName) return fromName === 'jpeg' ? 'jpg' : fromName;
+  }
+  const sub = (file.type || '').split('/')[1] || '';
+  const fromMime = sub.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (!fromMime) return /^image\//i.test(file.type) ? 'png' : 'bin';
+  const alias: Record<string, string> = { jpeg: 'jpg', svgxml: 'svg', plain: 'txt', octetstream: 'bin', xmarkdown: 'md' };
+  return alias[fromMime] ?? fromMime;
+}
+
+/** 现编名字用的序号：只在本次会话里递增，配合工作区的 uniqueName 足够唯一。 */
+let clipSeq = 0;
+
+/**
+ * 给"没有名字"的剪贴板文件现编一个**不重复**的名字。
+ *
+ * 为什么必须在这一步做（而不是等上传时）：输入框里那一排待上传条目显示的就是 file.name，
+ * 三个都叫 image.png 的话用户分不清哪个是哪个 —— **起名与显示必须是同一个名字**。
+ *
+ * 有真名字的文件一个字符都不动；拖进来的文件走另一条路，不会经过这里。
+ */
+export function nameClipboardFiles(files: File[]): File[] {
+  return files.map((file) => {
+    if (!isPlaceholderName(file.name)) return file;
+    clipSeq += 1;
+    const stem = /^image\//i.test(file.type) ? 'image' : 'clip';
+    const named = stem + '-' + clipSeq + '.' + extOfFile(file);
+    try {
+      return new File([file], named, { type: file.type, lastModified: file.lastModified });
+    } catch {
+      // 极老的环境没有 File 构造器：宁可保留占位名，也不要让这次粘贴整个失败。
+      return file;
+    }
+  });
+}
+
 /** 从粘贴事件里挑出文件。**不按 MIME 过滤** —— 图片、文本、PDF 都要能进来。 */
 export function filesFromClipboard(data: DataTransfer | null): File[] {
   if (!data) return [];
@@ -203,5 +290,6 @@ export function filesFromClipboard(data: DataTransfer | null): File[] {
   if (out.length === 0) {
     for (const f of Array.from(data.files ?? [])) out.push(f);
   }
-  return out;
+  // 剪贴板文件没有真名字，带占位名的在这里换成互不相同的名字。
+  return nameClipboardFiles(out);
 }

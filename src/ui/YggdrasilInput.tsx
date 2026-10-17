@@ -135,6 +135,14 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
   const [pending, setPending] = useState<File[]>([]);
   /** 本地就能判定的问题（空文件 / 太大），在还没发送时就显示出来。 */
   const [uploadError, setUploadError] = useState('');
+  /**
+   * 提交正在进行中。
+   *
+   * 上传要点时间（写工作区、读设置），这期间发送键并不是 disabled ——
+   * 连点两次的话，**同一批文件会被上传两遍、并发出两条请求**，
+   * 用户看到的就是"重复"。用这个 ref 把第二次按下去拦掉。
+   */
+  const submittingRef = useRef(false);
 
   /*
    * 订阅**这一个会话**：`find` 在没变化时返回同一个对象引用，
@@ -191,30 +199,37 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
     const raw = (el ? el.value : text).trim();
     // 只有文件没有文字也应该能发（"看看这个"）。
     if (!raw && pending.length === 0) return;
+    // 上一次提交还没走完（正在上传）：这次按键不算。
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     void (async () => {
-      let uploaded: UploadedFile[] = [];
-      if (pending.length > 0) {
-        const res = await uploadFiles(pending);
-        uploaded = res.ok;
-        // 失败的留在框里：用户看得见原因，也能再点一次发送重试。
-        setPending(res.failed.map((f) => f.file));
-        setUploadError(res.errors.join('\n'));
-        if (uploaded.length === 0) {
-          // 一个都没成功：这次不发了，让用户先解决文件的问题。
-          return;
+      try {
+        let uploaded: UploadedFile[] = [];
+        if (pending.length > 0) {
+          const res = await uploadFiles(pending);
+          uploaded = res.ok;
+          // 失败的留在框里：用户看得见原因，也能再点一次发送重试。
+          setPending(res.failed.map((f) => f.file));
+          setUploadError(res.errors.join('\n'));
+          if (uploaded.length === 0) {
+            // 一个都没成功：这次不发了，让用户先解决文件的问题。
+            return;
+          }
+        } else {
+          setUploadError('');
         }
-      } else {
-        setUploadError('');
-      }
-      /*
-       * 文件只是名字进请求（内容由 Agent 主动 ws_read）——
-       * 这样上下文不会被上传物撑满，也不会出现"每轮都重发一张图"。
-       */
-      const value = uploaded.length > 0 ? uploadedFilesNote(uploaded) + '\n\n' + raw : raw;
-      const accepted = submitInput(value, { sessionId: session.id });
-      if (accepted) {
-        setText('');
-        if (uploaded.length > 0) setPending([]);
+        /*
+         * 文件只是名字进请求（内容由 Agent 主动 ws_read）——
+         * 这样上下文不会被上传物撑满，也不会出现"每轮都重发一张图"。
+         */
+        const value = uploaded.length > 0 ? uploadedFilesNote(uploaded) + '\n\n' + raw : raw;
+        const accepted = submitInput(value, { sessionId: session.id });
+        if (accepted) {
+          setText('');
+          if (uploaded.length > 0) setPending([]);
+        }
+      } finally {
+        submittingRef.current = false;
       }
     })();
   };
