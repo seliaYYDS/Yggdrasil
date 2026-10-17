@@ -226,8 +226,8 @@ export function estimateTokens(text: string): number {
  */
 export async function listModels(settings: LlmSettings, signal?: AbortSignal): Promise<RemoteModel[]> {
   const base = settings.baseUrl.trim();
-  if (!base) throw new LlmError('请先填 Base 地址。');
-  if (!settings.apiKey.trim()) throw new LlmError('请先填 Key —— 拉模型列表要带鉴权。');
+  if (!base) throw new LlmError('Base 地址为空。');
+  if (!settings.apiKey.trim()) throw new LlmError('Key 为空（获取模型列表需要鉴权）。');
   let res: Response;
   try {
     res = await fetch(modelsEndpoint(base), {
@@ -235,7 +235,7 @@ export async function listModels(settings: LlmSettings, signal?: AbortSignal): P
       signal,
     });
   } catch (e) {
-    throw new LlmError('连不上这个地址：' + (e as Error).message);
+    throw new LlmError('无法连接该地址：' + (e as Error).message);
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
@@ -245,9 +245,9 @@ export async function listModels(settings: LlmSettings, signal?: AbortSignal): P
   try {
     payload = await res.json();
   } catch {
-    throw new LlmError('这个地址没有返回 JSON —— 它可能不是 OpenAI 兼容的 /models 入口。');
+    throw new LlmError('该地址未返回 JSON：可能不是 OpenAI 兼容的 /models 入口。');
   }
   const list = parseModelsPayload(payload);
-  if (list.length === 0) throw new LlmError('模型列表是空的（这个入口可能不支持 /models）。');
+  if (list.length === 0) throw new LlmError('模型列表为空（该入口可能不支持 /models）。');
   return list;
 }

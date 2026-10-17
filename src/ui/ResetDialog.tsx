@@ -90,7 +90,7 @@ export function ResetDialog() {
           </label>
         ))}
         <div className="ygg-seed-warn" style={{ color: none ? 'var(--ygg-danger)' : 'var(--ygg-fg-muted)' }}>
-          {none ? '一个都没勾 —— 不会清除任何东西。' : '将清除：' + describeResetParts(parts)}
+          {none ? '未勾选任何区块，不会清除任何内容。' : '将清除：' + describeResetParts(parts)}
         </div>
         <div className="ygg-modal-actions">
           <button

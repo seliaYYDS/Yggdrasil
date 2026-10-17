@@ -66,7 +66,7 @@ export function WorkspacePanel() {
         void getEntry(cur.name).then((fresh) => {
           if (!fresh) {
             setPreview(null);
-            setPreviewErr('这个文件已经不在了。');
+            setPreviewErr('文件已不存在。');
           } else {
             setPreview(fresh);
           }
@@ -118,7 +118,7 @@ export function WorkspacePanel() {
       const entry = await getEntry(name);
       if (!entry) {
         setPreview(null);
-        setPreviewErr('这个文件已经不在了。');
+        setPreviewErr('文件已不存在。');
         return;
       }
       setPreview(entry);
@@ -162,7 +162,7 @@ export function WorkspacePanel() {
     <>
       <div className="ygg-panel-body">
         <div className="ygg-hint" style={{ marginTop: 0 }}>
-          Agent 的临时加工台。内容嵌进组件时是复制，删除这里的文件不影响界面。
+          Agent 的临时加工台。内容嵌入组件时为复制；删除这里的文件不影响界面。
         </div>
 
         <div className="ygg-row-gap" style={{ marginTop: 8 }}>
@@ -211,13 +211,13 @@ export function WorkspacePanel() {
                         <pre className="ygg-ws-text">
                           {previewText.slice(0, PREVIEW_CHARS)}
                           {previewText.length > PREVIEW_CHARS
-                            ? '\n… 还有 ' + (previewText.length - PREVIEW_CHARS) + ' 字符'
+                            ? '\n… 剩余 ' + (previewText.length - PREVIEW_CHARS) + ' 字符'
                             : ''}
                         </pre>
                       ) : (
                         // 其他二进制：如实说不能看，并给一个能落地的下一步。
                         <div className="ygg-hint">
-                          {pv.mime || pv.kind}，无法在这里预览。
+                          {pv.mime || pv.kind}，无法在此预览。
                         </div>
                       )}
                       <div className="ygg-ws-meta">

@@ -75,7 +75,7 @@ export function InspectorPanel() {
   if (!open) return null;
 
   const patchComponent = async (node: ComponentNode) => {
-    const instruction = window.prompt('', '');
+    const instruction = window.prompt('说明要如何改写这个组件的源码：', '');
     if (!instruction) return;
     setBusy(true);
     try {
@@ -128,7 +128,7 @@ export function InspectorPanel() {
                   <span className="name">{node.name}</span>
                   {isAgent ? <span className="kind" title="带 agent 能力">agent</span> : null}
                   {node.kind === 'component' && node.frame === 'widget' ? (
-                    <span className="kind" title="挂件：无标题栏，用右下角按钮操控">挂件</span>
+                    <span className="kind" title="挂件：无标题栏，由右下角按钮操控">挂件</span>
                   ) : null}
                   {node.kind === 'component' && node.locked ? (
                     <span className="kind" title="已锁定：不可删除">已锁</span>
@@ -142,8 +142,8 @@ export function InspectorPanel() {
                       className={'ygg-winbtn' + (favorited ? ' is-active' : '')}
                       title={
                         favorited
-                          ? '已收藏（点击更新这份收藏的源码与配置）'
-                          : '收藏：长期保留，删掉这个组件也不会丢，之后可以重建一个一样的'
+                          ? '已收藏（点击用当前源码与配置更新该收藏）'
+                          : '收藏：长期保留；删除组件不影响收藏，之后可重建相同组件'
                       }
                       onClick={(e) => {
                         e.stopPropagation();
@@ -173,7 +173,7 @@ export function InspectorPanel() {
                   {node.kind === 'component' ? (
                     <button
                       className="ygg-winbtn"
-                      title="改版"
+                      title="按说明改写源码"
                       disabled={busy}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -271,12 +271,12 @@ export function InspectorPanel() {
             <div className="ygg-fav-list">
               <div className="ygg-fav-head">
                 <span>收藏 {favorites.length}</span>
-                <span className="ygg-fav-note">删组件不会丢</span>
+                <span className="ygg-fav-note">删除组件不影响收藏</span>
               </div>
               {favorites.length === 0 ? (
                 <div className="ygg-fav-empty">
-                  在节点行上点星号收藏。收藏存在另一个库里，删组件、重置都不会碰它；
-                  之后随时可以在这儿重建一个一样的。
+                  在节点行点击星号收藏。收藏保存在独立的库中，删除组件或重置不会清除；
+                  之后可在此重建相同组件。
                 </div>
               ) : null}
               {favorites.slice().reverse().map((f) => (
@@ -288,7 +288,7 @@ export function InspectorPanel() {
                   {f.frame === 'widget' ? <span className="kind">挂件</span> : null}
                   {f.agent ? <span className="kind">agent</span> : null}
                   <button className="ygg-btn ghost tiny" title="重建一个相同的组件" onClick={() => restoreFavorite(f.id)}>重建</button>
-                  <button className="ygg-btn tiny danger" title="取消收藏（这是收藏消失的唯一方式）" onClick={() => unfavorite(f.id)}>取消</button>
+                  <button className="ygg-btn tiny danger" title="取消收藏（收藏消失的唯一方式）" onClick={() => unfavorite(f.id)}>取消</button>
                 </div>
               ))}
             </div>

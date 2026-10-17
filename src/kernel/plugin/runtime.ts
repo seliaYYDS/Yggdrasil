@@ -732,9 +732,9 @@ export function pluginDiff(prev: InstalledPlugin | undefined, next: InstalledPlu
   const before = capOf(prev);
   const after = capOf(next);
   for (const c of after) if (!before.has(c)) lines.push('新增能力开关：' + c);
-  if (next.signature !== 'ok' && prev.signature === 'ok') lines.push('⚠ 这一版没有有效签名了（上一版有）');
+  if (next.signature !== 'ok' && prev.signature === 'ok') lines.push('⚠ 此版本没有有效签名（上一版本有）');
   if (prev.hash && next.hash && prev.hash !== next.hash && prev.version === next.version) {
-    lines.push('⚠ 版本号没变但内容变了（' + prev.hash.slice(0, 8) + ' → ' + next.hash.slice(0, 8) + '）');
+    lines.push('⚠ 版本号未变，内容已变化（' + prev.hash.slice(0, 8) + ' → ' + next.hash.slice(0, 8) + '）');
   }
   return lines;
 }
@@ -749,13 +749,13 @@ export async function checkPluginUpdate(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ ok: boolean; error?: string; latest?: string; url?: string; newer?: boolean }> {
   const at = plugin.update?.url;
-  if (!at) return { ok: false, error: '这个插件没有声明更新地址（manifest.update.url）。' };
+  if (!at) return { ok: false, error: '该插件未声明更新地址（manifest.update.url）。' };
   const cfgRef = at.match(/^\{config:([a-zA-Z][a-zA-Z0-9_]{0,30})\}/);
   if (cfgRef) {
     const f = plugin.fields.find((x) => x.key === cfgRef[1]);
     const base = (plugin.values[cfgRef[1]] ?? f?.default ?? '').trim();
     if (!base) {
-      return { ok: false, error: '请先在插件面板里填写「' + (f?.label ?? cfgRef[1]) + '」（更新地址基于它）。' };
+      return { ok: false, error: '需先在插件面板中填写「' + (f?.label ?? cfgRef[1]) + '」（更新地址基于该字段）。' };
     }
   }
   const resolved = cfgRef
@@ -768,14 +768,14 @@ export async function checkPluginUpdate(
     return { ok: false, error: '更新地址不是合法地址：' + resolved };
   }
   if (!hostAllowed(url.hostname, effectiveHosts(plugin))) {
-    return { ok: false, error: '更新地址的主机 ' + url.hostname + ' 不在这个插件的主机白名单里。' };
+    return { ok: false, error: '更新地址的主机 ' + url.hostname + ' 不在该插件的主机白名单中。' };
   }
   try {
     const res = await fetchImpl(url.href, { headers: { accept: 'application/json, text/plain, */*' } });
     const body = await res.text();
     if (!res.ok) return { ok: false, error: '更新地址返回 HTTP ' + res.status };
     const info = JSON.parse(body) as { version?: string; url?: string };
-    if (!info.version) return { ok: false, error: '更新信息里没有 version 字段。' };
+    if (!info.version) return { ok: false, error: '更新信息中没有 version 字段。' };
     /*
      * 更新信息里的下载地址可以是相对路径（以 / 开头）—— 相对**更新清单自己的地址**解析。
      * 这样把清单和包放在同一个目录下就不必写死端口，本机演示也能直接用。
@@ -791,7 +791,7 @@ export async function checkPluginUpdate(
       newer: versionAtLeast(info.version, plugin.version) && info.version !== plugin.version,
     };
   } catch (e) {
-    return { ok: false, error: '拿更新信息失败：' + (e as Error).message };
+    return { ok: false, error: '获取更新信息失败：' + (e as Error).message };
   }
 }
 

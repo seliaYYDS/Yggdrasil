@@ -14,7 +14,7 @@ export const RESET_PART_INFO: { id: ResetPart; label: string; hint: string }[] =
   {
     id: 'interface',
     label: '界面',
-    hint: '主题样式、界面插槽（背景 / 标题栏 / 效果层）、面板与输入框的位置层级；输入框本身与里面的对话保留',
+    hint: '主题样式、界面插槽（背景 / 标题栏 / 效果层）、面板与输入框的位置与层级；输入框与其中的对话保留',
   },
   {
     id: 'components',
@@ -55,6 +55,6 @@ export function normalizeResetParts(value: unknown): ResetPart[] {
 
 /** 一行摘要，重置确认框用。 */
 export function describeResetParts(parts: ResetPart[]): string {
-  if (parts.length === 0) return '（什么都没勾，不会清除任何东西）';
+  if (parts.length === 0) return '（未勾选任何区块，不会清除任何内容）';
   return parts.map((id) => RESET_PART_INFO.find((x) => x.id === id)?.label ?? id).join(' + ');
 }

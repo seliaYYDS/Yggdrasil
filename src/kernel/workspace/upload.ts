@@ -163,7 +163,7 @@ export async function uploadFiles(files: File[]): Promise<UploadResult> {
     }
   }
   if (files.length > MAX_UPLOAD_FILES) {
-    errors.push('一次最多上传 ' + MAX_UPLOAD_FILES + ' 个文件，多余的已忽略。');
+    errors.push('一次最多上传 ' + MAX_UPLOAD_FILES + ' 个文件；超出部分已忽略。');
   }
   return { ok, errors, failed };
 }

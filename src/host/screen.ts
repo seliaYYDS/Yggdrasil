@@ -64,7 +64,7 @@ export const CAPTURE_HINTS: DisplayCaptureHints = {
 export async function captureScreen(): Promise<ShotResult> {
   const media = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
   if (!media || typeof media.getDisplayMedia !== 'function') {
-    return { ok: false, error: '这个浏览器不支持屏幕捕获（需要 getDisplayMedia）。' };
+    return { ok: false, error: '此浏览器不支持屏幕捕获（需要 getDisplayMedia）。' };
   }
   let stream: MediaStream | null = null;
   try {
@@ -90,7 +90,7 @@ export async function captureScreen(): Promise<ShotResult> {
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return { ok: false, error: '拿不到 2D 画布，无法保存截图。' };
+    if (!ctx) return { ok: false, error: '无法获取 2D 画布，截图未保存。' };
     ctx.drawImage(video, 0, 0, w, h);
     // JPEG 而不是 PNG：截图是给模型看的，体积小一大截，画质够用。
     const dataUrl = canvas.toDataURL('image/jpeg', 0.85);

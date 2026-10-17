@@ -158,10 +158,10 @@ export function ScreenshotPrompt() {
         <div className="ygg-confirm-text">
           Agent 要看当前页面的真实截图。
           <br />
-          截图需要你点一下（浏览器只允许在用户操作里抓屏）。
+          点击后开始截图（浏览器只允许在用户操作中抓屏）。
           {left > 0 ? ' ' + left + ' 秒后自动关闭。' : ''}
         </div>
-        {error ? <div className="ygg-hint ygg-shot-error">{error}（可以再点一次）</div> : null}
+        {error ? <div className="ygg-hint ygg-shot-error">{error}（可再次点击重试）</div> : null}
         <div className="ygg-modal-actions">
           <button className="ygg-btn ghost" disabled={busy} onClick={clear}>
             忽略

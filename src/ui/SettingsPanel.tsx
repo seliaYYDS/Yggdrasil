@@ -182,7 +182,7 @@ export function SettingsPanel() {
                 on={terseOn}
                 onChange={(v) => setSettings({ terse: v })}
                 label="精简模式"
-                title="提示词按最简可用发送：接口只留一句话、去掉示例，细节让 Agent 自己 inspect 取；省固定开销"
+                title="提示词按最小可用集发送：接口只保留一句摘要、不含示例；细节由 Agent 用 inspect 读取，可减少固定开销"
               />
             </div>
             <div className="ygg-field">
@@ -214,7 +214,7 @@ export function SettingsPanel() {
                   重放引导
                 </button>
               </div>
-              <div className="ygg-hint">重新看一遍界面与模型配置的说明。</div>
+              <div className="ygg-hint">重新显示界面与模型配置引导。</div>
             </div>
             {/*
               工作区上限：给的是"字节"，但填起来太费劲，所以界面上用 MB 输入。
@@ -252,7 +252,7 @@ export function SettingsPanel() {
               </div>
               <div className="ygg-hint">
                 上限 {WORKSPACE_TOTAL_MAX / 1024 / 1024} MB，单文件 {WORKSPACE_FILE_MAX / 1024 / 1024} MB。
-                留空 = 默认。它是我们自己的软上限，不是浏览器配额。
+                留空使用默认值。此上限由本应用执行，浏览器存储配额不受影响。
               </div>
             </div>
             <div className="ygg-field">
@@ -260,12 +260,12 @@ export function SettingsPanel() {
               <input
                 className="ygg-input"
                 value={settings.imageRelay ?? ''}
-                placeholder="留空 = 直连读取"
+                placeholder="留空则直连读取"
                 onChange={(e) => setSettings({ imageRelay: e.target.value })}
                 spellCheck={false}
               />
               <div className="ygg-hint">
-                直连失败时才用；地址里用 {'{url}'} 占位。第三方代理能看到经过的图片；
+                直连失败时使用；地址中使用 {'{url}'} 占位。第三方代理可以读到经过的图片；
                 自建见 <code>tools/image-relay-worker.js</code>。
               </div>
             </div>
@@ -318,7 +318,7 @@ export function SettingsPanel() {
                 看起来像 bug。只在确实存过别的入口时提示，避免常驻噪声。
               */}
               {Object.keys(settings.apiKeys ?? {}).length > 1 ? (
-                <div className="ygg-hint">每个入口的 Key 分开保存，切回来会自动填上。</div>
+                <div className="ygg-hint">每个入口的 Key 分开保存；切回该入口时自动填入。</div>
               ) : null}
             </div>
             {/* 模型：始终可以手填，也可以从 /models 拉一份列表挑 */}
@@ -402,7 +402,7 @@ export function SettingsPanel() {
                 on={visionOn}
                 onChange={(v) => setSettings({ vision: v })}
                 label="视觉（可收图片）"
-                title="关掉后消息里不带图片块；纯文本模型不会再因为收到图片而整条失败"
+                title="关闭后请求中不含图片块；纯文本模型不会因收到图片而整条失败"
               />
             </div>
             <div className="ygg-field">
@@ -418,7 +418,7 @@ export function SettingsPanel() {
               />
             </div>
             <div className="ygg-hint">
-              窗口 / 最大输出 / 视觉：获取或选中模型时自动填；留空即未知，由服务商决定。
+              窗口 / 最大输出 / 视觉：获取或选中模型时自动填入；留空表示未知，由服务商决定。
             </div>
           </div>
         )}

@@ -62,7 +62,7 @@ function ExportSeed() {
   };
 
   const run = () => {
-    if (parts.length === 0) { setDone('至少勾一项。'); return; }
+    if (parts.length === 0) { setDone('至少勾选一项。'); return; }
     const seed = exportSeed(parts, withKey);
     const text = seedToText(seed);
     const name = seedFileName();
@@ -95,7 +95,7 @@ function ExportSeed() {
           <input type="checkbox" checked={withKey} onChange={(e) => setWithKey(e.target.checked)} />
           <span>
             包含 API Key（敏感）
-            <span className="desc">默认不含；勾上后文件里包含密钥。</span>
+            <span className="desc">默认不含；勾选后文件中包含密钥。</span>
           </span>
         </label>
         {done ? <div className="ygg-seed-warn" style={{ color: 'var(--ygg-ok)' }}>{done}</div> : null}
@@ -196,10 +196,10 @@ function ImportSeed() {
             <div className="ygg-seed-warn">
               <strong>导入会覆盖勾选的区块</strong>（其余保持不动）。
               {parts.length === 0
-                ? ' 一项都没勾。'
+                ? ' 未勾选任何区块。'
                 : parts.includes('components') || parts.includes('history')
                   ? ' 导入会覆盖原有组件与对话记忆。'
-                  : ' 这次不会动到组件与对话记忆。'}
+                  : ' 本次导入不涉及组件与对话记忆。'}
             </div>
           </>
         ) : null}

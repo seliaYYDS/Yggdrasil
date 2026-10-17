@@ -36,7 +36,7 @@ function ComponentHostInner({ node, onError }: Props) {
 
   let body: React.ReactNode;
   if (!hasSource) {
-    body = <div className="ygg-blank">还没有内容</div>;
+    body = <div className="ygg-blank">暂无内容</div>;
   } else if (result && result.ok) {
     const C = result.Component;
     body = (

@@ -50,7 +50,7 @@ export const SECURITY_POLICIES: Record<SecurityLevel, SecurityPolicy> = {
   high: {
     level: 'high',
     label: '高',
-    summary: '只收已签名的插件，插件代码不执行。',
+    summary: '只接受已签名的插件；插件代码不执行。',
     allowPluginTools: false,
     requireSignature: true,
     exposeSecretsToTools: false,
@@ -61,7 +61,7 @@ export const SECURITY_POLICIES: Record<SecurityLevel, SecurityPolicy> = {
   normal: {
     level: 'normal',
     label: '标准',
-    summary: '默认。插件 js 工具可用，但戴配额与遮蔽。',
+    summary: '默认等级。插件 js 工具可执行，受配额与遮蔽限制。',
     allowPluginTools: true,
     requireSignature: false,
     exposeSecretsToTools: false,
@@ -72,7 +72,7 @@ export const SECURITY_POLICIES: Record<SecurityLevel, SecurityPolicy> = {
   weak: {
     level: 'weak',
     label: '宽松',
-    summary: '放宽配额，密钥对插件工具可见。',
+    summary: '放宽配额；密钥对插件工具可见。',
     allowPluginTools: true,
     requireSignature: false,
     exposeSecretsToTools: true,
@@ -83,7 +83,7 @@ export const SECURITY_POLICIES: Record<SecurityLevel, SecurityPolicy> = {
   none: {
     level: 'none',
     label: '不限制',
-    summary: '不追加配额与遮蔽；Worker 隔离仍在。',
+    summary: '不追加配额与遮蔽；Worker 隔离仍然生效。',
     allowPluginTools: true,
     requireSignature: false,
     exposeSecretsToTools: true,

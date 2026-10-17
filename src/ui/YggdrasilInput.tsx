@@ -249,7 +249,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
       let room = MAX_UPLOAD_FILES - pending.length;
       for (const file of incoming) {
         if (room <= 0) {
-          notes.push('最多 ' + MAX_UPLOAD_FILES + ' 个文件，超出的已忽略。');
+          notes.push('最多 ' + MAX_UPLOAD_FILES + ' 个文件；超出的已忽略。');
           break;
         }
         const bad = await checkFileLocally(file);
@@ -452,7 +452,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
         {pending.length > 0 ? (
           <div className="ygg-files">
             {pending.map((f, i) => (
-              <div className="ygg-file" key={f.name + i} title={f.name + '（' + formatBytes(f.size) + '，发送时才上传）'}>
+              <div className="ygg-file" key={f.name + i} title={f.name + '（' + formatBytes(f.size) + '；发送时存入工作区）'}>
                 <span className="ygg-file-kind">待上传</span>
                 <span className="ygg-file-name">{f.name}</span>
                 <button
@@ -496,7 +496,7 @@ export function YggdrasilInput({ session }: { session: InputSession }) {
               busy
                 ? '排队发送…'
                 : pending.length > 0
-                  ? '这些文件要做什么…（发送时才上传）'
+                  ? '这些文件要做什么…（发送时存入工作区）'
                   : '描述任务…（可粘贴或拖入文件）'
             }
             rows={1}

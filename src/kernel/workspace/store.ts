@@ -201,8 +201,8 @@ export async function putEntry(entry: WorkspaceEntry): Promise<void> {
   // 内存后端存不了 Blob：**明确拒绝**而不是存一个取不出来的东西。
   if (entry.blob && !workspaceBackend().supportsBlobs) {
     throw new Error(
-      '这个环境没有可用的 IndexedDB，工作区只能在内存里工作、**只能存文本**。' +
-        '二进制（图片/音频）存不了 —— 请直接用外部链接，或换一个允许 IndexedDB 的浏览器/隐私模式。',
+      '此环境没有可用的 IndexedDB：工作区仅在内存中工作，且只能存文本。' +
+        '二进制文件（图片/音频）无法存入。请改用外部链接，或使用允许 IndexedDB 的浏览器（非隐私模式）。',
     );
   }
   await workspaceBackend().set(entry);

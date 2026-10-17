@@ -2373,9 +2373,9 @@ export const useDesktopStore = create<DesktopState>()((set, get) => ({
     const policy = policyFor(get().settings.securityLevel);
     if (policy.requireSignature && pkg.signature !== 'ok') {
       throw new Error(
-        '安全等级「' + policy.label + '」要求插件必须已签名，这个包是「' +
+        '安全等级「' + policy.label + '」要求插件已签名；此包为「' +
           (pkg.signature === 'none' ? '未签名' : pkg.signature === 'unsupported' ? '环境无法验证签名' : '签名无效') +
-          '」。请在设置里降低安全等级，或改用已签名的插件包。',
+          '」。请在设置中降低安全等级，或改用已签名的插件包。',
       );
     }
     /*

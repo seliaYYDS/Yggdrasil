@@ -58,7 +58,7 @@ export function PluginsPanel() {
     setError('');
     try {
       const res = await fetch('/plugins/weather.graft');
-      if (!res.ok) throw new Error('取示例插件失败：HTTP ' + res.status);
+      if (!res.ok) throw new Error('获取示例插件失败：HTTP ' + res.status);
       await read('weather.graft', new Uint8Array(await res.arrayBuffer()));
     } catch (e) {
       setError((e as Error).message);
@@ -157,10 +157,10 @@ export function PluginsPanel() {
 
         <div className="ygg-row-gap">
           <button className="ygg-btn ghost" onClick={() => fileRef.current?.click()}>安装插件…</button>
-          <button className="ygg-btn ghost" onClick={() => void onDemo()}>装示例</button>
+          <button className="ygg-btn ghost" onClick={() => void onDemo()}>安装示例</button>
         </div>
         <div className="ygg-hint">
-          支持 {PLUGIN_EXT}（zip）与单文件 json。安装前先显示权限清单。
+          支持 {PLUGIN_EXT}（zip）与单文件 json；安装前显示权限清单。
         </div>
 
         {error ? <div className="ygg-plugin-error">{error}</div> : null}
@@ -175,7 +175,7 @@ export function PluginsPanel() {
             </ul>
             {pendingDiff.length > 0 ? (
               <div className="ygg-plugin-error" style={{ color: 'var(--ygg-accent-hi)' }}>
-                <strong>比上一版多要的权限：</strong>
+                <strong>比上一版新增的权限：</strong>
                 <ul className="ygg-plugin-lines" style={{ marginTop: 4 }}>
                   {pendingDiff.map((l, i) => (
                     <li key={i}>{l}</li>
@@ -184,7 +184,7 @@ export function PluginsPanel() {
               </div>
             ) : null}
             <div className="ygg-hint">
-              装上后这些操作可由 Agent 调用，只能访问白名单主机。
+              安装后这些操作可由 Agent 调用，仅能访问白名单主机。
             </div>
             <div className="ygg-row-gap" style={{ marginTop: 8 }}>
               <button className="ygg-btn primary" onClick={confirm}>安装</button>
@@ -194,7 +194,7 @@ export function PluginsPanel() {
         ) : null}
 
         {plugins.length === 0 ? (
-          <div className="ygg-empty" style={{ marginTop: 10 }}>还没有装任何插件。</div>
+          <div className="ygg-empty" style={{ marginTop: 10 }}>尚未安装任何插件。</div>
         ) : null}
 
         {plugins.map((p) => (
@@ -235,7 +235,7 @@ export function PluginsPanel() {
               {p.signature === 'ok'
                 ? '签名有效 · ' + (p.fingerprint ?? '')
                 : p.signature === 'unsupported'
-                  ? '有签名，但这个环境验不了'
+                  ? '有签名；此环境无法验证'
                   : '未签名'}
               {p.hash ? ' · 哈希 ' + p.hash.slice(0, 10) : ''}
             </div>
@@ -272,7 +272,7 @@ export function PluginsPanel() {
                 className="ygg-btn tiny ghost"
                 onClick={() => setGuideOf(guideOf === p.id ? '' : p.id)}
               >
-                {guideOf === p.id ? '收起指南' : '看指南'}
+                {guideOf === p.id ? '收起指南' : '查看指南'}
               </button>
               <button className="ygg-btn tiny danger" onClick={() => uninstall(p.id)}>卸载</button>
             </div>

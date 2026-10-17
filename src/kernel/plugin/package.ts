@@ -191,7 +191,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
   if (minAppVersion) {
     if (!VERSION_RE.test(minAppVersion)) return bad('minAppVersion 要像 1.0（现在是 "' + minAppVersion + '"）。');
     if (!versionAtLeast(APP_VERSION, minAppVersion)) {
-      return bad('它要求应用至少 ' + minAppVersion + '，当前是 ' + APP_VERSION + '。');
+      return bad('该插件要求应用版本至少 ' + minAppVersion + '，当前为 ' + APP_VERSION + '。');
     }
   }
 
@@ -360,7 +360,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
       const find = typeof o.find === 'string' ? o.find : '';
       if (!find) return bad('prompts 里 substitute 必须写 find（要被替换掉的字面量）。');
       if (find.length > MAX_PATCH_TEXT) return bad('prompts 里 substitute 的 find 太长。');
-      if (typeof o.replace !== 'string') return bad('prompts 里 substitute 必须写 replace（换成什么，可以为空串）。');
+      if (typeof o.replace !== 'string') return bad('prompts 里 substitute 必须写 replace（替换后的文本，可为空串）。');
       if (o.replace.length > MAX_PATCH_TEXT) return bad('prompts 里 substitute 的 replace 太长。');
     } else {
       if (!section) return bad('prompts 里 ' + op + ' 必须写 section（要动的段落 id）。');
@@ -467,7 +467,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
 
   const epsRaw = epsRawForNames;
   if (!hasPluginContent({ endpoints: epsRaw.length, tools: tools.length, prompts: prompts.length, pages: pages.length })) {
-    return bad('至少要有一个 endpoint / tools / prompts / pages，否则装它没有意义。');
+    return bad('至少要有一个 endpoint / tools / prompts / pages。');
   }
   /*
    * 现在知道这个插件**到底会不会发请求**了：
@@ -480,7 +480,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
   if (hosts.length === 0 && canReachNetwork) {
     return bad('缺少 hosts 白名单（这个插件会发请求，必须写清楚能访问哪些主机）。');
   }
-  if (epsRaw.length > MAX_ENDPOINTS) return bad('endpoint 太多（' + epsRaw.length + ' 个，上限 ' + MAX_ENDPOINTS + '）。拆成两个插件，或只保留常用的。');
+  if (epsRaw.length > MAX_ENDPOINTS) return bad('endpoint 太多（' + epsRaw.length + ' 个，上限 ' + MAX_ENDPOINTS + '）。可拆成两个插件，或只保留常用项。');
   const endpoints: PluginEndpoint[] = [];
   for (const e of epsRaw) {
     if (!e || typeof e !== 'object') return bad('endpoints 里有一项不是对象。');
@@ -519,7 +519,7 @@ function checkManifest(raw: unknown): { ok: true; manifest: PluginManifest } | {
       if (!hostAllowed(host, hosts)) {
         return bad(
           'endpoint ' + en + ' 请求 ' + host + '，但它不在 hosts 白名单里（' + (hosts.join(', ') || '空') + '）。' +
-            (templated.length ? '要走用户配置的主机，地址得写成 ' + templated.join('/') + ' 开头。' : ''),
+            (templated.length ? '如需访问用户配置的主机，地址需以 ' + templated.join('/') + ' 开头。' : ''),
         );
       }
     }
@@ -668,7 +668,7 @@ async function finish(
     const checked = await verifySignature(hash, sig);
     fingerprint = checked.fingerprint;
     if (checked.state === 'bad') {
-      throw new Error('签名验证失败：这个包的内容与签名不符（被改过，或者签名不对）。已拒绝安装。');
+      throw new Error('签名验证失败：包内容与签名不符（内容被修改或签名错误）。已拒绝安装。');
     }
     signatureState = checked.state;
   }
@@ -755,7 +755,7 @@ export function describeManifest(m: PluginManifest): string[] {
     })
     .join('、');
   // 空名单不是漏填 —— 说明白，否则用户会以为这个包坏了。
-  lines.push('可访问的主机：' + (hostText || '（无 —— 这个插件不发网络请求）'));
+  lines.push('可访问的主机：' + (hostText || '（无：该插件不发网络请求）'));
 
   const tools = m.tools ?? [];
   const asOps = tools.filter((t) => t.exposeAs !== 'tool');
@@ -769,7 +769,7 @@ export function describeManifest(m: PluginManifest): string[] {
     );
   }
   const uis = m.ui ?? [];
-  if (uis.length) lines.push('自带界面（Agent 可用 plugin_ui 摆出来）：' + uis.map((u) => u.name).join('、'));
+  if (uis.length) lines.push('自带界面（Agent 可用 plugin_ui 显示）：' + uis.map((u) => u.name).join('、'));
 
   /*
    * **它会改动核心的什么地方。**
@@ -790,8 +790,8 @@ export function describeManifest(m: PluginManifest): string[] {
          * 用户点安装前至少知道它的份量。
          */
         lines.push(
-          '    · ' + label + 'substitute：把整份提示词里的「' + (patch.find ?? '') + '」全部换成「' +
-            (patch.replace ?? '') + '」（会改写全篇，包括输出契约）',
+          '    · ' + label + 'substitute：将整份提示词中的「' + (patch.find ?? '') + '」全部替换为「' +
+            (patch.replace ?? '') + '」（改写全篇，含输出契约）',
         );
         continue;
       }
@@ -808,7 +808,7 @@ export function describeManifest(m: PluginManifest): string[] {
   }
 
   const secrets = (m.fields ?? []).filter((f) => f.secret);
-  if (secrets.length) lines.push('需要你填的密钥：' + secrets.map((f) => f.label).join('、'));
+  if (secrets.length) lines.push('需要填写的密钥：' + secrets.map((f) => f.label).join('、'));
   /*
    * 出口处统一纯文本化：这些行会**原样显示在安装确认里**，而其中不少内容来自
    * 第三方清单（插件名、说明、页面名、补丁文字预览）。界面不认 markdown，

@@ -44,44 +44,44 @@ export function introPhase(step: number, tree: boolean): 'hidden' | 'tree' | 'ca
  */
 export const INTRO_STEPS: IntroStep[] = [
   {
-    title: '欢迎来到 Yggdrasil',
-    body: ['用一句话生成界面。', '接下来按顺序说明配置与界面。'],
+    title: '概览',
+    body: ['输入一句话，生成界面。', '以下依次说明模型配置与界面组成。'],
   },
   {
     title: '配置模型',
-    body: ['点右上角的 ⚙ 打开设置，在「入口」里填 Base / Key / Model。', '配置只存在本地。'],
+    body: ['打开右上角 ⚙ 进入设置，在「入口」中填写 Base、Key、Model。', '配置只保存在本地。'],
     target: '[data-ygg-intro="settings"]',
   },
   {
     title: '输入框',
-    body: ['输入任务后回车提交，Shift + Enter 换行。', '拖动标题栏移动窗口。'],
+    body: ['输入任务后按回车提交；Shift + Enter 换行。', '拖动标题栏移动窗口。'],
     target: '[data-ygg-intro="input"]',
   },
   {
     title: '窗口与组件',
-    body: ['模型按输入生成窗口与组件。', '所有窗口都可以拖动、缩放、最小化。'],
+    body: ['模型按输入生成窗口与组件。', '窗口可拖动、缩放、最小化。'],
     demo: 'window',
     target: '[data-ygg-intro="demo-window"]',
   },
   {
     title: '面板',
-    body: ['节点树显示生成的内容，轨迹显示每一轮的过程，工作区存放文件。', '插件面板安装 .graft，设置面板放模型参数与安全等级。'],
+    body: ['节点树列出生成的内容；轨迹列出每一轮的过程；工作区存放文件。', '插件面板安装 .graft；设置面板配置模型参数与安全等级。'],
     target: '[data-ygg-intro="panels"]',
   },
   {
     title: '场景',
-    body: ['导出：把当前桌面存成 .seed 文件。导入：把它读回来。', '场景不含密钥，也不含插件。'],
+    body: ['导出：将当前桌面保存为 .seed 文件。', '导入：用 .seed 文件覆盖所选区块。场景文件不含密钥与插件。'],
     target: '[data-ygg-intro="scene"]',
   },
   {
     title: '任务栏',
-    body: ['最小化的窗口收在左下角，点击恢复。'],
+    body: ['最小化的窗口收在左下角；点击恢复。'],
     demo: 'taskbar',
     target: '[data-ygg-intro="demo-taskbar"]',
   },
   {
-    title: '结束',
-    body: ['重看这段引导：设置 → 常规 → 重放引导。', '示例输入：做个时钟。'],
+    title: '回放与示例',
+    body: ['重新观看引导：设置 → 常规 → 重放引导。', '示例输入：做一个时钟。'],
   },
 ];
 
@@ -213,7 +213,7 @@ export function IntroOverlay() {
         跳过放在左上角，并且**第一帧就在**：想跳过的人不该先走完七步。
         它在模糊层之上，随时可点。
       */}
-      <button className="ygg-intro-skip" onClick={endIntro} title="不再显示这段引导">
+      <button className="ygg-intro-skip" onClick={endIntro} title="关闭并不再显示这段引导">
         跳过引导
       </button>
 

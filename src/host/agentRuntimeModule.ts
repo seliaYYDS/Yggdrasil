@@ -130,8 +130,8 @@ export function useAgent(explicitId?: string): AgentApi {
       // 没接入能力就不发 —— 绝不静默转给基底。
       if (!id || !attached || !facet) {
         console.warn(
-          '[yggdrasil] useAgent().send() 被调用，但这个组件没有接入 agent 能力，消息未发送。' +
-            '请先用 attach_agent 给它接入能力。',
+          '[yggdrasil] useAgent().send() 被调用，但该组件未接入 agent 能力，消息未发送。' +
+            '请先用 attach_agent 接入能力。',
         );
         return;
       }

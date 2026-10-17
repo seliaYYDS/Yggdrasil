@@ -59,10 +59,10 @@ export function ContextRing({ tokens, limit, threshold, compacting, onCompact }:
   const percent = known ? Math.round(ratio * 100) : 0;
 
   const tip = !known
-    ? '上下文占用：还不知道（先在设置里填上下文窗口）'
+    ? '上下文占用：未知（需在设置中填写上下文窗口）'
     : '上下文 ' + tokens + ' / ' + limit + ' token（' + percent + '%）' +
       (threshold ? '；压缩阈值 ' + threshold : '') +
-      '。点一下立即压缩历史。';
+      '。点击立即压缩历史。';
 
   return (
     <span

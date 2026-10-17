@@ -23,8 +23,8 @@ export const SEED_EXT = '.seed';
 export const SEED_PART_INFO: { id: SeedPart; label: string; hint: string }[] = [
   { id: 'interface', label: '界面', hint: '主题样式、界面插槽（背景/标题栏/效果层）、面板与输入框的位置与层级' },
   { id: 'components', label: '组件', hint: '所有组件的源码、位置尺寸、挂件/锁定状态、局部样式，以及 agent 的职责与能力开关' },
-  { id: 'history', label: 'Agent 历史', hint: '对话记忆与"已经做过的事"账本；不勾就不带上任何记忆（组件本身仍会带着 agent 的职责与能力）' },
-  { id: 'settings', label: '设置', hint: '连接、模型与各项参数（API Key 默认不含）' },
+  { id: 'history', label: 'Agent 历史', hint: '对话记忆与已做过的事的账本；不勾选则不含任何记忆（组件仍带有 agent 的职责与能力）' },
+  { id: 'settings', label: '设置', hint: '连接、模型与各项参数（默认不含 API Key）' },
 ];
 
 /** 运行时用的持久化快照（就是 store.snapshot() 的返回形状）。 */
@@ -186,10 +186,10 @@ export function parseSeed(text: string): { ok: true; seed: SeedFile } | { ok: fa
   if (seed.format !== SEED_FORMAT) {
     return { ok: false, error: '这不是 Yggdrasil 场景文件（缺少 format: ' + SEED_FORMAT + '）。' };
   }
-  if (!seed.data || typeof seed.data !== 'object') return { ok: false, error: '文件里没有 data 区块。' };
+  if (!seed.data || typeof seed.data !== 'object') return { ok: false, error: '文件中没有 data 区块。' };
   const version = typeof seed.version === 'number' ? seed.version : 0;
   if (version > SEED_VERSION) {
-    return { ok: false, error: '这个场景文件来自更新的版本（v' + version + '），当前只认到 v' + SEED_VERSION + '。' };
+    return { ok: false, error: '场景文件版本（v' + version + '）高于当前支持的 v' + SEED_VERSION + '。' };
   }
   const data = seed.data as SeedFile['data'];
   const known: SeedPart[] = ['interface', 'components', 'history', 'settings'];
@@ -231,7 +231,7 @@ export function describeSeed(seed: SeedFile): string[] {
     const hasKey = typeof (d.settings as LlmSettings).apiKey === 'string';
     lines.push('设置' + (hasKey ? '（包含 API Key）' : '（不含 API Key）'));
   }
-  if (lines.length === 0) lines.push('（文件里没有任何可导入的区块）');
+  if (lines.length === 0) lines.push('（文件中没有可导入的区块）');
   const when = seed.exportedAt ? new Date(seed.exportedAt).toLocaleString() : '未知时间';
   return ['导出于 ' + when, ...lines];
 }

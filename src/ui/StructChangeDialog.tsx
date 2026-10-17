@@ -40,7 +40,7 @@ export function StructChangeDialog() {
     <div className="ygg-overlay" onClick={() => resolve(false)}>
       <div className="ygg-modal" onClick={(e) => e.stopPropagation()}>
         <div className="ygg-confirm-text">
-          Agent 改动了默认界面的结构：{names.join('、')}。还原只恢复结构，样式改动保留。{left} 秒后自动保留。
+          Agent 改动了默认界面结构：{names.join('、')}。还原仅恢复结构；样式改动保留。{left} 秒后自动保留。
         </div>
         <div className="ygg-modal-actions">
           <button className="ygg-btn ghost" onClick={() => resolve(true)}>
