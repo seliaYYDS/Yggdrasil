@@ -44,7 +44,7 @@ export function introPhase(step: number, tree: boolean): 'hidden' | 'tree' | 'ca
  */
 export const INTRO_STEPS: IntroStep[] = [
   {
-    title: '概览',
+    title: '欢迎来到 Yggdrasil',
     body: ['输入一句话，生成界面。', '以下依次说明模型配置与界面组成。'],
   },
   {
@@ -80,7 +80,7 @@ export const INTRO_STEPS: IntroStep[] = [
     target: '[data-ygg-intro="demo-taskbar"]',
   },
   {
-    title: '回放与示例',
+    title: '结束',
     body: ['重新观看引导：设置 → 常规 → 重放引导。', '示例输入：做一个时钟。'],
   },
 ];
