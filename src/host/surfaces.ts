@@ -87,7 +87,7 @@ export function registerBuiltinSurfaces(): void {
       'The built-in implementation is an empty div: <div className="ygg-desktop-bg" />,' +
       'with CSS position:absolute; inset:0; background:var(--ygg-bg).' +
       'It receives no mouse events and has no children. Replacing it lets you paint the whole page (canvas / WebGL both work) —' +
-      'the background is **below the windows**, which suits backdrops, starfields and terrain;' +
+      'the background is **below the windows**;' +
       'for effects that must cover the windows, use desktop.overlay.',
   });
 
