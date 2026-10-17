@@ -26,9 +26,16 @@
   --ygg-surface: #241811;
   --ygg-surface-2: #33231A;
 
-  /* 扁平化：金黄色描边 */
+  /*
+   * 金黄色描边色 —— **只给组件源码自己画的边框用**。
+   * 宿主 CSS 一次都不用它（窗口边框用 --ygg-accent-dim / --ygg-accent），
+   * 所以它不在可改写的主题令牌表里；留在这里只是让旧场景里的 var(--ygg-border) 仍有值。
+   */
   --ygg-border: #D4A537;
   --ygg-accent-dim: #7A6224;
+
+  /* 窗口容器描边的宽度（主题令牌）：0 = 没有描边 */
+  --ygg-frame-width: 1px;
 
   --ygg-fg: #F0E2C8;
   --ygg-fg-muted: #A08F76;

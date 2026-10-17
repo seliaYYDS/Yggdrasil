@@ -663,8 +663,13 @@ function componentRules(onNet: boolean, terse = false): string[] {
     '## Component source rules',
     '- TSX; `export default function Name(){...}`; imports: react / react-dom / react-dom/client only; styles as',
     '  **inline style objects** (never a css file).',
-    '- Colours come from CSS variables: --ygg-bg --ygg-surface --ygg-surface-2 --ygg-border --ygg-fg --ygg-fg-muted',
+    '- Colours come from CSS variables: --ygg-bg --ygg-surface --ygg-surface-2 --ygg-fg --ygg-fg-muted',
     '  --ygg-accent --ygg-accent-hi --ygg-accent-dim --ygg-radius --ygg-danger --ygg-ok.',
+    '- The **window frame** (not your component) draws the 1px outline: colours are --ygg-accent-dim (rest) /',
+    '  --ygg-accent (focused), width is --ygg-frame-width (1px). Setting --ygg-frame-width to 0 removes the',
+    '  outline; never repaint --ygg-accent for that (it is the accent colour everywhere else). Every variable',
+    '  listed above really drives something: if a change seems to do nothing, you changed the wrong one —',
+    '  inspect before="tokens" lists the real ones.',
     '- Root fills its container: width/height "100%", boxSizing "border-box", overflow "auto", background',
     '  var(--ygg-surface). No external props (except replace_surface), own state, compact code, no comments.',
     // 这句只对"能联网"的 Agent 有意义：没开 net 时它调不动 fetch_url，讲了反而是误导。
@@ -675,8 +680,9 @@ function componentRules(onNet: boolean, terse = false): string[] {
         + ' data you already have.',
     '',
     '### Flat style (mandatory)',
-    '- Dark brown fill + 1px gold outline. **The window frame already draws that outline** — do not put a border on',
-    '  your root (a second frame reads as a permanent highlight); separate inner blocks with spacing, not frames.',
+    '- Dark brown fill + 1px gold outline. **The window frame already draws that outline** (width --ygg-frame-width;',
+    '  set it to 0 only when the user asks to remove the outline) — do not put a border on your root',
+    '  (a second frame reads as a permanent highlight); separate inner blocks with spacing, not frames.',
     '- Forbidden: boxShadow / textShadow / filter / gradient / backdropFilter; no hover highlights (feedback comes',
     '  from swapping --ygg-surface to --ygg-surface-2). Radius is always var(--ygg-radius).',
     '',
@@ -749,8 +755,10 @@ function styleRules(terse = false): string[] {
     '## Local style (set_node_tokens)',
     '- tokens = CSS variables → values, **one component only** (needs its id; the whole page is "Global changes").',
     '  Write only what changes, unlisted ones keep their value, repeated calls overwrite; whitelisted --ygg- only.',
-    '  Example: cool-toned dashboard → --ygg-surface / --ygg-border / --ygg-accent for that id.',
+    '  Example: cool-toned dashboard → --ygg-surface / --ygg-accent-dim / --ygg-accent for that id.',
     '- Flat is the default: --ygg-glow / --ygg-shadow only when the user asks for glow / neon / depth.',
+    '- --ygg-frame-width: 0 on **one** window removes that window outline (the outline belongs to the frame,',
+    '  not to your root — the token is applied to the window container).',
     '- Fonts (--ygg-font / --ygg-font-display / --ygg-font-mono) are long stacks, **not listed in the snapshot** —',
     '  read them with `inspect before="tokens"`. There is no "current theme": never put a theme name in ops.',
   ];
@@ -769,6 +777,8 @@ function globalRules(terse = false): string[] {
     '- `update_theme` restyles the **entire page** (every window) in one go; only when the user really asks to change',
     '  the whole look / background. Example: neon → cool, saturated --ygg-bg / --ygg-surface / --ygg-accent /',
     '  --ygg-accent-hi, and so on. One window → set_node_tokens.',
+    '- "Remove the window outlines" = `update_theme` with --ygg-frame-width: 0 (not a colour change: the frame',
+    '  colour is --ygg-accent-dim / --ygg-accent, and repainting those recolours the whole interface).',
   ];
 }
 

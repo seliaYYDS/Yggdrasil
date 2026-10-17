@@ -12,7 +12,7 @@ import {
 import { unregisterTool } from '../registry/toolRegistry';
 import { enabledPlugins } from '../plugin/runtime';
 import { embedMarkers } from '../workspace/embed';
-import { sanitizeTokens } from '../../theme/engine';
+import { sanitizeTokens, TOKEN_KEYS } from '../../theme/engine';
 import type { ActCap, ComponentNode, DerivationOp, YggNode } from '../types';
 import { newNodeId } from '../ids';
 import { alignRect, centerRect, clampRect, fillRect, type Rect } from './layout';
@@ -777,13 +777,23 @@ export function registerNodeInterfaces(): void {
       const id = strOr(op.id, '');
       const node = desktop().nodes[id];
       if (!node) return fail('Node ' + id + ' does not exist.');
-      const tokens = sanitizeTokens(tokensOf(op.tokens));
-      if (Object.keys(tokens).length === 0) return fail('No valid --ygg- variable.');
+      const raw = tokensOf(op.tokens);
+      const tokens = sanitizeTokens(raw);
+      const keys = Object.keys(tokens);
+      if (keys.length === 0) {
+        return fail('No valid --ygg- variable. The overridable ones: ' + TOKEN_KEYS.join(', ') + '.');
+      }
       const merged = { ...(node.tokens ?? {}), ...tokens };
       useDesktopStore.getState().updateNode(id, { tokens: merged } as Partial<YggNode>);
-      desktop().log('op', 'scope ' + id + ' \u00d7' + Object.keys(tokens).length, id);
-      return ok('Overrode ' + Object.keys(tokens).length + ' local variables of "' + node.name + '"', {
-        observation: Object.entries(tokens).map(([k, v]) => k + '=' + v).join(' '),
+      desktop().log('op', 'scope ' + id + ' \u00d7' + keys.length, id);
+      // 与 update_theme 一样：被丢掉的键要说出来，别让模型以为改了。
+      const ignored = Object.keys(raw).filter((k) => !(k in tokens));
+      return ok('Overrode ' + keys.length + ' local variables of "' + node.name + '"', {
+        observation:
+          Object.entries(tokens).map(([k, v]) => k + '=' + v).join(' ') +
+          (ignored.length
+            ? '\nIgnored (not overridable): ' + ignored.join(', ') + '\nThe only overridable variables: ' + TOKEN_KEYS.join(', ') + '.'
+            : ''),
       });
     },
   });

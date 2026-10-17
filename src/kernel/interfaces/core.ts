@@ -5,7 +5,7 @@ import { compileComponent, compileTool } from '../../host/compile';
 import { clearConsole, readConsole } from '../../host/consoleErrors';
 import { defaultWindows, defaultWindowsText, desktop, useDesktopStore } from '../../store/desktopStore';
 import { getTool, listTools, registerTool, toolCatalog, toolCap, type RuntimeTool } from '../registry/toolRegistry';
-import { sanitizeTokens } from '../../theme/engine';
+import { sanitizeTokens, TOKEN_KEYS } from '../../theme/engine';
 import { policyFor } from '../security';
 import {
   clearSurfaceSource,
@@ -479,12 +479,32 @@ export function registerCoreInterfaces(): void {
     mutates: true,
     cap: 'global',
     handler: (op) => {
-      const tokens = sanitizeTokens(tokensOf(op.tokens));
+      const raw = tokensOf(op.tokens);
+      const tokens = sanitizeTokens(raw);
       const keys = Object.keys(tokens);
-      if (keys.length === 0) return fail('The style operation contains no valid --ygg- variable.');
+      if (keys.length === 0) {
+        return fail(
+          'The style operation contains no valid --ygg- variable. The rewritable ones: ' + TOKEN_KEYS.join(', ') + '.',
+        );
+      }
       useDesktopStore.getState().applyTokens({ ...desktop().tokens, ...tokens });
       desktop().log('op', 'tokens \u00d7' + keys.length);
-      return ok('Rewrote ' + keys.length + ' style variables', { observation: 'Variables now in effect: ' + keys.join(', ') });
+      /*
+       * 被丢掉的键**必须说出来**。
+       *
+       * 以前是静默丢弃：模型改了不生效的变量（例如 --ygg-border），界面上没动静，
+       * 它拿不到任何反馈，只能再猜一个 —— 用户看到的就是"让它去描边，它改了个变量，
+       * 一点效果也没有"，而 trace 里那次操作还显示成功。
+       * 令牌表是唯一的真相，直接回给模型。
+       */
+      const ignored = Object.keys(raw).filter((k) => !(k in tokens));
+      return ok('Rewrote ' + keys.length + ' style variables', {
+        observation:
+          'Variables now in effect: ' + keys.join(', ') +
+          (ignored.length
+            ? '\nIgnored (not rewritable): ' + ignored.join(', ') + '\nThe only rewritable variables: ' + TOKEN_KEYS.join(', ') + '.'
+            : ''),
+      });
     },
   });
 

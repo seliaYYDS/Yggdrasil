@@ -4,12 +4,22 @@ import type { ThemeTokens } from '../kernel/types';
  * 默认样式变量：扁平化。
  * 只用金黄色描边 + 暗棕色填充，不加阴影与高光。
  * 这不是一个"主题"实体，只是 Agent 可随时改写的接口的初值。
+ *
+ * **这张表就是 Agent 能改的东西的全部**（THEMEABLE_KEYS 由它生成），所以有一条硬规矩：
+ * **每个令牌都必须有宿主 CSS 真的在用**（`var(--ygg-x)`）。
+ * 没有消费者的令牌放进来，等于给 Agent 一个"改了没有任何效果"的旋钮 ——
+ * 用户看到的只是"让它去描边，它改了个变量，界面一点没变"（§5.159）。
+ * 断言里有一条守门检查：表里每个键都能在 src 的 CSS/tsx 里找到 `var(...)`。
+ *
+ * `--ygg-border` **不在这张表里**：宿主 CSS 一次都没用过它（描边颜色另有两个令牌管），
+ * 它只是组件源码里可能写到的静态颜色，定义留在 tokens.css。
  */
 export const DEFAULT_TOKENS: ThemeTokens = {
   '--ygg-bg': '#1A120B',
   '--ygg-surface': '#241811',
   '--ygg-surface-2': '#33231A',
-  '--ygg-border': '#D4A537',
+  /** 窗口容器描边的宽度：设成 0 就是"没有描边"，不需要动任何颜色。 */
+  '--ygg-frame-width': '1px',
   '--ygg-accent-dim': '#7A6224',
   '--ygg-fg': '#F0E2C8',
   '--ygg-fg-muted': '#A08F76',

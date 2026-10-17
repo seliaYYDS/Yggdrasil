@@ -139,8 +139,11 @@ button:focus:not(:focus-visible) { outline: none; }
   display: flex;
   flex-direction: column;
   background: var(--ygg-surface);
-  /* 只有根容器有边框；内部一律靠留白与底色分层 */
-  border: 1px solid var(--ygg-accent-dim);
+  /*
+   * 只有根容器有边框；内部一律靠留白与底色分层。
+   * 宽度是主题令牌：--ygg-frame-width: 0 就是"没有描边"（颜色另有 --ygg-accent-dim / --ygg-accent 管）。
+   */
+  border: var(--ygg-frame-width) solid var(--ygg-accent-dim);
   border-radius: var(--ygg-radius);
   overflow: hidden;
   /* 默认最小尺寸保护普通窗口；面板可用内联 --ygg-win-min-h 单独放宽（如输入框只要 88px）。 */
